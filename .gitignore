@@ -1,0 +1,60 @@
+# CMake build directories
+/build/
+/cmake-build-*/
+/out/
+
+# CMake generated files
+/CMakeFiles/
+/CMakeCache.txt
+/cmake_install.cmake
+/CTestTestfile.cmake
+/Testing/
+/compile_commands.json
+
+# Compiled objects and libraries
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+# Runtime outputs
+/logs/
+*.log
+*.log.*
+*.pid
+*.db
+*.sqlite
+*.sqlite3
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+/config/gateway.json
+/config/gateway.local.json
+/config/*.local.json
+
+# Benchmark and test outputs
+/benchmark/results/*
+!/benchmark/results/.gitkeep
+/coverage/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.patch
+*.diff
+*.tmp
+*.temp
+*.bak
