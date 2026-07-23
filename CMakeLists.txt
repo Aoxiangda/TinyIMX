@@ -756,6 +756,29 @@ target_link_libraries(gateway_friend_list_client_demo PRIVATE
     nlohmann_json::nlohmann_json
 )
 
+add_executable(gateway_friend_request_client_demo
+    examples/gateway_friend_request_client_demo.cpp
+)
+
+target_link_libraries(gateway_friend_request_client_demo PRIVATE
+    tinyimx_net
+    tinyimx_protocol
+    nlohmann_json::nlohmann_json
+)
+
+add_executable(
+    gateway_friend_request_reject_client_demo
+    examples/gateway_friend_request_reject_client_demo.cpp
+)
+
+target_link_libraries(
+    gateway_friend_request_reject_client_demo
+    PRIVATE
+        tinyimx_net
+        tinyimx_protocol
+        nlohmann_json::nlohmann_json
+)
+
 add_executable(mysql_transaction_demo
     examples/mysql_transaction_demo.cpp
 )

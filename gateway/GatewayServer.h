@@ -133,6 +133,16 @@ private:
         const Packet& packet
     );
 
+    void HandleFriendRequestAcceptRequest(
+        const TcpConnectionPtr& connection,
+        const Packet& packet
+    );
+
+    void HandleFriendRequestRejectRequest(
+        const TcpConnectionPtr& connection,
+        const Packet& packet
+    );
+
     bool ClearUnread(UserId reader_user_id,
                      UserId peer_user_id,
                      std::int64_t* total_unread);

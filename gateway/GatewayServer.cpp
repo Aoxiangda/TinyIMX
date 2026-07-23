@@ -495,6 +495,20 @@ void GatewayServer::HandlePacket(const TcpConnectionPtr& connection,
             );
             break;
 
+        case MessageType::kFriendRequestAcceptRequest:
+            HandleFriendRequestAcceptRequest(
+                connection,
+                packet
+            );
+            break;
+
+        case MessageType::kFriendRequestRejectRequest:
+            HandleFriendRequestRejectRequest(
+                connection,
+                packet
+            );
+            break;
+
         case MessageType::kHeartbeat:
             HandleHeartbeat(connection, packet);
             return;
@@ -2198,6 +2212,392 @@ void GatewayServer::HandleFriendRequestListRequest(
         << ", limit=" << limit
         << ", returned=" << requests.size()
         << ", has_more=" << has_more
+    );
+}
+
+void GatewayServer::HandleFriendRequestAcceptRequest(
+    const TcpConnectionPtr& connection,
+    const Packet& packet
+) {
+    Json response_body;
+
+    response_body["success"] = false;
+    response_body["changed"] = false;
+    response_body["request_id"] = 0;
+
+    auto send_response =
+        [this, &connection, &packet](
+            const Json& body
+        ) {
+            Packet response;
+
+            response.type =
+                MessageType::
+                    kFriendRequestAcceptResponse;
+
+            response.seq = packet.seq;
+            response.body = body.dump();
+
+            SendPacket(
+                connection,
+                response
+            );
+        };
+
+    Json request_body;
+    std::string error_message;
+
+    if (!ParseJsonBody(
+            packet,
+            &request_body,
+            &error_message
+        ) ||
+        !request_body.is_object()) {
+        response_body["message"] =
+            "invalid friend request accept json";
+
+        response_body["reason"] =
+            "invalid_json";
+
+        send_response(response_body);
+        return;
+    }
+
+    const auto login_user_id =
+        session_manager_.
+            FindUserByConnection(
+                connection
+            );
+
+    if (!login_user_id.has_value()) {
+        response_body["message"] =
+            "friend request accept rejected: "
+            "not logged in";
+
+        response_body["reason"] =
+            "not_logged_in";
+
+        send_response(response_body);
+
+        LOG_WARN(
+            "gateway rejected friend request "
+            "accept: not logged in"
+            << ", peer="
+            << connection->
+                   PeerAddress().
+                   ToString()
+        );
+
+        return;
+    }
+
+    const UserId self_user_id =
+        login_user_id.value();
+
+    response_body["user_id"] =
+        self_user_id;
+
+    if (request_body.contains(
+            "handler_user_id")) {
+        response_body["message"] =
+            "handler_user_id must not be "
+            "provided by client";
+
+        response_body["reason"] =
+            "forbidden_identity_field";
+
+        send_response(response_body);
+
+        LOG_WARN(
+            "gateway rejected friend request "
+            "accept: client supplied "
+            "handler_user_id"
+            << ", login_user_id="
+            << self_user_id
+        );
+
+        return;
+    }
+
+    if (!request_body.contains(
+            "request_id") ||
+        !request_body.at(
+            "request_id"
+        ).is_number_unsigned()) {
+        response_body["message"] =
+            "invalid request_id";
+
+        response_body["reason"] =
+            "invalid_request_id";
+
+        send_response(response_body);
+        return;
+    }
+
+    const std::uint64_t request_id =
+        request_body.at(
+            "request_id"
+        ).get<std::uint64_t>();
+
+    response_body["request_id"] =
+        request_id;
+
+    if (request_id == 0) {
+        response_body["message"] =
+            "request_id must not be zero";
+
+        response_body["reason"] =
+            "invalid_request_id";
+
+        send_response(response_body);
+        return;
+    }
+
+    if (!HasFriendRequestRepository()) {
+        response_body["message"] =
+            "friend request repository "
+            "unavailable";
+
+        response_body["reason"] =
+            "friend_request_service_unavailable";
+
+        send_response(response_body);
+        return;
+    }
+
+    const AcceptFriendRequestResult result =
+        friend_request_repository_->
+            AcceptFriendRequest(
+                request_id,
+                self_user_id
+            );
+
+    const bool changed =
+        result.status ==
+            AcceptFriendRequestStatus::
+                kAccepted;
+
+    const bool success =
+        changed ||
+        result.status ==
+            AcceptFriendRequestStatus::
+                kAlreadyAccepted;
+
+    response_body["success"] =
+        success;
+
+    response_body["changed"] =
+        changed;
+
+    response_body["message"] =
+        result.message;
+
+    response_body["reason"] =
+        AcceptFriendRequestStatusToString(
+            result.status
+        );
+
+    send_response(response_body);
+
+    LOG_INFO(
+        "gateway friend request accept handled"
+        << ", handler_user_id="
+        << self_user_id
+        << ", request_id="
+        << request_id
+        << ", status="
+        << AcceptFriendRequestStatusToString(
+               result.status
+           )
+        << ", success="
+        << success
+        << ", changed="
+        << changed
+    );
+}
+
+void GatewayServer::HandleFriendRequestRejectRequest(
+    const TcpConnectionPtr& connection,
+    const Packet& packet
+) {
+    Json response_body;
+
+    response_body["success"] = false;
+    response_body["changed"] = false;
+    response_body["request_id"] = 0;
+
+    auto send_response = [this, &connection, &packet] (
+        const Json& body
+    ) {
+        Packet response;
+
+        response.type = MessageType::kFriendRequestRejectResponse;
+
+        response.seq = packet.seq;
+        response.body = body.dump();
+
+        SendPacket(connection, response);
+    };
+
+    Json request_body;
+    std::string error_message;
+
+    if (!ParseJsonBody(packet, &request_body, &error_message) ||
+        !request_body.is_object()) {
+            response_body["message"] = "invalid friend request reject json";
+            response_body["reason"] = "invalid_json";
+
+            send_response(response_body);
+            return;
+        }
+
+        const auto login_user_id =
+        session_manager_.
+            FindUserByConnection(
+                connection
+            );
+
+    if (!login_user_id.has_value()) {
+        response_body["message"] =
+            "friend request reject operation "
+            "rejected: not logged in";
+
+        response_body["reason"] =
+            "not_logged_in";
+
+        send_response(response_body);
+
+        LOG_WARN(
+            "gateway rejected friend request "
+            "reject: not logged in"
+            << ", peer="
+            << connection->
+                   PeerAddress().
+                   ToString()
+        );
+
+        return;
+    }
+
+    const UserId self_user_id =
+        login_user_id.value();
+
+    response_body["user_id"] =
+        self_user_id;
+
+    if (request_body.contains(
+            "handler_user_id")) {
+        response_body["message"] =
+            "handler_user_id must not be "
+            "provided by client";
+
+        response_body["reason"] =
+            "forbidden_identity_field";
+
+        send_response(response_body);
+
+        LOG_WARN(
+            "gateway rejected friend request "
+            "reject: client supplied "
+            "handler_user_id"
+            << ", login_user_id="
+            << self_user_id
+        );
+
+        return;
+    }
+
+    if (!request_body.contains(
+            "request_id") ||
+        !request_body.at(
+            "request_id"
+        ).is_number_unsigned()) {
+        response_body["message"] =
+            "invalid request_id";
+
+        response_body["reason"] =
+            "invalid_request_id";
+
+        send_response(response_body);
+        return;
+    }
+
+    const std::uint64_t request_id =
+        request_body.at(
+            "request_id"
+        ).get<std::uint64_t>();
+
+    response_body["request_id"] =
+        request_id;
+
+    if (request_id == 0) {
+        response_body["message"] =
+            "request_id must not be zero";
+
+        response_body["reason"] =
+            "invalid_request_id";
+
+        send_response(response_body);
+        return;
+    }
+
+    if (!HasFriendRequestRepository()) {
+        response_body["message"] =
+            "friend request repository "
+            "unavailable";
+
+        response_body["reason"] =
+            "friend_request_service_unavailable";
+
+        send_response(response_body);
+        return;
+    }
+
+    const RejectFriendRequestResult result =
+        friend_request_repository_->
+            RejectFriendRequest(
+                request_id,
+                self_user_id
+            );
+
+    const bool success =
+        result.RejectedOrAlreadyRejected();
+
+    const bool changed =
+        result.status ==
+            RejectFriendRequestStatus::
+                kRejected;
+
+    response_body["success"] =
+        success;
+
+    response_body["changed"] =
+        changed;
+
+    response_body["message"] =
+        result.message;
+
+    response_body["reason"] =
+        RejectFriendRequestStatusToString(
+            result.status
+        );
+
+    send_response(response_body);
+
+    LOG_INFO(
+        "gateway friend request reject handled"
+        << ", handler_user_id="
+        << self_user_id
+        << ", request_id="
+        << request_id
+        << ", status="
+        << RejectFriendRequestStatusToString(
+               result.status
+           )
+        << ", success="
+        << success
+        << ", changed="
+        << changed
     );
 }
 

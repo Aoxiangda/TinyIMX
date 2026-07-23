@@ -49,8 +49,8 @@ bool UpdateUserPassword(tinyimx::MySqlConnection* connection,
 
     std::cout << "password updated"
               << ", user_id=" << user_id
-              << ", salt=" << salt
-              << ", hash=" << hash
+              //<< ", salt=" << salt
+              //<< ", hash=" << hash
               << '\n';
 
     return true;
@@ -120,6 +120,21 @@ int main(int argc, char* argv[]) {
              &hasher,
              10002,
              "123456");
+    ok = ok &&
+        UpdateUserPassword(
+            connection.operator->(),
+            &hasher,
+            10003,
+            "123456"
+        );
+
+    ok = ok &&
+        UpdateUserPassword(
+            connection.operator->(),
+            &hasher,
+            10004,
+            "123456"
+        );
 
     mysql_pool.Shutdown();
     tinyimx::Logger::Instance().Shutdown();
