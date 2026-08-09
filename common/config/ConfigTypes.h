@@ -20,6 +20,7 @@ struct ServerConfig {
     std::string host{"0.0.0.0"};
     int port{9000};
     int backlog{128};
+    int io_thread_count{2};
 };
 
 struct LoggerConfig {

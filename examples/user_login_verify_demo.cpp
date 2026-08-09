@@ -137,6 +137,40 @@ int main(int argc, char* argv[]) {
              "123456",
              tinyimx::LoginVerifyStatus::kUserNotFound);
 
+             ok = ok &&
+     ExpectLoginFailure(
+         user_repository,
+         "",
+         "123456",
+         tinyimx::
+             LoginVerifyStatus::
+                 kInvalidArgument
+     );
+
+    ok = ok &&
+        ExpectLoginFailure(
+            user_repository,
+            "user10001",
+            "",
+            tinyimx::
+                LoginVerifyStatus::
+                    kInvalidArgument
+        );
+
+    tinyimx::UserRepository
+        unavailable_repository(
+            nullptr
+        );
+
+    ok = ok &&
+        ExpectLoginFailure(
+            unavailable_repository,
+            "user10001",
+            "123456",
+            tinyimx::
+                LoginVerifyStatus::
+                    kStorageError
+        );
     mysql_pool.Shutdown();
     tinyimx::Logger::Instance().Shutdown();
 

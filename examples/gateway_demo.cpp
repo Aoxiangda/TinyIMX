@@ -84,7 +84,7 @@ int main(int argc, char* argv[]) {
         options.name = "tinyimx-gateway";
         options.max_body_size = config.Protocol().max_body_size;
         options.close_on_decode_error = true;
-
+        options.io_thread_count = static_cast<std::size_t>(config.Server().io_thread_count);
         std::unique_ptr<tinyimx::MySqlConnectionPool> mysql_pool;
         std::unique_ptr<tinyimx::MessageRepository> message_repository;
         std::unique_ptr<tinyimx::UserRepository> user_repository;
@@ -197,6 +197,12 @@ int main(int argc, char* argv[]) {
 
         std::cout << "========== TinyIMX Gateway Demo ==========\n";
         std::cout << "Listening on " << listen_address.ToString() << '\n';
+        std::cout << "IO thread count: "<< options.io_thread_count<< '\n';
+        std::cout << "Reactor mode: "<< (
+            options.io_thread_count == 0
+                ? "single reactor"
+                : "main/sub reactor"
+        ) << '\n';
         /*
             std::cout << "Test client:\n";
             std::cout << "  ./build/linux-debug/protocol_echo_client_demo "

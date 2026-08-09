@@ -237,6 +237,35 @@ const char* AcceptFriendRequestStatusToString(
     }
 }
 
+const char* ListPendingIncomingRequestsStatusToString(
+    ListPendingIncomingRequestsStatus status
+) {
+    switch (status) {
+        case ListPendingIncomingRequestsStatus::
+            kSucceeded:
+            return "succeeded";
+
+        case ListPendingIncomingRequestsStatus::
+            kInvalidArgument:
+            return "invalid_argument";
+
+        case ListPendingIncomingRequestsStatus::
+            kInvalidCursor:
+            return "invalid_cursor";
+
+        case ListPendingIncomingRequestsStatus::
+            kInvalidRecord:
+            return "invalid_record";
+
+        case ListPendingIncomingRequestsStatus::
+            kStorageError:
+            return "storage_error";
+
+        default:
+            return "unknown";
+    }
+}
+
 
 const char* RejectFriendRequestStatusToString(
     RejectFriendRequestStatus status
@@ -287,7 +316,6 @@ FriendRequestRepository::CreateFriendRequest(
     const std::string& request_message
 ) {
     if (from_user_id == 0 || to_user_id == 0) {
-        last_error_.clear();
 
         return MakeResult(
             CreateFriendRequestStatus::kInvalidArgument,
@@ -297,7 +325,6 @@ FriendRequestRepository::CreateFriendRequest(
     }
 
     if (from_user_id == to_user_id) {
-        last_error_.clear();
 
         return MakeResult(
             CreateFriendRequestStatus::kInvalidArgument,
@@ -308,7 +335,6 @@ FriendRequestRepository::CreateFriendRequest(
 
     if (request_message.size() >
         kMaxRequestMessageBytes) {
-        last_error_.clear();
 
         return MakeResult(
             CreateFriendRequestStatus::kInvalidArgument,
@@ -318,40 +344,32 @@ FriendRequestRepository::CreateFriendRequest(
     }
 
     if (pool_ == nullptr) {
-        SetError(
-            "friend request repository create failed: "
-            "pool is null"
-        );
-
         return MakeResult(
             CreateFriendRequestStatus::kStorageError,
             0,
-            last_error_
+            "friend request repository create failed: "
+            "pool is null"
         );
     }
 
     auto connection = pool_->Acquire();
 
     if (!connection) {
-        SetError(
-            "friend request repository create failed: "
-            "acquire connection failed"
-        );
-
         return MakeResult(
             CreateFriendRequestStatus::kStorageError,
             0,
-            last_error_
+            "friend request repository create failed: "
+            "acquire connection failed"
         );
     }
-
     MySqlConnection* database = connection.operator->();
 
     auto rollback_storage_error =
-        [this, database](
+        [database](
             const std::string& error_message
         ) -> CreateFriendRequestResult {
-            std::string final_error = error_message;
+            std::string final_error =
+                error_message;
 
             if (database != nullptr &&
                 database->InTransaction()) {
@@ -362,12 +380,11 @@ FriendRequestRepository::CreateFriendRequest(
                 }
             }
 
-            SetError(final_error);
-
             return MakeResult(
-                CreateFriendRequestStatus::kStorageError,
+                CreateFriendRequestStatus::
+                    kStorageError,
                 0,
-                last_error_
+                std::move(final_error)
             );
         };
 
@@ -397,12 +414,10 @@ FriendRequestRepository::CreateFriendRequest(
         };
 
     if (!database->BeginTransaction()) {
-        SetError(database->LastError());
-
         return MakeResult(
             CreateFriendRequestStatus::kStorageError,
             0,
-            last_error_
+            database->LastError()
         );
     }
 
@@ -476,7 +491,6 @@ FriendRequestRepository::CreateFriendRequest(
     }
 
     if (!source_user_status.has_value()) {
-        last_error_.clear();
 
         return rollback_business_result(
             CreateFriendRequestStatus::kSourceUserNotFound,
@@ -486,7 +500,6 @@ FriendRequestRepository::CreateFriendRequest(
     }
 
     if (!target_user_status.has_value()) {
-        last_error_.clear();
 
         return rollback_business_result(
             CreateFriendRequestStatus::kTargetUserNotFound,
@@ -497,7 +510,6 @@ FriendRequestRepository::CreateFriendRequest(
 
     if (source_user_status.value() !=
         kActiveUserStatus) {
-        last_error_.clear();
 
         return rollback_business_result(
             CreateFriendRequestStatus::kSourceUserDisabled,
@@ -508,7 +520,6 @@ FriendRequestRepository::CreateFriendRequest(
 
     if (target_user_status.value() !=
         kActiveUserStatus) {
-        last_error_.clear();
 
         return rollback_business_result(
             CreateFriendRequestStatus::kTargetUserDisabled,
@@ -615,7 +626,6 @@ FriendRequestRepository::CreateFriendRequest(
     if (self_relation_status.has_value() &&
         self_relation_status.value() ==
             blocked_value) {
-        last_error_.clear();
 
         return rollback_business_result(
             CreateFriendRequestStatus::kBlockedBySelf,
@@ -627,8 +637,6 @@ FriendRequestRepository::CreateFriendRequest(
     if (peer_relation_status.has_value() &&
         peer_relation_status.value() ==
             blocked_value) {
-        last_error_.clear();
-
         return rollback_business_result(
             CreateFriendRequestStatus::kBlockedByPeer,
             0,
@@ -647,7 +655,6 @@ FriendRequestRepository::CreateFriendRequest(
             friend_value;
 
     if (self_is_friend && peer_is_friend) {
-        last_error_.clear();
 
         return rollback_business_result(
             CreateFriendRequestStatus::kAlreadyFriend,
@@ -657,7 +664,6 @@ FriendRequestRepository::CreateFriendRequest(
     }
 
     if (self_is_friend != peer_is_friend) {
-        last_error_.clear();
 
         return rollback_business_result(
             CreateFriendRequestStatus::
@@ -769,7 +775,6 @@ FriendRequestRepository::CreateFriendRequest(
             pending_value &&
         reverse_direction->request_status ==
             pending_value) {
-        last_error_.clear();
 
         return rollback_business_result(
             CreateFriendRequestStatus::
@@ -782,7 +787,6 @@ FriendRequestRepository::CreateFriendRequest(
     if (reverse_direction.has_value() &&
         reverse_direction->request_status ==
             pending_value) {
-        last_error_.clear();
 
         return rollback_business_result(
             CreateFriendRequestStatus::kReversePending,
@@ -794,7 +798,6 @@ FriendRequestRepository::CreateFriendRequest(
     if (same_direction.has_value() &&
         same_direction->request_status ==
             pending_value) {
-        last_error_.clear();
 
         return rollback_business_result(
             CreateFriendRequestStatus::kAlreadyPending,
@@ -814,7 +817,6 @@ FriendRequestRepository::CreateFriendRequest(
             accepted_value;
 
     if (same_accepted || reverse_accepted) {
-        last_error_.clear();
 
         return rollback_business_result(
             CreateFriendRequestStatus::
@@ -866,7 +868,6 @@ FriendRequestRepository::CreateFriendRequest(
             );
         }
 
-        last_error_.clear();
 
         return MakeResult(
             CreateFriendRequestStatus::kReopened,
@@ -918,7 +919,6 @@ FriendRequestRepository::CreateFriendRequest(
             );
         }
 
-        last_error_.clear();
 
         return MakeResult(
             CreateFriendRequestStatus::kCreated,
@@ -930,7 +930,6 @@ FriendRequestRepository::CreateFriendRequest(
     /*
      * 走到这里说明数据库中出现了当前代码无法解释的状态值。
      */
-    last_error_.clear();
 
     return rollback_business_result(
         CreateFriendRequestStatus::
@@ -947,7 +946,6 @@ FriendRequestRepository::AcceptFriendRequest(
 ) {
     if (request_id == 0 ||
         handler_user_id == 0) {
-        last_error_.clear();
 
         return MakeAcceptResult(
             AcceptFriendRequestStatus::kInvalidArgument,
@@ -959,47 +957,43 @@ FriendRequestRepository::AcceptFriendRequest(
     }
 
     if (pool_ == nullptr) {
-        SetError(
-            "friend request repository accept failed: "
-            "pool is null"
-        );
-
         return MakeAcceptResult(
-            AcceptFriendRequestStatus::kStorageError,
+            AcceptFriendRequestStatus::
+                kStorageError,
             request_id,
             0,
             0,
-            last_error_
+            "friend request repository "
+            "accept failed: pool is null"
         );
     }
 
     auto connection = pool_->Acquire();
 
     if (!connection) {
-        SetError(
-            "friend request repository accept failed: "
-            "acquire connection failed"
-        );
-
         return MakeAcceptResult(
-            AcceptFriendRequestStatus::kStorageError,
+            AcceptFriendRequestStatus::
+                kStorageError,
             request_id,
             0,
             0,
-            last_error_
+            "friend request repository "
+            "accept failed: acquire "
+            "connection failed"
         );
     }
 
     MySqlConnection* database =
         connection.operator->();
 
-    auto storage_error =
-        [this, database, request_id](
+   auto storage_error =
+        [database, request_id](
             const std::string& error_message,
             std::uint64_t requester_user_id,
             std::uint64_t receiver_user_id
         ) -> AcceptFriendRequestResult {
-            std::string final_error = error_message;
+            std::string final_error =
+                error_message;
 
             if (database != nullptr &&
                 database->InTransaction()) {
@@ -1010,19 +1004,18 @@ FriendRequestRepository::AcceptFriendRequest(
                 }
             }
 
-            SetError(final_error);
-
             return MakeAcceptResult(
-                AcceptFriendRequestStatus::kStorageError,
+                AcceptFriendRequestStatus::
+                    kStorageError,
                 request_id,
                 requester_user_id,
                 receiver_user_id,
-                last_error_
+                std::move(final_error)
             );
         };
 
     auto business_result =
-        [this, database, request_id](
+        [database, request_id](
             AcceptFriendRequestStatus status,
             std::uint64_t requester_user_id,
             std::uint64_t receiver_user_id,
@@ -1031,24 +1024,18 @@ FriendRequestRepository::AcceptFriendRequest(
             if (database != nullptr &&
                 database->InTransaction()) {
                 if (!database->Rollback()) {
-                    SetError(
-                        "friend request repository "
-                        "business rollback failed: " +
-                        database->LastError()
-                    );
-
                     return MakeAcceptResult(
                         AcceptFriendRequestStatus::
                             kStorageError,
                         request_id,
                         requester_user_id,
                         receiver_user_id,
-                        last_error_
+                        "friend request repository "
+                        "business rollback failed: " +
+                            database->LastError()
                     );
                 }
             }
-
-            last_error_.clear();
 
             return MakeAcceptResult(
                 status,
@@ -1087,7 +1074,6 @@ FriendRequestRepository::AcceptFriendRequest(
     }
 
     if (preview_result.rows.empty()) {
-        last_error_.clear();
 
         return MakeAcceptResult(
             AcceptFriendRequestStatus::kRequestNotFound,
@@ -1133,7 +1119,6 @@ FriendRequestRepository::AcceptFriendRequest(
     }
 
     if (receiver_user_id != handler_user_id) {
-        last_error_.clear();
 
         return MakeAcceptResult(
             AcceptFriendRequestStatus::
@@ -1146,14 +1131,13 @@ FriendRequestRepository::AcceptFriendRequest(
     }
 
     if (!database->BeginTransaction()) {
-        SetError(database->LastError());
-
         return MakeAcceptResult(
-            AcceptFriendRequestStatus::kStorageError,
+            AcceptFriendRequestStatus::
+                kStorageError,
             request_id,
             requester_user_id,
             receiver_user_id,
-            last_error_
+            database->LastError()
         );
     }
 
@@ -1758,7 +1742,6 @@ FriendRequestRepository::AcceptFriendRequest(
         );
     }
 
-    last_error_.clear();
 
     return MakeAcceptResult(
         AcceptFriendRequestStatus::kAccepted,
@@ -1777,7 +1760,6 @@ FriendRequestRepository::RejectFriendRequest(
 ) {
     if (request_id == 0 ||
         handler_user_id == 0) {
-        last_error_.clear();
 
         return MakeRejectResult(
             RejectFriendRequestStatus::kInvalidArgument,
@@ -1789,47 +1771,42 @@ FriendRequestRepository::RejectFriendRequest(
     }
 
     if (pool_ == nullptr) {
-        SetError(
-            "friend request repository reject failed: "
-            "pool is null"
-        );
-
         return MakeRejectResult(
-            RejectFriendRequestStatus::kStorageError,
+            RejectFriendRequestStatus::
+                kStorageError,
             request_id,
             0,
             0,
-            last_error_
+            "friend request repository "
+            "reject failed: pool is null"
         );
     }
 
     auto connection = pool_->Acquire();
 
     if (!connection) {
-        SetError(
-            "friend request repository reject failed: "
-            "acquire connection failed"
-        );
-
         return MakeRejectResult(
-            RejectFriendRequestStatus::kStorageError,
+            RejectFriendRequestStatus::
+                kStorageError,
             request_id,
             0,
             0,
-            last_error_
+            "friend request repository "
+            "reject failed: acquire "
+            "connection failed"
         );
     }
-
     MySqlConnection* database =
         connection.operator->();
 
     auto storage_error =
-        [this, database, request_id](
+        [database, request_id](
             const std::string& error_message,
             std::uint64_t requester_user_id,
             std::uint64_t receiver_user_id
         ) -> RejectFriendRequestResult {
-            std::string final_error = error_message;
+            std::string final_error =
+                error_message;
 
             if (database != nullptr &&
                 database->InTransaction()) {
@@ -1840,19 +1817,17 @@ FriendRequestRepository::RejectFriendRequest(
                 }
             }
 
-            SetError(final_error);
-
             return MakeRejectResult(
-                RejectFriendRequestStatus::kStorageError,
+                RejectFriendRequestStatus::
+                    kStorageError,
                 request_id,
                 requester_user_id,
                 receiver_user_id,
-                last_error_
+                std::move(final_error)
             );
         };
-
     auto business_result =
-        [this, database, request_id](
+        [database, request_id](
             RejectFriendRequestStatus status,
             std::uint64_t requester_user_id,
             std::uint64_t receiver_user_id,
@@ -1861,24 +1836,18 @@ FriendRequestRepository::RejectFriendRequest(
             if (database != nullptr &&
                 database->InTransaction()) {
                 if (!database->Rollback()) {
-                    SetError(
-                        "friend request repository "
-                        "reject rollback failed: " +
-                        database->LastError()
-                    );
-
                     return MakeRejectResult(
                         RejectFriendRequestStatus::
                             kStorageError,
                         request_id,
                         requester_user_id,
                         receiver_user_id,
-                        last_error_
+                        "friend request repository "
+                        "reject rollback failed: " +
+                            database->LastError()
                     );
                 }
             }
-
-            last_error_.clear();
 
             return MakeRejectResult(
                 status,
@@ -1890,14 +1859,13 @@ FriendRequestRepository::RejectFriendRequest(
         };
 
     if (!database->BeginTransaction()) {
-        SetError(database->LastError());
-
         return MakeRejectResult(
-            RejectFriendRequestStatus::kStorageError,
+            RejectFriendRequestStatus::
+                kStorageError,
             request_id,
             0,
             0,
-            last_error_
+            database->LastError()
         );
     }
 
@@ -2104,7 +2072,6 @@ FriendRequestRepository::RejectFriendRequest(
         );
     }
 
-    last_error_.clear();
 
     return MakeRejectResult(
         RejectFriendRequestStatus::kRejected,
@@ -2115,21 +2082,27 @@ FriendRequestRepository::RejectFriendRequest(
     );
 }
 
-std::vector<FriendRequestRecord>
-FriendRequestRepository::ListPendingIncomingRequests(
-    std::uint64_t receiver_user_id,
-    const std::string& before_created_at,
-    std::uint64_t before_request_id,
-    std::size_t limit
-) {
-    std::vector<FriendRequestRecord> empty;
+ListPendingIncomingRequestsResult
+FriendRequestRepository::
+    ListPendingIncomingRequests(
+        std::uint64_t receiver_user_id,
+        const std::string& before_created_at,
+        std::uint64_t before_request_id,
+        std::size_t limit
+    ) {
+    ListPendingIncomingRequestsResult result;
 
     if (receiver_user_id == 0) {
-        SetError(
-            "friend request repository list failed: "
-            "invalid receiver user id"
-        );
-        return empty;
+        result.status =
+            ListPendingIncomingRequestsStatus::
+                kInvalidArgument;
+
+        result.message =
+            "friend request repository "
+            "list failed: invalid receiver "
+            "user id";
+
+        return result;
     }
 
     const bool first_page =
@@ -2141,27 +2114,44 @@ FriendRequestRepository::ListPendingIncomingRequests(
         before_request_id != 0;
 
     if (!first_page && !next_page) {
-        SetError(
-            "friend request repository list failed: "
-            "invalid pagination cursor"
-        );
-        return empty;
+        result.status =
+            ListPendingIncomingRequestsStatus::
+                kInvalidCursor;
+
+        result.message =
+            "friend request repository "
+            "list failed: invalid "
+            "pagination cursor";
+
+        return result;
     }
 
     if (next_page &&
         !IsDateTimeCursorValid(
             before_created_at
         )) {
-        SetError(
-            "friend request repository list failed: "
-            "invalid before_created_at"
-        );
-        return empty;
+        result.status =
+            ListPendingIncomingRequestsStatus::
+                kInvalidCursor;
+
+        result.message =
+            "friend request repository "
+            "list failed: invalid "
+            "before_created_at";
+
+        return result;
     }
 
+    /*
+     * 保持现有接口语义：
+     * limit=0表示查询成功，但不返回记录。
+     */
     if (limit == 0) {
-        last_error_.clear();
-        return empty;
+        result.status =
+            ListPendingIncomingRequestsStatus::
+                kSucceeded;
+
+        return result;
     }
 
     if (limit > 100) {
@@ -2169,21 +2159,31 @@ FriendRequestRepository::ListPendingIncomingRequests(
     }
 
     if (pool_ == nullptr) {
-        SetError(
-            "friend request repository list failed: "
-            "pool is null"
-        );
-        return empty;
+        result.status =
+            ListPendingIncomingRequestsStatus::
+                kStorageError;
+
+        result.message =
+            "friend request repository "
+            "list failed: pool is null";
+
+        return result;
     }
 
-    auto connection = pool_->Acquire();
+    auto connection =
+        pool_->Acquire();
 
     if (!connection) {
-        SetError(
-            "friend request repository list failed: "
-            "acquire connection failed"
-        );
-        return empty;
+        result.status =
+            ListPendingIncomingRequestsStatus::
+                kStorageError;
+
+        result.message =
+            "friend request repository "
+            "list failed: acquire "
+            "connection failed";
+
+        return result;
     }
 
     const std::uint32_t pending_value =
@@ -2207,7 +2207,9 @@ FriendRequestRepository::ListPendingIncomingRequests(
             "fr.created_at = '" +
             escaped_created_at + "' "
             "AND fr.request_id < " +
-            std::to_string(before_request_id) +
+            std::to_string(
+                before_request_id
+            ) +
             ")"
             ") ";
     }
@@ -2242,9 +2244,15 @@ FriendRequestRepository::ListPendingIncomingRequests(
         "INNER JOIN im_users AS u "
         "ON u.user_id = fr.from_user_id "
         "WHERE fr.to_user_id = " +
-        std::to_string(receiver_user_id) + " "
+        std::to_string(
+            receiver_user_id
+        ) +
+        " "
         "AND fr.request_status = " +
-        std::to_string(pending_value) + " " +
+        std::to_string(
+            pending_value
+        ) +
+        " " +
         cursor_condition +
         "ORDER BY "
         "fr.created_at DESC, "
@@ -2252,39 +2260,61 @@ FriendRequestRepository::ListPendingIncomingRequests(
         "LIMIT " +
         std::to_string(limit);
 
-    MySqlQueryResult result;
+    MySqlQueryResult query_result;
 
-    if (!connection->Query(sql, &result)) {
-        SetError(connection->LastError());
-        return empty;
+    if (!connection->Query(
+            sql,
+            &query_result
+        )) {
+        result.status =
+            ListPendingIncomingRequestsStatus::
+                kStorageError;
+
+        result.message =
+            connection->LastError();
+
+        if (result.message.empty()) {
+            result.message =
+                "friend request repository "
+                "list failed: query failed";
+        }
+
+        return result;
     }
 
-    auto records =
-        BuildFriendRequestRecords(result);
-
-    if (!last_error_.empty()) {
-        return empty;
-    }
-
-    last_error_.clear();
-    return records;
+    return BuildFriendRequestRecords(
+        query_result
+    );
 }
 
-std::vector<FriendRequestRecord>
-FriendRequestRepository::BuildFriendRequestRecords(
-    const MySqlQueryResult& result
-) {
-    std::vector<FriendRequestRecord> records;
-    records.reserve(result.rows.size());
+ListPendingIncomingRequestsResult
+FriendRequestRepository::
+    BuildFriendRequestRecords(
+        const MySqlQueryResult& result
+    ) {
+    ListPendingIncomingRequestsResult
+        build_result;
+
+    build_result.records.reserve(
+        result.rows.size()
+    );
 
     try {
-        for (const auto& row : result.rows) {
+        for (const auto& row :
+             result.rows) {
             if (row.size() < 12) {
-                SetError(
-                    "friend request repository build failed: "
-                    "invalid row size"
-                );
-                return {};
+                build_result.status =
+                    ListPendingIncomingRequestsStatus::
+                        kInvalidRecord;
+
+                build_result.message =
+                    "friend request repository "
+                    "build failed: invalid "
+                    "row size";
+
+                build_result.records.clear();
+
+                return build_result;
             }
 
             FriendRequestRecord record;
@@ -2306,13 +2336,21 @@ FriendRequestRepository::BuildFriendRequestRecords(
 
             if (status !=
                 static_cast<std::uint32_t>(
-                    FriendRequestStatus::kPending
+                    FriendRequestStatus::
+                        kPending
                 )) {
-                SetError(
-                    "friend request repository build failed: "
-                    "unexpected request status"
-                );
-                return {};
+                build_result.status =
+                    ListPendingIncomingRequestsStatus::
+                        kInvalidRecord;
+
+                build_result.message =
+                    "friend request repository "
+                    "build failed: unexpected "
+                    "request status";
+
+                build_result.records.clear();
+
+                return build_result;
             }
 
             record.request_status =
@@ -2324,7 +2362,8 @@ FriendRequestRepository::BuildFriendRequestRecords(
 
             record.from_username = row[8];
             record.from_nickname = row[9];
-            record.from_avatar_url = row[10];
+            record.from_avatar_url =
+                row[10];
 
             record.from_user_status =
                 ToUInt32(row[11]);
@@ -2333,40 +2372,46 @@ FriendRequestRepository::BuildFriendRequestRecords(
                 record.from_user_id == 0 ||
                 record.to_user_id == 0 ||
                 record.created_at.empty()) {
-                SetError(
-                    "friend request repository build failed: "
-                    "invalid record data"
-                );
-                return {};
+                build_result.status =
+                    ListPendingIncomingRequestsStatus::
+                        kInvalidRecord;
+
+                build_result.message =
+                    "friend request repository "
+                    "build failed: invalid "
+                    "record data";
+
+                build_result.records.clear();
+
+                return build_result;
             }
 
-            records.push_back(
+            build_result.records.push_back(
                 std::move(record)
             );
         }
     } catch (const std::exception& e) {
-        SetError(
+        build_result.status =
+            ListPendingIncomingRequestsStatus::
+                kInvalidRecord;
+
+        build_result.message =
             std::string(
-                "friend request repository build failed: "
-            ) + e.what()
-        );
-        return {};
+                "friend request repository "
+                "build failed: "
+            ) +
+            e.what();
+
+        build_result.records.clear();
+
+        return build_result;
     }
 
-    last_error_.clear();
-    return records;
-}
+    build_result.status =
+        ListPendingIncomingRequestsStatus::
+            kSucceeded;
 
-const std::string&
-FriendRequestRepository::LastError() const {
-    return last_error_;
-}
-
-void FriendRequestRepository::SetError(
-    const std::string& error_message
-) {
-    last_error_ = error_message;
-    LOG_ERROR(error_message);
+    return build_result;
 }
 
 }  // namespace tinyimx

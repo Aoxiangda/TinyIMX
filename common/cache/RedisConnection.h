@@ -16,47 +16,93 @@ public:
     RedisConnection() = default;
     ~RedisConnection();
 
-    RedisConnection(const RedisConnection&) = delete;
-    RedisConnection& operator=(const RedisConnection&) = delete;
+    RedisConnection(
+        const RedisConnection&
+    ) = delete;
 
-    bool Connect(const RedisConfig& config);
+    RedisConnection& operator=(
+        const RedisConnection&
+    ) = delete;
+
+    bool Connect(
+        const RedisConfig& config
+    );
+
     void Close();
 
     bool IsConnected() const;
+
     bool Ping();
 
-    bool Set(const std::string& key,
-             const std::string& value);
+    bool Set(
+        const std::string& key,
+        const std::string& value
+    );
 
-    bool SetEx(const std::string& key,
-               const std::string& value,
-               int ttl_seconds);
+    bool SetEx(
+        const std::string& key,
+        const std::string& value,
+        int ttl_seconds
+    );
 
-    std::optional<std::string> Get(const std::string& key);
+    std::optional<std::string>
+    Get(
+        const std::string& key
+    );
 
-    bool Del(const std::string& key);
+    bool Del(
+        const std::string& key
+    );
 
-    std::optional<std::int64_t> Incr(const std::string& key);
+    std::optional<std::int64_t>
+    Incr(
+        const std::string& key
+    );
 
-    std::optional<std::int64_t> DecrBy(const std::string& key,
-                                       std::int64_t delta);
+    std::optional<std::int64_t>
+    DecrBy(
+        const std::string& key,
+        std::int64_t delta
+    );
 
-    bool Expire(const std::string& key, int ttl_seconds);
+    bool Expire(
+        const std::string& key,
+        int ttl_seconds
+    );
 
-    const std::string& LastError() const;
+    std::optional<std::int64_t>
+    EvalInteger(
+        const std::string& script,
+        const std::vector<std::string>& keys,
+        const std::vector<std::string>& arguments
+    );
+
+    const std::string&
+    LastError() const;
 
 private:
-    redisReply* Command(const std::vector<std::string>& args);
+    redisReply* Command(
+        const std::vector<std::string>& args
+    );
 
-    bool CheckStatusReply(redisReply* reply,
-                          const std::string& expected_status);
+    bool CheckStatusReply(
+        redisReply* reply,
+        const std::string& expected_status
+    );
 
-    void SetError(const std::string& error_message);
-    void SetRedisError(const std::string& prefix);
+    void SetError(
+        const std::string& error_message
+    );
+
+    void SetRedisError(
+        const std::string& prefix
+    );
 
 private:
     redisContext* context_{nullptr};
+
     bool connected_{false};
+
     std::string last_error_;
 };
 

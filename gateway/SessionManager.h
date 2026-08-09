@@ -4,7 +4,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -20,29 +19,54 @@ struct SessionBindResult {
     TcpConnectionPtr old_connection;
 };
 
+struct SessionUnbindResult {
+    bool unbound{false};
+    UserId user_id{0};
+};
 
 class SessionManager {
 public:
     SessionManager() = default;
     ~SessionManager() = default;
 
-    SessionManager(const SessionManager&) = delete;
-    SessionManager& operator=(const SessionManager&) = delete;
+    SessionManager(
+        const SessionManager&
+    ) = delete;
 
-    bool Bind(UserId user_id, const TcpConnectionPtr& connection);
+    SessionManager& operator=(
+        const SessionManager&
+    ) = delete;
 
-    SessionBindResult BindOrReplace(UserId user_id,
-                                    const TcpConnectionPtr& connection);
+    bool Bind(
+        UserId user_id,
+        const TcpConnectionPtr& connection
+    );
 
-    void UnbindByConnection(const TcpConnectionPtr& connection);
+    SessionBindResult BindOrReplace(
+        UserId user_id,
+        const TcpConnectionPtr& connection
+    );
 
-    TcpConnectionPtr FindConnection(UserId user_id) const;
+    SessionUnbindResult UnbindIfCurrent(
+        const TcpConnectionPtr& connection
+    );
 
-    std::optional<UserId> FindUserByConnection(
+    void UnbindByConnection(
+        const TcpConnectionPtr& connection
+    );
+
+    TcpConnectionPtr FindConnection(
+        UserId user_id
+    ) const;
+
+    std::optional<UserId>
+    FindUserByConnection(
         const TcpConnectionPtr& connection
     ) const;
 
-    bool IsOnline(UserId user_id) const;
+    bool IsOnline(
+        UserId user_id
+    ) const;
 
     std::size_t OnlineCount() const;
 
@@ -54,11 +78,15 @@ private:
 private:
     mutable std::mutex mutex_;
 
-    std::unordered_map<UserId, std::weak_ptr<TcpConnection>>
-        user_connections_;
+    std::unordered_map<
+        UserId,
+        std::weak_ptr<TcpConnection>
+    > user_connections_;
 
-    std::unordered_map<std::string, UserId>
-        connection_users_;
+    std::unordered_map<
+        std::string,
+        UserId
+    > connection_users_;
 };
 
 }  // namespace tinyimx

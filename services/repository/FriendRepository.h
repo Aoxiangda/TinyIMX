@@ -35,7 +35,31 @@ struct FriendRecord {
     std::string relation_created_at;
     std::string relation_updated_at;
 };
+enum class ListFriendsStatus {
+    kSucceeded = 0,
+    kInvalidArgument,
+    kInvalidRecord,
+    kStorageError
+};
 
+const char* ListFriendsStatusToString(
+    ListFriendsStatus status
+);
+
+struct ListFriendsResult {
+    ListFriendsStatus status{
+        ListFriendsStatus::kStorageError
+    };
+
+    std::vector<FriendRecord> records;
+
+    std::string message;
+
+    bool Succeeded() const noexcept {
+        return status ==
+               ListFriendsStatus::kSucceeded;
+    }
+};
 
 const char* ChatPermissionStatusToString(
     ChatPermissionStatus status
@@ -48,7 +72,7 @@ struct ChatPermissionResult {
 
     std::string message;
 
-    bool Allowed() const {
+    bool Allowed() const noexcept{
         return status == ChatPermissionStatus::kAllowed;
     }
 };
@@ -65,19 +89,13 @@ public:
         std::uint64_t to_user_id
     );
 
-    std::vector<FriendRecord> ListFriends(std::uint64_t user_id,
-                                          std::size_t limit);
-
-    const std::string& LastError() const;
-
+    ListFriendsResult ListFriends(std::uint64_t user_id,
+                                  std::size_t limit);
 private:
-    void SetError(const std::string& error_message);
-
-    std::vector<FriendRecord> BuildFriendsFromResult(
+    static ListFriendsResult BuildFriendsFromResult(
                                 const MySqlQueryResult& result);
 private:
     MySqlConnectionPool* pool_{nullptr};
-    std::string last_error_;
 };
 
 }  // namespace tinyimx

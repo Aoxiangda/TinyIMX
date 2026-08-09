@@ -85,15 +85,24 @@ namespace tinyimx {
         codec_(options_.max_body_size),
         server_(loop_, listen_address, options_.name) {
 */
-GatewayServer::GatewayServer(EventLoop* loop,
-                            const InetAddress& listen_address,
-                            GatewayServerOptions options)
+GatewayServer::GatewayServer(
+    EventLoop* loop,
+    const InetAddress& listen_address,
+    GatewayServerOptions options
+)
     : loop_(loop),
-        options_(std::move(options)),
-        codec_(options_.max_body_size),
-        server_(loop_, listen_address, options_.name),
-        offline_message_store_(
-            options_.max_offline_messages_per_user) {
+      options_(std::move(options)),
+      codec_(options_.max_body_size),
+      server_(
+          loop_,
+          listen_address,
+          options_.name,
+          options_.io_thread_count
+      ),
+      offline_message_store_(
+          options_.
+              max_offline_messages_per_user
+      ) {
     server_.SetConnectionCallback([this](
         const TcpConnectionPtr& connection
     ) {
@@ -114,11 +123,14 @@ GatewayServer::~GatewayServer() {
 }
 
 bool GatewayServer::Start() {
-    LOG_INFO("gateway server starting"
-             << ", name=" << options_.name
-             << ", listen=" << server_.ListenAddress().ToString()
-             << ", max_body_size=" << options_.max_body_size);
-
+    LOG_INFO(
+        "gateway server starting"
+        << ", name=" << options_.name
+        << ", listen=" << server_.
+            ListenAddress().ToString()
+        << ", max_body_size=" << options_.max_body_size
+        << ", io_thread_count=" << options_.io_thread_count
+    );
     const bool ok = server_.Start();
 
     if (!ok) {
@@ -128,9 +140,10 @@ bool GatewayServer::Start() {
     }
 
     LOG_INFO("gateway server started"
-             << ", name=" << options_.name
-             << ", listen=" << server_.ListenAddress().ToString());
-
+        << ", name="<< options_.name
+        << ", listen="<< server_.ListenAddress().ToString()
+        << ", io_thread_count="<< options_.io_thread_count
+    );
     return true;
 }
 
@@ -172,22 +185,36 @@ bool GatewayServer::HasUnreadCountCache() const {
     return unread_count_cache_ != nullptr;
 }
 
-std::int64_t GatewayServer::GetTotalUnread(UserId user_id) {
+std::int64_t GatewayServer::GetTotalUnread(
+    UserId user_id
+) {
     if (!HasUnreadCountCache()) {
         return 0;
     }
 
-    const auto total =
-        unread_count_cache_->GetTotalUnread(user_id);
+    const GetUnreadCountResult result =
+        unread_count_cache_->
+            GetTotalUnread(
+                user_id
+            );
 
-    if (!total.has_value()) {
-        LOG_WARN("gateway get total unread failed"
-                 << ", user_id=" << user_id
-                 << ", error=" << unread_count_cache_->LastError());
+    if (!result.Completed()) {
+        LOG_WARN(
+            "gateway get total unread failed"
+            << ", user_id="
+            << user_id
+            << ", status="
+            << GetUnreadCountStatusToString(
+                result.status
+            )
+            << ", error="
+            << result.error_message
+        );
+
         return 0;
     }
 
-    return total.value();
+    return result.count;
 }
 
 std::int64_t GatewayServer::GetPrivateUnread(
@@ -198,23 +225,34 @@ std::int64_t GatewayServer::GetPrivateUnread(
         return 0;
     }
 
-    const auto private_unread =
-        unread_count_cache_->GetPrivateUnread(
-            receiver_user_id,
-            sender_user_id
+    const GetUnreadCountResult result =
+        unread_count_cache_->
+            GetPrivateUnread(
+                receiver_user_id,
+                sender_user_id
+            );
+
+    if (!result.Completed()) {
+        LOG_WARN(
+            "gateway get private unread "
+            "failed"
+            << ", receiver="
+            << receiver_user_id
+            << ", sender="
+            << sender_user_id
+            << ", status="
+            << GetUnreadCountStatusToString(
+                result.status
+            )
+            << ", error="
+            << result.error_message
         );
 
-    if (!private_unread.has_value()) {
-        LOG_WARN("gateway get private unread failed"
-                 << ", receiver=" << receiver_user_id
-                 << ", sender=" << sender_user_id
-                 << ", error=" << unread_count_cache_->LastError());
         return 0;
     }
 
-    return private_unread.value();
+    return result.count;
 }
-
 std::int64_t GatewayServer::IncrementUnread(
     UserId receiver_user_id,
     UserId sender_user_id,
@@ -228,28 +266,60 @@ std::int64_t GatewayServer::IncrementUnread(
         return 0;
     }
 
-    const auto private_unread =
-        unread_count_cache_->IncrementPrivateUnread(
-            receiver_user_id,
-            sender_user_id
+    const IncrementUnreadResult
+        increment_result =
+            unread_count_cache_->
+                IncrementPrivateUnread(
+                    receiver_user_id,
+                    sender_user_id
+                );
+
+    if (!increment_result.Succeeded()) {
+        LOG_WARN(
+            "gateway increment unread failed"
+            << ", receiver="
+            << receiver_user_id
+            << ", sender="
+            << sender_user_id
+            << ", status="
+            << IncrementUnreadStatusToString(
+                increment_result.status
+            )
+            << ", error="
+            << increment_result.error_message
         );
 
-    if (!private_unread.has_value()) {
-        LOG_WARN("gateway increment unread failed"
-                 << ", receiver=" << receiver_user_id
-                 << ", sender=" << sender_user_id
-                 << ", error=" << unread_count_cache_->LastError());
         return 0;
     }
 
-    const auto total =
-        unread_count_cache_->GetTotalUnread(receiver_user_id);
+    const GetUnreadCountResult
+        total_result =
+            unread_count_cache_->
+                GetTotalUnread(
+                    receiver_user_id
+                );
 
-    if (total.has_value() && total_unread != nullptr) {
-        *total_unread = total.value();
+    if (total_result.Completed()) {
+        if (total_unread != nullptr) {
+            *total_unread =
+                total_result.count;
+        }
+    } else {
+        LOG_WARN(
+            "gateway get total unread "
+            "after increment failed"
+            << ", receiver="
+            << receiver_user_id
+            << ", status="
+            << GetUnreadCountStatusToString(
+                total_result.status
+            )
+            << ", error="
+            << total_result.error_message
+        );
     }
 
-    return private_unread.value();
+    return increment_result.private_count;
 }
 
 void GatewayServer::SetUserRepository(
@@ -342,23 +412,48 @@ const InetAddress& GatewayServer::ListenAddress() const {
 std::size_t GatewayServer::ConnectionCount() const {
     return server_.ConnectionCount();
 }
-/*
-    void GatewayServer::HandleConnection(
-        const TcpConnectionPtr& connection
-    ) {
-        if (!connection) {
-            return;
-        }
 
-        if (connection->IsConnected()) {
-            LOG_INFO("gateway client connected"
-                    << ", name=" << options_.name
-                    << ", peer=" << connection->PeerAddress().ToString()
-                    << ", connection_count=" << server_.ConnectionCount());
-        }
+void GatewayServer::SetUserOfflineIfMatch(
+    UserId user_id,
+    const TcpConnectionPtr& connection
+) {
+    if (!HasOnlineStatusCache()) {
+        return;
     }
-*/
 
+    if (user_id == 0 ||
+        !connection) {
+        return;
+    }
+
+    const SetOfflineIfMatchResult result =
+        online_status_cache_->
+            SetOfflineIfMatch(
+                user_id,
+                options_.gateway_id,
+                connection->Name()
+            );
+
+    if (result.Completed()) {
+        return;
+    }
+
+    LOG_WARN(
+        "gateway conditional user "
+        "offline failed"
+        << ", user_id=" << user_id
+        << ", gateway_id="
+        << options_.gateway_id
+        << ", connection="
+        << connection->Name()
+        << ", status="
+        << SetOfflineIfMatchStatusToString(
+            result.status
+        )
+        << ", error="
+        << result.error_message
+    );
+}
 
 void GatewayServer::HandleConnection(
     const TcpConnectionPtr& connection
@@ -368,28 +463,51 @@ void GatewayServer::HandleConnection(
     }
 
     if (connection->IsConnected()) {
-        LOG_INFO("gateway client connected"
-                 << ", name=" << options_.name
-                 << ", peer=" << connection->PeerAddress().ToString()
-                 << ", connection_count=" << server_.ConnectionCount());
+        LOG_INFO(
+            "gateway client connected"
+            << ", name=" << options_.name
+            << ", peer="
+            << connection->
+                PeerAddress().
+                ToString()
+            << ", connection_count="
+            << server_.ConnectionCount()
+        );
+
         return;
     }
 
-    const auto user_id =
-    session_manager_.FindUserByConnection(connection);
+    const SessionUnbindResult
+        unbind_result =
+            session_manager_.
+                UnbindIfCurrent(
+                    connection
+                );
 
-    if (user_id.has_value()) {
-        SetUserOffline(user_id.value());
+    if (unbind_result.unbound) {
+        SetUserOfflineIfMatch(
+            unbind_result.user_id,
+            connection
+        );
     }
 
-    session_manager_.UnbindByConnection(connection);
-
-    //session_manager_.UnbindByConnection(connection);
-
-    LOG_INFO("gateway client disconnected"
-             << ", name=" << options_.name
-             << ", peer=" << connection->PeerAddress().ToString()
-             << ", online_count=" << session_manager_.OnlineCount());
+    LOG_INFO(
+        "gateway client disconnected"
+        << ", name=" << options_.name
+        << ", peer="
+        << connection->
+            PeerAddress().
+            ToString()
+        << ", connection="
+        << connection->Name()
+        << ", session_unbound="
+        << unbind_result.unbound
+        << ", user_id="
+        << unbind_result.user_id
+        << ", online_count="
+        << session_manager_.
+            OnlineCount()
+    );
 }
 
 void GatewayServer::HandleMessage(const TcpConnectionPtr& connection,
@@ -522,6 +640,7 @@ void GatewayServer::HandlePacket(const TcpConnectionPtr& connection,
     }
 }
 
+
 bool GatewayServer::ClearUnread(
     UserId reader_user_id,
     UserId peer_user_id,
@@ -535,161 +654,80 @@ bool GatewayServer::ClearUnread(
         return true;
     }
 
-    if (!unread_count_cache_->ClearPrivateUnread(
-            reader_user_id,
-            peer_user_id)) {
-        LOG_WARN("gateway clear unread failed"
-                 << ", reader=" << reader_user_id
-                 << ", peer=" << peer_user_id
-                 << ", error=" << unread_count_cache_->LastError());
+    const ClearUnreadResult
+        clear_result =
+            unread_count_cache_->
+                ClearPrivateUnread(
+                    reader_user_id,
+                    peer_user_id
+                );
+
+    if (!clear_result.Completed()) {
+        LOG_WARN(
+            "gateway clear unread failed"
+            << ", reader="
+            << reader_user_id
+            << ", peer="
+            << peer_user_id
+            << ", status="
+            << ClearUnreadStatusToString(
+                clear_result.status
+            )
+            << ", error="
+            << clear_result.error_message
+        );
+
         return false;
     }
 
-    const auto total =
-        unread_count_cache_->GetTotalUnread(reader_user_id);
+    /*
+     * private键存在并完成清除时，
+     * Lua已经返回清除后的总未读数。
+     */
+    if (clear_result.Cleared()) {
+        if (total_unread != nullptr) {
+            *total_unread =
+                clear_result.total_count;
+        }
 
-    if (total.has_value() && total_unread != nullptr) {
-        *total_unread = total.value();
+        return true;
+    }
+
+    /*
+     * private键不存在时，Lua返回not_found。
+     *
+     * 但用户仍可能有其他发送者对应的未读消息，
+     * 所以这里查询真实总未读数。
+     */
+    const GetUnreadCountResult
+        total_result =
+            unread_count_cache_->
+                GetTotalUnread(
+                    reader_user_id
+                );
+
+    if (total_result.Completed()) {
+        if (total_unread != nullptr) {
+            *total_unread =
+                total_result.count;
+        }
+    } else {
+        LOG_WARN(
+            "gateway get total unread "
+            "after clear not_found failed"
+            << ", reader="
+            << reader_user_id
+            << ", status="
+            << GetUnreadCountStatusToString(
+                total_result.status
+            )
+            << ", error="
+            << total_result.error_message
+        );
     }
 
     return true;
 }
-
-/*
-    Packet GatewayServer::BuildDefaultResponse(
-        const Packet& request
-    ) const {
-        Packet response;
-        response.seq = request.seq;
-
-        switch (request.type) {
-            case MessageType::kLoginRequest:
-                response.type = MessageType::kLoginResponse;
-                response.body =
-                    R"({"success":true,"message":"gateway login accepted"})";
-                return response;
-
-            case MessageType::kChatMessage:
-                response.type = MessageType::kChatAck;
-                response.body = request.body;
-                return response;
-
-            case MessageType::kHeartbeat:
-                response.type = MessageType::kHeartbeat;
-                response.body = R"({"pong":true})";
-                return response;
-
-            default:
-                return MakeErrorPacket(
-                    request.seq,
-                    "unsupported message type"
-                );
-        }
-    }
-
-*/
-
-// void GatewayServer::HandleLoginRequest(
-//     const TcpConnectionPtr& connection,
-//     const Packet& packet
-// ) {
-//     Json body;
-//     std::string error_message;
-//     if (!ParseJsonBody(packet, &body, &error_message)) {
-//         SendPacket(
-//             connection,
-//             MakeErrorPacket(packet.seq, "invalid login json")
-//         );
-//         return;
-//     }
-//     UserId user_id = 0;
-//     if (!GetUserIdField(body, "user_id", &user_id, &error_message)) {
-//         SendPacket(connection, MakeErrorPacket(packet.seq, error_message));
-//         return;
-//     }
-//     /*
-//         session_manager_.Bind(user_id, connection);
-//         Json response_body;
-//         response_body["success"] = true;
-//         response_body["message"] = "login accepted";
-//         response_body["user_id"] = user_id;
-//         response_body["online_count"] = session_manager_.OnlineCount();
-//         Packet response;
-//         response.type = MessageType::kLoginResponse;
-//         response.seq = packet.seq;
-//         response.body = response_body.dump();
-//         SendPacket(connection, response);
-//     */
-//     if (HasUserRepository()) {
-//         const auto user = user_repository_->FindById(user_id);
-//         if (!user.has_value()) {
-//             Json response_body;
-//             response_body["success"] = false;
-//             response_body["message"] = "user not found";
-//             response_body["user_id"] = user_id;
-//             Packet response;
-//             response.type = MessageType::kLoginResponse;
-//             response.seq = packet.seq;
-//             response.body = response_body.dump();
-//             SendPacket(connection, response);
-//             LOG_WARN("gateway login rejected: user not found"
-//                     << ", user_id=" << user_id
-//                     << ", peer=" << connection->PeerAddress().ToString());
-//             return;
-//         }
-//         if (user->status != 1) {
-//             Json response_body;
-//             response_body["success"] = false;
-//             response_body["message"] = "user disabled";
-//             response_body["user_id"] = user_id;
-//             Packet response;
-//             response.type = MessageType::kLoginResponse;
-//             response.seq = packet.seq;
-//             response.body = response_body.dump();
-//             SendPacket(connection, response);
-//             LOG_WARN("gateway login rejected: user disabled"
-//                     << ", user_id=" << user_id
-//                     << ", status=" << user->status);
-//             return;
-//         }
-//         user_repository_->UpdateLastLogin(user_id);
-//     }
-//     session_manager_.Bind(user_id, connection);
-//     SetUserOnline(user_id, connection);
-//     /*
-//         const std::size_t offline_count =
-//         offline_message_store_.PendingCount(user_id);
-//     */
-//     std::size_t offline_count = 0;
-//     if (HasMessageRepository()) {
-//         const auto pending_messages =
-//             message_repository_->ListPendingMessages(user_id, 100);
-//         offline_count = pending_messages.size();
-//     } else {
-//         offline_count = offline_message_store_.PendingCount(user_id);
-//     }
-//     Json response_body;
-//     response_body["success"] = true;
-//     response_body["message"] = "login accepted";
-//     response_body["user_id"] = user_id;
-//     response_body["online_count"] = session_manager_.OnlineCount();
-//     response_body["offline_count"] = offline_count;
-//     response_body["total_unread"] = GetTotalUnread(user_id);
-//     Packet response;
-//     response.type = MessageType::kLoginResponse;
-//     response.seq = packet.seq;
-//     response.body = response_body.dump();
-//     SendPacket(connection, response);
-//     if (HasMessageRepository()) {
-//         PushPersistentOfflineMessages(user_id, connection);
-//     } else {
-//         PushOfflineMessages(user_id, connection);
-//     }
-//     LOG_INFO("gateway user logged in"
-//             << ", user_id=" << user_id
-//             << ", peer=" << connection->PeerAddress().ToString()
-//             << ", online_count=" << session_manager_.OnlineCount());
-// }
 
 void GatewayServer::HandleLoginRequest(
     const TcpConnectionPtr& connection,
@@ -867,14 +905,31 @@ void GatewayServer::HandleLoginRequest(
     SetUserOnline(user_id, connection);
 
     std::size_t offline_count = 0;
-
     if (HasMessageRepository()) {
-        const auto pending_messages =
-            message_repository_->ListPendingMessages(user_id, 100);
+        const auto pending_result =
+            message_repository_->
+                ListPendingMessages(
+                    user_id,
+                    100
+                );
 
-        offline_count = pending_messages.size();
-    } else {
-        offline_count = offline_message_store_.PendingCount(user_id);
+        if (pending_result.Succeeded()) {
+            offline_count =
+                pending_result.records.size();
+        } else {
+            LOG_WARN(
+                "gateway count persistent "
+                "offline messages failed"
+                << ", user_id="
+                << user_id
+                << ", status="
+                << MessageQueryStatusToString(
+                    pending_result.status
+                )
+                << ", message="
+                << pending_result.message
+            );
+        }
     }
 
     send_login_response(
@@ -1090,17 +1145,41 @@ void GatewayServer::HandleChatMessage(
     bool stored_persistent = false;
 
     if (HasMessageRepository()) {
-        server_message_id =
-            message_repository_->SavePrivateMessage(
-                from_user_id,
-                to_user_id,
-                server_body_text,
-                delivered
-                    ? DeliveryStatus::kDelivered
-                    : DeliveryStatus::kPending
-            );
+        const SavePrivateMessageResult
+            save_result =
+                message_repository_->
+                    SavePrivateMessage(
+                        from_user_id,
+                        to_user_id,
+                        server_body_text,
+                        delivered
+                            ? DeliveryStatus::
+                                kDelivered
+                            : DeliveryStatus::
+                                kPending
+                    );
 
-        stored_persistent = server_message_id != 0;
+        if (save_result.Succeeded()) {
+            server_message_id =
+                save_result.message_id;
+
+            stored_persistent = true;
+        } else {
+            LOG_WARN(
+                "gateway save private "
+                "message failed"
+                << ", from="
+                << from_user_id
+                << ", to="
+                << to_user_id
+                << ", status="
+                << MessageMutationStatusToString(
+                    save_result.status
+                )
+                << ", message="
+                << save_result.message
+            );
+        }
     }
 
     if (delivered) {
@@ -1275,11 +1354,68 @@ void GatewayServer::HandleReadRequest(
     std::uint64_t marked_read_count = 0;
 
     if (HasMessageRepository()) {
-        marked_read_count =
-            message_repository_->MarkReadByDialog(
-                reader_user_id,
-                peer_user_id
+        const UpdatePrivateMessagesResult
+            mark_read_result =
+                message_repository_->
+                    MarkReadByDialog(
+                        reader_user_id,
+                        peer_user_id
+                    );
+
+        if (!mark_read_result.Succeeded()) {
+            response_body["success"] = false;
+
+            response_body["message"] =
+                mark_read_result.message;
+
+            response_body["reason"] =
+                MessageMutationStatusToString(
+                    mark_read_result.status
+                );
+
+            response_body["user_id"] =
+                reader_user_id;
+
+            response_body["peer_user_id"] =
+                peer_user_id;
+
+            response_body["private_unread"] = 0;
+            response_body["total_unread"] = 0;
+            response_body["marked_read_count"] = 0;
+
+            Packet response;
+            response.type =
+                MessageType::kReadResponse;
+
+            response.seq = packet.seq;
+
+            response.body =
+                response_body.dump();
+
+            SendPacket(
+                connection,
+                response
             );
+
+            LOG_WARN(
+                "gateway mark dialog read failed"
+                << ", reader="
+                << reader_user_id
+                << ", peer="
+                << peer_user_id
+                << ", status="
+                << MessageMutationStatusToString(
+                    mark_read_result.status
+                )
+                << ", message="
+                << mark_read_result.message
+            );
+
+            return;
+        }
+
+        marked_read_count =
+            mark_read_result.affected_rows;
     }
 
     std::int64_t total_unread = 0;
@@ -1466,14 +1602,53 @@ void GatewayServer::HandleHistoryRequest(
 
     const std::size_t query_limit = limit + 1;
 
-    auto messages =
-        message_repository_->ListDialogMessages(
-            self_user_id,
-            peer_user_id,
-            before_message_id,
-            query_limit
+    auto history_result =
+        message_repository_->
+            ListDialogMessages(
+                self_user_id,
+                peer_user_id,
+                before_message_id,
+                query_limit
+            );
+
+    if (!history_result.Succeeded()) {
+        response_body["message"] =
+            history_result.message;
+
+        response_body["reason"] =
+            MessageQueryStatusToString(
+                history_result.status
+            );
+
+        response_body["user_id"] =
+            self_user_id;
+
+        response_body["peer_user_id"] =
+            peer_user_id;
+
+        send_response(response_body);
+
+        LOG_WARN(
+            "gateway history query failed"
+            << ", user_id="
+            << self_user_id
+            << ", peer_user_id="
+            << peer_user_id
+            << ", status="
+            << MessageQueryStatusToString(
+                history_result.status
+            )
+            << ", message="
+            << history_result.message
         );
 
+        return;
+    }
+
+    auto messages =
+        std::move(
+            history_result.records
+        );
     bool has_more = false;
 
     /*
@@ -1604,12 +1779,47 @@ void GatewayServer::HandleConversationListRequest(
 
     const std::size_t query_limit = limit + 1;
 
-    auto conversations =
-        message_repository_->ListConversations(
-            self_user_id,
-            query_limit
+    auto conversation_result =
+        message_repository_->
+            ListConversations(
+                self_user_id,
+                query_limit
+            );
+
+    if (!conversation_result.Succeeded()) {
+        response_body["message"] =
+            conversation_result.message;
+
+        response_body["reason"] =
+            MessageQueryStatusToString(
+                conversation_result.status
+            );
+
+        response_body["user_id"] =
+            self_user_id;
+
+        send_response(response_body);
+
+        LOG_WARN(
+            "gateway conversation list "
+            "query failed"
+            << ", user_id="
+            << self_user_id
+            << ", status="
+            << MessageQueryStatusToString(
+                conversation_result.status
+            )
+            << ", message="
+            << conversation_result.message
         );
 
+        return;
+    }
+
+    auto conversations =
+        std::move(
+            conversation_result.records
+        );
     bool has_more = false;
 
     if (conversations.size() > limit) {
@@ -1748,12 +1958,42 @@ void GatewayServer::HandleFriendListRequest(
 
     const std::size_t query_limit = limit + 1;
 
-    auto friends =
+    auto list_result =
         friend_repository_->ListFriends(
             self_user_id,
             query_limit
         );
 
+    if (!list_result.Succeeded()) {
+        response_body["message"] =
+            list_result.message;
+
+        response_body["reason"] =
+            ListFriendsStatusToString(
+                list_result.status
+            );
+
+        response_body["user_id"] =
+            self_user_id;
+
+        send_response(response_body);
+
+        LOG_WARN(
+            "gateway friend list request failed"
+            << ", user_id="
+            << self_user_id
+            << ", status="
+            << ListFriendsStatusToString(
+                list_result.status
+            )
+            << ", message="
+            << list_result.message
+        );
+
+        return;
+    }
+
+    auto friends = std::move(list_result.records);
     bool has_more = false;
 
     if (friends.size() > limit) {
@@ -2131,7 +2371,7 @@ void GatewayServer::HandleFriendRequestListRequest(
 
     const std::size_t query_limit = limit + 1;
 
-    auto requests =
+    auto list_result =
         friend_request_repository_->
             ListPendingIncomingRequests(
                 self_user_id,
@@ -2140,13 +2380,20 @@ void GatewayServer::HandleFriendRequestListRequest(
                 query_limit
             );
 
-    if (!friend_request_repository_->LastError().empty()) {
+    if (!list_result.Succeeded()) {
         response_body["message"] =
-            friend_request_repository_->LastError();
-        response_body["reason"] = "storage_error";
+            list_result.message;
+
+        response_body["reason"] =
+            ListPendingIncomingRequestsStatusToString(
+                list_result.status
+            );
+
         send_response(response_body);
         return;
     }
+
+    auto requests = std::move(list_result.records);
 
     bool has_more = false;
 
@@ -2605,25 +2852,34 @@ void GatewayServer::HandleHeartbeat(
     const TcpConnectionPtr& connection,
     const Packet& packet
 ) {
-
     const auto user_id =
-    session_manager_.FindUserByConnection(connection);
+        session_manager_.
+            FindUserByConnection(
+                connection
+            );
 
     if (user_id.has_value()) {
-        RefreshUserOnline(user_id.value());
+        RefreshUserOnlineIfMatch(
+            user_id.value(),
+            connection
+        );
     }
 
     Json response_body;
     response_body["pong"] = true;
 
     Packet response;
-    response.type = MessageType::kHeartbeat;
+    response.type =
+        MessageType::kHeartbeat;
     response.seq = packet.seq;
-    response.body = response_body.dump();
+    response.body =
+        response_body.dump();
 
-    SendPacket(connection, response);
+    SendPacket(
+        connection,
+        response
+    );
 }
-
 void GatewayServer::PushOfflineMessages(
     UserId user_id,
     const TcpConnectionPtr& connection
@@ -2693,57 +2949,96 @@ void GatewayServer::SetUserOnline(
         return;
     }
 
-    const bool ok = online_status_cache_->SetOnline(
-        user_id,
-        options_.gateway_id,
-        connection->Name(),
-        options_.online_status_ttl_seconds
-    );
+const SetOnlineResult result = online_status_cache_->
+            SetOnline(
+                user_id,
+                options_.gateway_id,
+                connection->Name(),
+                options_.
+                    online_status_ttl_seconds
+            );
 
-    if (!ok) {
-        LOG_WARN("gateway set user online status failed"
-                 << ", user_id=" << user_id
-                 << ", error=" << online_status_cache_->LastError());
+    if (result.Succeeded()) {
+        return;
     }
+
+    LOG_WARN(
+        "gateway set user online "
+        "status failed"
+        << ", user_id=" << user_id
+        << ", gateway_id="
+        << options_.gateway_id
+        << ", connection="
+        << connection->Name()
+        << ", status="
+        << SetOnlineStatusToString(
+            result.status
+        )
+        << ", error="
+        << result.error_message
+    );
 }
 
-void GatewayServer::SetUserOffline(UserId user_id) {
+void GatewayServer::RefreshUserOnlineIfMatch(
+    UserId user_id,
+    const TcpConnectionPtr& connection
+) {
     if (!HasOnlineStatusCache()) {
         return;
     }
 
-    if (user_id == 0) {
+    if (user_id == 0 ||
+        !connection) {
         return;
     }
 
-    const bool ok = online_status_cache_->SetOffline(user_id);
+    const RefreshOnlineIfMatchResult result =
+        online_status_cache_->
+            RefreshOnlineIfMatch(
+                user_id,
+                options_.gateway_id,
+                connection->Name(),
+                options_.
+                    online_status_ttl_seconds
+            );
 
-    if (!ok) {
-        LOG_WARN("gateway set user offline status failed"
-                 << ", user_id=" << user_id
-                 << ", error=" << online_status_cache_->LastError());
-    }
-}
-
-void GatewayServer::RefreshUserOnline(UserId user_id) {
-    if (!HasOnlineStatusCache()) {
+    if (result.Refreshed()) {
         return;
     }
 
-    if (user_id == 0) {
+    if (result.status ==
+        RefreshOnlineIfMatchStatus::
+            kMismatch) {
+        LOG_INFO(
+            "gateway ignored stale online "
+            "status refresh"
+            << ", user_id="
+            << user_id
+            << ", gateway_id="
+            << options_.gateway_id
+            << ", connection="
+            << connection->Name()
+        );
+
         return;
     }
 
-    const bool ok = online_status_cache_->RefreshOnline(
-        user_id,
-        options_.online_status_ttl_seconds
+    LOG_WARN(
+        "gateway refresh user online "
+        "status failed"
+        << ", user_id="
+        << user_id
+        << ", gateway_id="
+        << options_.gateway_id
+        << ", connection="
+        << connection->Name()
+        << ", status="
+        << RefreshOnlineIfMatchStatusToString(
+            result.status
+        )
+        << ", error="
+        << result.error_message
     );
-
-    if (!ok) {
-        LOG_WARN("gateway refresh user online status failed"
-                 << ", user_id=" << user_id
-                 << ", error=" << online_status_cache_->LastError());
-    }
 }
 
 void GatewayServer::PushPersistentOfflineMessages(
@@ -2758,8 +3053,34 @@ void GatewayServer::PushPersistentOfflineMessages(
         return;
     }
 
-    const auto pending_messages =
-        message_repository_->ListPendingMessages(user_id, 100);
+    auto pending_result =
+        message_repository_->
+            ListPendingMessages(
+                user_id,
+                100
+            );
+
+    if (!pending_result.Succeeded()) {
+        LOG_WARN(
+            "gateway list persistent "
+            "offline messages failed"
+            << ", user_id="
+            << user_id
+            << ", status="
+            << MessageQueryStatusToString(
+                pending_result.status
+            )
+            << ", message="
+            << pending_result.message
+        );
+
+        return;
+    }
+
+    auto pending_messages =
+        std::move(
+            pending_result.records
+        );
 
     if (pending_messages.empty()) {
         return;
@@ -2784,7 +3105,30 @@ void GatewayServer::PushPersistentOfflineMessages(
     }
 
     if (!delivered_message_ids.empty()) {
-        message_repository_->MarkDeliveredBatch(delivered_message_ids);
+        const UpdatePrivateMessagesResult
+            delivered_result =
+                message_repository_->
+                    MarkDeliveredBatch(
+                        delivered_message_ids
+                    );
+
+        if (!delivered_result.Succeeded()) {
+            LOG_WARN(
+                "gateway mark persistent "
+                "offline messages delivered "
+                "failed"
+                << ", user_id="
+                << user_id
+                << ", requested_count="
+                << delivered_message_ids.size()
+                << ", status="
+                << MessageMutationStatusToString(
+                    delivered_result.status
+                )
+                << ", message="
+                << delivered_result.message
+            );
+        }
     }
 }
 

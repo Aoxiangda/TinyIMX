@@ -396,6 +396,31 @@ int main(int argc, char* argv[]) {
         std::cerr << "final cleanup failed\n";
         ok = false;
     }
+    tinyimx::FriendRequestRepository
+        unavailable_repository(
+            nullptr
+        );
+
+    const auto storage_error_result =
+        unavailable_repository.
+            RejectFriendRequest(
+                1,
+                10001
+            );
+
+    PrintRejectResult(
+        "storage_error",
+        storage_error_result
+    );
+
+    ok = ok &&
+        storage_error_result.status ==
+            tinyimx::
+                RejectFriendRequestStatus::
+                    kStorageError;
+
+    ok = ok &&
+        !storage_error_result.message.empty();
 
     pool.Shutdown();
     tinyimx::Logger::Instance().Shutdown();

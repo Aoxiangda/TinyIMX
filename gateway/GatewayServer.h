@@ -35,12 +35,21 @@ class EventLoop;
 
 struct GatewayServerOptions {
     std::string name{"tinyimx-gateway"};
+
     std::size_t max_body_size{kDefaultMaxBodySize};
+
     bool close_on_decode_error{true};
 
-    std::size_t max_offline_messages_per_user{100};
+    std::size_t io_thread_count{0};
 
-    std::string gateway_id{"tinyimx-gateway-1"};
+    std::size_t
+        max_offline_messages_per_user{
+            100
+        };
+
+    std::string gateway_id{
+        "tinyimx-gateway-1"
+    };
 
     int online_status_ttl_seconds{120};
 };
@@ -173,7 +182,7 @@ private:
     void SetUserOnline(UserId user_id,
                     const TcpConnectionPtr& connection);
 
-    void SetUserOffline(UserId user_id);
+    void SetUserOfflineIfMatch(UserId user_id, const TcpConnectionPtr& connection);
 
     std::int64_t GetTotalUnread(UserId user_id);
 
@@ -184,7 +193,10 @@ private:
                                  UserId sender_user_id,
                                  std::int64_t* total_unread);
 
-    void RefreshUserOnline(UserId user_id);
+    void RefreshUserOnlineIfMatch(
+        UserId user_id,
+        const TcpConnectionPtr& connection
+    );
 
 private:
     EventLoop* loop_{nullptr};

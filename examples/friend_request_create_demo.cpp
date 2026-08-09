@@ -330,6 +330,33 @@ int main(int argc, char* argv[]) {
         ok = false;
     }
 
+    tinyimx::FriendRequestRepository
+    unavailable_repository(
+        nullptr
+    );
+
+    const auto storage_error_result =
+        unavailable_repository.
+            CreateFriendRequest(
+                10001,
+                10004,
+                "storage error test"
+            );
+
+    PrintResult(
+        "storage_error",
+        storage_error_result
+    );
+
+    ok = ok &&
+        storage_error_result.status ==
+            tinyimx::
+                CreateFriendRequestStatus::
+                    kStorageError;
+
+    ok = ok &&
+        !storage_error_result.message.empty();
+
     pool.Shutdown();
     tinyimx::Logger::Instance().Shutdown();
 

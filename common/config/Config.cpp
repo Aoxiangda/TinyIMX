@@ -180,9 +180,11 @@ bool Config::ApplyJsonConfig(const std::string& json_content) {
 
         if (root.contains("server")) {
             const auto& section = root.at("server");
+
             ReadIfExists(section, "host", &server_.host);
             ReadIfExists(section, "port", &server_.port);
             ReadIfExists(section, "backlog", &server_.backlog);
+            ReadIfExists(section, "io_thread_count", &server_.io_thread_count);
         }
 
         if (root.contains("logger")) {
@@ -303,6 +305,10 @@ bool Config::Validate() {
 
     if (server_.backlog <= 0) {
         return SetError("server.backlog must be greater than 0");
+    }
+
+    if (server_.io_thread_count < 0) {
+        return SetError("server.io_thread_count cannot be negative");
     }
 
     if (!IsValidLogLevel(logger_.level)) {
@@ -464,7 +470,10 @@ bool Config::Validate() {
         thread_pool_.worker_threads > static_cast<std::size_t>(hardware_threads * 4)) {
         return SetError("thread_pool.worker_threads is too large for current hardware");
     }
-
+    if (hardware_threads > 0 && server_.io_thread_count >
+            static_cast<int>( hardware_threads * 4)) {
+        return SetError("server.io_thread_count is too large for current hardware");
+    }
     return true;
 }
 

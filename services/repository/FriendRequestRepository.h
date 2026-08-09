@@ -162,6 +162,33 @@ struct FriendRequestRecord {
     std::uint32_t from_user_status{0};
 };
 
+enum class
+ListPendingIncomingRequestsStatus {
+    kSucceeded = 0,
+    kInvalidArgument,
+    kInvalidCursor,
+    kInvalidRecord,
+    kStorageError
+};
+
+const char* ListPendingIncomingRequestsStatusToString(
+    ListPendingIncomingRequestsStatus status
+);
+
+struct ListPendingIncomingRequestsResult {
+    ListPendingIncomingRequestsStatus status{
+        ListPendingIncomingRequestsStatus::kStorageError
+    };
+
+    std::vector<FriendRequestRecord> records;
+
+    std::string message;
+
+    bool Succeeded() const noexcept {
+        return status == ListPendingIncomingRequestsStatus::kSucceeded;
+    }
+};
+
 class FriendRequestRepository {
 public:
     explicit FriendRequestRepository(
@@ -176,41 +203,41 @@ public:
         const FriendRequestRepository&
     ) = delete;
 
-    CreateFriendRequestResult CreateFriendRequest(
+    CreateFriendRequestResult
+    CreateFriendRequest(
         std::uint64_t from_user_id,
         std::uint64_t to_user_id,
         const std::string& request_message
     );
 
-    std::vector<FriendRequestRecord> ListPendingIncomingRequests(
+    ListPendingIncomingRequestsResult
+    ListPendingIncomingRequests(
         std::uint64_t receiver_user_id,
         const std::string& before_created_at,
         std::uint64_t before_request_id,
         std::size_t limit
     );
 
-    AcceptFriendRequestResult AcceptFriendRequest(
+    AcceptFriendRequestResult
+    AcceptFriendRequest(
         std::uint64_t request_id,
         std::uint64_t handler_user_id
     );
 
-    RejectFriendRequestResult RejectFriendRequest(
+    RejectFriendRequestResult
+    RejectFriendRequest(
         std::uint64_t request_id,
         std::uint64_t handler_user_id
     );
-
-    const std::string& LastError() const;
 
 private:
-    std::vector<FriendRequestRecord> BuildFriendRequestRecords(
+    static ListPendingIncomingRequestsResult
+    BuildFriendRequestRecords(
         const MySqlQueryResult& result
     );
 
-    void SetError(const std::string& error_message);
-
 private:
     MySqlConnectionPool* pool_{nullptr};
-    std::string last_error_;
 };
 
 }  // namespace tinyimx

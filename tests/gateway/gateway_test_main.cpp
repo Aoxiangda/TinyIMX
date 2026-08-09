@@ -9,6 +9,8 @@ namespace tinyimx::test {
 
 void RegisterOfflineMessageStoreTests(TestRunner& runner);
 
+void RegisterSessionManagerTests(TestRunner& runner);
+
 }  // namespace tinyimx::test
 
 int main() {
@@ -28,6 +30,7 @@ int main() {
     tinyimx::test::TestRunner runner;
 
     tinyimx::test::RegisterOfflineMessageStoreTests(runner);
+    tinyimx::test::RegisterSessionManagerTests(runner);
 
     const int failed_count = runner.RunAll("TinyIMX Gateway Tests");
 

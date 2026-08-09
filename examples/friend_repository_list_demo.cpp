@@ -43,6 +43,46 @@ bool ContainsFriend(
     return false;
 }
 
+bool ExpectListStatus(
+    const std::string& name,
+    const tinyimx::ListFriendsResult& result,
+    tinyimx::ListFriendsStatus expected_status
+) {
+    std::cout
+        << name
+        << "_status="
+        << tinyimx::
+            ListFriendsStatusToString(
+                result.status
+            )
+        << " record_count="
+        << result.records.size()
+        << '\n';
+
+    if (result.status !=
+        expected_status) {
+        std::cerr
+            << name
+            << " expected status="
+            << tinyimx::
+                ListFriendsStatusToString(
+                    expected_status
+                )
+            << ", actual status="
+            << tinyimx::
+                ListFriendsStatusToString(
+                    result.status
+                )
+            << ", message="
+            << result.message
+            << '\n';
+
+        return false;
+    }
+
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -83,11 +123,30 @@ int main(int argc, char* argv[]) {
 
     std::cout << "========== Friend Repository List Demo ==========\n";
 
-    const auto user_friends =
+    const auto user_friends_result =
         friend_repository.ListFriends(
             10001,
             20
         );
+
+    if (!ExpectListStatus(
+            "user10001_friends",
+            user_friends_result,
+            tinyimx::
+                ListFriendsStatus::
+                    kSucceeded
+        )) {
+        mysql_pool.Shutdown();
+
+        tinyimx::Logger::
+            Instance().
+            Shutdown();
+
+        return 1;
+    }
+
+const auto& user_friends =
+    user_friends_result.records;
 
     std::cout << "user10001 friend count="
               << user_friends.size() << '\n';
@@ -122,11 +181,30 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    const auto peer_friends =
+    const auto peer_friends_result =
         friend_repository.ListFriends(
             10002,
             20
         );
+
+    if (!ExpectListStatus(
+            "user10002_friends",
+            peer_friends_result,
+            tinyimx::
+                ListFriendsStatus::
+                    kSucceeded
+        )) {
+        mysql_pool.Shutdown();
+
+        tinyimx::Logger::
+            Instance().
+            Shutdown();
+
+        return 1;
+    }
+
+    const auto& peer_friends =
+        peer_friends_result.records;
 
     std::cout << "user10002 friend count="
               << peer_friends.size() << '\n';
@@ -140,19 +218,76 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    const auto invalid_friends =
+    const auto invalid_user_result =
         friend_repository.ListFriends(
             0,
             20
         );
 
-    if (!invalid_friends.empty()) {
-        std::cerr << "invalid user friend list should be empty\n";
+    if (!ExpectListStatus(
+            "invalid_user",
+            invalid_user_result,
+            tinyimx::
+                ListFriendsStatus::
+                    kInvalidArgument
+        )) {
         mysql_pool.Shutdown();
-        tinyimx::Logger::Instance().Shutdown();
+
+        tinyimx::Logger::
+            Instance().
+            Shutdown();
+
         return 1;
     }
 
+    const auto zero_limit_result =
+        friend_repository.ListFriends(
+            10001,
+            0
+        );
+
+    if (!ExpectListStatus(
+            "zero_limit",
+            zero_limit_result,
+            tinyimx::
+                ListFriendsStatus::
+                    kSucceeded
+        ) ||
+        !zero_limit_result.records.empty()) {
+        mysql_pool.Shutdown();
+
+        tinyimx::Logger::
+            Instance().
+            Shutdown();
+
+        return 1;
+    }
+    tinyimx::FriendRepository
+        unavailable_repository(
+            nullptr
+        );
+
+    const auto storage_error_result =
+        unavailable_repository.ListFriends(
+            10001,
+            20
+        );
+
+    if (!ExpectListStatus(
+            "storage_error",
+            storage_error_result,
+            tinyimx::
+                ListFriendsStatus::
+                    kStorageError
+        )) {
+        mysql_pool.Shutdown();
+
+        tinyimx::Logger::
+            Instance().
+            Shutdown();
+
+        return 1;
+    }
     mysql_pool.Shutdown();
     tinyimx::Logger::Instance().Shutdown();
 

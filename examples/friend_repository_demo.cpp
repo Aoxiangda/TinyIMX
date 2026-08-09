@@ -135,6 +135,20 @@ int main(int argc, char* argv[]) {
              tinyimx::ChatPermissionStatus::kInvalidArgument
          );
 
+    tinyimx::FriendRepository
+        unavailable_repository(
+            nullptr
+        );
+
+    ok = ok &&
+        ExpectPermission(
+            unavailable_repository,
+            10001,
+            10002,
+            tinyimx::
+                ChatPermissionStatus::
+                    kStorageError
+        );
     mysql_pool.Shutdown();
     tinyimx::Logger::Instance().Shutdown();
 

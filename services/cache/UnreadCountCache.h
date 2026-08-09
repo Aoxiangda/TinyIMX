@@ -3,66 +3,183 @@
 #include "common/cache/RedisConnectionPool.h"
 
 #include <cstdint>
-#include <optional>
 #include <string>
 
 namespace tinyimx {
+
+enum class GetUnreadCountStatus {
+    kFound = 0,
+    kNotFound,
+    kInvalidValue,
+    kInvalidArgument,
+    kRedisError
+};
+
+struct GetUnreadCountResult {
+    GetUnreadCountStatus status{
+        GetUnreadCountStatus::kRedisError
+    };
+
+    std::int64_t count{0};
+    std::string error_message;
+
+    bool Found() const noexcept {
+        return status ==
+               GetUnreadCountStatus::kFound;
+    }
+
+    bool NotFound() const noexcept {
+        return status ==
+               GetUnreadCountStatus::kNotFound;
+    }
+
+    bool Completed() const noexcept {
+        return status ==
+                   GetUnreadCountStatus::kFound ||
+               status ==
+                   GetUnreadCountStatus::kNotFound;
+    }
+};
+
+enum class IncrementUnreadStatus {
+    kIncremented = 0,
+    kInvalidArgument,
+    kInvalidValue,
+    kRedisError
+};
+
+struct IncrementUnreadResult {
+    IncrementUnreadStatus status{
+        IncrementUnreadStatus::kRedisError
+    };
+
+    std::int64_t private_count{0};
+    std::string error_message;
+
+    bool Succeeded() const noexcept {
+        return status ==
+               IncrementUnreadStatus::
+                   kIncremented;
+    }
+};
+
+enum class ClearUnreadStatus {
+    kCleared = 0,
+    kNotFound,
+    kInvalidArgument,
+    kInvalidValue,
+    kRedisError
+};
+
+struct ClearUnreadResult {
+    ClearUnreadStatus status{
+        ClearUnreadStatus::kRedisError
+    };
+
+    /*
+     * kCleared时：
+     * 表示完成本次清除后的总未读数。
+     *
+     * kNotFound时：
+     * 该字段不代表Redis中的真实总未读数，
+     * 调用方如需总数，应再执行GetTotalUnread()。
+     */
+    std::int64_t total_count{0};
+
+    std::string error_message;
+
+    bool Cleared() const noexcept {
+        return status ==
+               ClearUnreadStatus::kCleared;
+    }
+
+    bool NotFound() const noexcept {
+        return status ==
+               ClearUnreadStatus::kNotFound;
+    }
+
+    bool Completed() const noexcept {
+        return status ==
+                   ClearUnreadStatus::kCleared ||
+               status ==
+                   ClearUnreadStatus::kNotFound;
+    }
+};
 
 class UnreadCountCache {
 public:
     explicit UnreadCountCache(
         RedisConnectionPool* pool,
-        std::string key_prefix = "tinyimx:unread:"
+        std::string key_prefix =
+            "tinyimx:unread:"
     );
 
-    UnreadCountCache(const UnreadCountCache&) = delete;
-    UnreadCountCache& operator=(const UnreadCountCache&) = delete;
+    UnreadCountCache(
+        const UnreadCountCache&
+    ) = delete;
 
-    std::optional<std::int64_t> IncrementPrivateUnread(
+    UnreadCountCache& operator=(
+        const UnreadCountCache&
+    ) = delete;
+
+    IncrementUnreadResult
+    IncrementPrivateUnread(
         std::uint64_t receiver_user_id,
         std::uint64_t sender_user_id
     );
 
-    std::optional<std::int64_t> GetPrivateUnread(
+    GetUnreadCountResult
+    GetPrivateUnread(
         std::uint64_t receiver_user_id,
         std::uint64_t sender_user_id
     );
 
-    std::optional<std::int64_t> GetTotalUnread(
+    GetUnreadCountResult
+    GetTotalUnread(
         std::uint64_t receiver_user_id
     );
 
-    bool ClearPrivateUnread(
+    ClearUnreadResult
+    ClearPrivateUnread(
         std::uint64_t receiver_user_id,
         std::uint64_t sender_user_id
     );
 
-    const std::string& LastError() const;
-
 private:
-    bool ValidateUserId(std::uint64_t user_id,
-                        const std::string& action);
+    std::string BuildPrivateKey(
+        std::uint64_t receiver_user_id,
+        std::uint64_t sender_user_id
+    ) const;
 
-    bool ValidateUserPair(std::uint64_t receiver_user_id,
-                          std::uint64_t sender_user_id,
-                          const std::string& action);
+    std::string BuildTotalKey(
+        std::uint64_t receiver_user_id
+    ) const;
 
-    std::string BuildPrivateKey(std::uint64_t receiver_user_id,
-                                std::uint64_t sender_user_id) const;
-
-    std::string BuildTotalKey(std::uint64_t receiver_user_id) const;
-
-    std::optional<std::int64_t> ParseCount(
-        const std::optional<std::string>& value,
+    GetUnreadCountResult
+    ReadCount(
+        const std::string& key,
         const std::string& action
     );
 
-    void SetError(const std::string& error_message);
-
 private:
     RedisConnectionPool* pool_{nullptr};
+
     std::string key_prefix_;
-    std::string last_error_;
 };
+
+std::string
+GetUnreadCountStatusToString(
+    GetUnreadCountStatus status
+);
+
+std::string
+IncrementUnreadStatusToString(
+    IncrementUnreadStatus status
+);
+
+std::string
+ClearUnreadStatusToString(
+    ClearUnreadStatus status
+);
 
 }  // namespace tinyimx

@@ -149,14 +149,20 @@ target_link_libraries(buffer_demo PRIVATE
     tinyimx_net
 )
 
-add_library(tinyimx_net
-    common/net/InetAddress.cpp
-    common/net/Socket.cpp
-    common/net/Buffer.cpp
-    common/net/Channel.cpp
-    common/net/EventLoop.cpp
-    common/net/TcpConnection.cpp
-    common/net/TcpServer.cpp
+add_library(
+    tinyimx_net
+    STATIC
+        common/net/InetAddress.cpp
+        common/net/Socket.cpp
+        common/net/Buffer.cpp
+        common/net/Channel.cpp
+        common/net/EventLoop.cpp
+        common/net/Timer.cpp
+        common/net/TimerQueue.cpp
+        common/net/EventLoopThread.cpp
+        common/net/EventLoopThreadPool.cpp
+        common/net/TcpConnection.cpp
+        common/net/TcpServer.cpp
 )
 
 target_include_directories(tinyimx_net PUBLIC
@@ -380,6 +386,7 @@ target_link_libraries(gateway_offline_client_demo PRIVATE
 add_executable(gateway_tests
     tests/gateway/gateway_test_main.cpp
     tests/gateway/offline_message_store_test.cpp
+    tests/gateway/session_manager_test.cpp
 )
 
 target_link_libraries(gateway_tests PRIVATE
@@ -667,6 +674,9 @@ add_executable(gateway_duplicate_login_client_demo
 )
 
 target_link_libraries(gateway_duplicate_login_client_demo PRIVATE
+    tinyimx_config
+    tinyimx_logging
+    tinyimx_cache
     tinyimx_net
     tinyimx_protocol
     nlohmann_json::nlohmann_json

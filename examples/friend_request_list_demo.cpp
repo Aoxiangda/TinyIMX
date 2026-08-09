@@ -10,7 +10,7 @@
 
 namespace {
 
-bool CleanupRequestPair(
+bool CleanupPair(
     tinyimx::MySqlConnectionPool* pool,
     std::uint64_t user_a,
     std::uint64_t user_b
@@ -25,7 +25,11 @@ bool CleanupRequestPair(
         return false;
     }
 
-    const std::string sql =
+    if (!connection->BeginTransaction()) {
+        return false;
+    }
+
+    const std::string delete_requests_sql =
         "DELETE FROM im_friend_requests "
         "WHERE "
         "(from_user_id = " +
@@ -38,14 +42,33 @@ bool CleanupRequestPair(
         " AND to_user_id = " +
         std::to_string(user_a) + ")";
 
-    return connection->Execute(sql);
+    if (!connection->Execute(delete_requests_sql)) {
+        connection->Rollback();
+        return false;
+    }
+
+    const std::string delete_relations_sql =
+        "DELETE FROM im_user_relations "
+        "WHERE "
+        "(user_id = " +
+        std::to_string(user_a) +
+        " AND peer_user_id = " +
+        std::to_string(user_b) + ") "
+        "OR "
+        "(user_id = " +
+        std::to_string(user_b) +
+        " AND peer_user_id = " +
+        std::to_string(user_a) + ")";
+
+    if (!connection->Execute(delete_relations_sql)) {
+        connection->Rollback();
+        return false;
+    }
+
+    return connection->Commit();
 }
 
-void PrintRecords(
-    const std::vector<
-        tinyimx::FriendRequestRecord
-    >& records
-) {
+void PrintRecords(const std::vector<tinyimx::FriendRequestRecord>& records) {
     for (const auto& record : records) {
         std::cout
             << "request:"
@@ -76,6 +99,50 @@ void PrintRecords(
             << record.from_user_status
             << '\n';
     }
+}
+
+bool ExpectListStatus(
+    const std::string& name,
+    const tinyimx::
+        ListPendingIncomingRequestsResult&
+            result,
+    tinyimx::
+        ListPendingIncomingRequestsStatus
+            expected_status
+) {
+    std::cout
+        << name
+        << "_status="
+        << tinyimx::
+            ListPendingIncomingRequestsStatusToString(
+                result.status
+            )
+        << " record_count="
+        << result.records.size()
+        << '\n';
+
+    if (result.status !=
+        expected_status) {
+        std::cerr
+            << name
+            << " expected status="
+            << tinyimx::
+                ListPendingIncomingRequestsStatusToString(
+                    expected_status
+                )
+            << ", actual status="
+            << tinyimx::
+                ListPendingIncomingRequestsStatusToString(
+                    result.status
+                )
+            << ", message="
+            << result.message
+            << '\n';
+
+        return false;
+    }
+
+    return true;
 }
 
 }  // namespace
@@ -118,7 +185,7 @@ int main(int argc, char* argv[]) {
 
     bool ok = true;
 
-    if (!CleanupRequestPair(
+    if (!CleanupPair(
             &pool,
             10001,
             10004
@@ -153,26 +220,33 @@ int main(int argc, char* argv[]) {
                  kCreated &&
          created.request_id != 0;
 
-    const auto incoming =
-        repository.ListPendingIncomingRequests(
-            10001,
-            "",
-            0,
-            20
+    const auto incoming_result =
+        repository.
+            ListPendingIncomingRequests(
+                10001,
+                "",
+                0,
+                20
+            );
+
+    ok = ok &&
+        ExpectListStatus(
+            "user10001_incoming",
+            incoming_result,
+            tinyimx::
+                ListPendingIncomingRequestsStatus::
+                    kSucceeded
         );
 
-    std::cout
-        << "user10001 incoming_count="
-        << incoming.size()
-        << '\n';
-
-    PrintRecords(incoming);
+    PrintRecords(
+        incoming_result.records
+    );
 
     ok = ok &&
-         repository.LastError().empty();
+        incoming_result.records.size() == 1;
 
-    ok = ok &&
-         incoming.size() == 1;
+    const auto& incoming =
+        incoming_result.records;
 
     if (!incoming.empty()) {
         const auto& record = incoming.front();
@@ -206,60 +280,155 @@ int main(int argc, char* argv[]) {
         ok = ok &&
              record.handled_at.empty();
 
-        const auto next_page =
-            repository.ListPendingIncomingRequests(
-                10001,
-                record.created_at,
-                record.request_id,
+    const auto next_page_result =
+            repository.
+                ListPendingIncomingRequests(
+                    10001,
+                    record.created_at,
+                    record.request_id,
+                    20
+                );
+
+        ok = ok &&
+            ExpectListStatus(
+                "next_page",
+                next_page_result,
+                tinyimx::
+                    ListPendingIncomingRequestsStatus::
+                        kSucceeded
+            );
+
+        ok = ok &&
+            next_page_result.records.empty();
+    }
+
+    const auto sender_incoming_result =
+        repository.
+            ListPendingIncomingRequests(
+                10004,
+                "",
+                0,
                 20
             );
 
-        std::cout
-            << "next_page_count="
-            << next_page.size()
-            << '\n';
-
-        ok = ok &&
-             repository.LastError().empty();
-
-        ok = ok &&
-             next_page.empty();
-    }
-
-    const auto sender_incoming =
-        repository.ListPendingIncomingRequests(
-            10004,
-            "",
-            0,
-            20
-        );
-
-    std::cout
-        << "user10004 incoming_count="
-        << sender_incoming.size()
-        << '\n';
-
     ok = ok &&
-         repository.LastError().empty();
-
-    ok = ok &&
-         sender_incoming.empty();
-
-    const auto invalid =
-        repository.ListPendingIncomingRequests(
-            0,
-            "",
-            0,
-            20
+        ExpectListStatus(
+            "user10004_incoming",
+            sender_incoming_result,
+            tinyimx::
+                ListPendingIncomingRequestsStatus::
+                    kSucceeded
         );
 
     ok = ok &&
-         invalid.empty();
+        sender_incoming_result.records.empty();
+
+   const auto invalid_user_result =
+        repository.
+            ListPendingIncomingRequests(
+                0,
+                "",
+                0,
+                20
+            );
 
     ok = ok &&
-         !repository.LastError().empty();
+        ExpectListStatus(
+            "invalid_user",
+            invalid_user_result,
+            tinyimx::
+                ListPendingIncomingRequestsStatus::
+                    kInvalidArgument
+        );
 
-    if (!CleanupRequestPair(
+    ok = ok &&
+        invalid_user_result.records.empty();
+
+    const auto invalid_cursor_result =
+        repository.
+            ListPendingIncomingRequests(
+                10001,
+                "",
+                100,
+                20
+            );
+
+    ok = ok &&
+        ExpectListStatus(
+            "invalid_cursor",
+            invalid_cursor_result,
+            tinyimx::
+                ListPendingIncomingRequestsStatus::
+                    kInvalidCursor
+        );
+
+    ok = ok &&
+        invalid_cursor_result.records.empty();
+
+    const auto invalid_datetime_result =
+        repository.
+            ListPendingIncomingRequests(
+                10001,
+                "2026/08/06",
+                100,
+                20
+            );
+
+    ok = ok &&
+        ExpectListStatus(
+            "invalid_datetime_cursor",
+            invalid_datetime_result,
+            tinyimx::
+                ListPendingIncomingRequestsStatus::
+                    kInvalidCursor
+        );
+    const auto zero_limit_result =
+        repository.
+            ListPendingIncomingRequests(
+                10001,
+                "",
+                0,
+                0
+            );
+
+    ok = ok &&
+        ExpectListStatus(
+            "zero_limit",
+            zero_limit_result,
+            tinyimx::
+                ListPendingIncomingRequestsStatus::
+                    kSucceeded
+        );
+
+    ok = ok &&
+        zero_limit_result.records.empty();
+
+        tinyimx::FriendRequestRepository
+    unavailable_repository(
+        nullptr
+    );
+
+    const auto storage_error_result =
+        unavailable_repository.
+            ListPendingIncomingRequests(
+                10001,
+                "",
+                0,
+                20
+            );
+
+    ok = ok &&
+        ExpectListStatus(
+            "storage_error",
+            storage_error_result,
+            tinyimx::
+                ListPendingIncomingRequestsStatus::
+                    kStorageError
+        );
+
+    ok = ok &&
+        storage_error_result.records.empty();
+    if (!CleanupPair(
             &pool,
             10001,
             10004

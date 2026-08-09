@@ -2,6 +2,7 @@
 
 #include "common/db/MySqlConnectionPool.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -38,7 +39,6 @@ struct PrivateMessageRecord {
     std::string read_at;
 };
 
-
 struct ConversationRecord {
     std::uint64_t peer_user_id{0};
 
@@ -58,68 +58,155 @@ struct ConversationRecord {
     std::string last_read_at;
 };
 
+enum class MessageQueryStatus {
+    kSucceeded = 0,
+    kInvalidArgument,
+    kInvalidRecord,
+    kStorageError
+};
+
+const char*
+MessageQueryStatusToString(
+    MessageQueryStatus status
+);
+
+struct ListPrivateMessagesResult {
+    MessageQueryStatus status{
+        MessageQueryStatus::kStorageError
+    };
+
+    std::vector<PrivateMessageRecord> records;
+    std::string message;
+
+    bool Succeeded() const noexcept {
+        return status ==
+               MessageQueryStatus::kSucceeded;
+    }
+};
+
+struct ListConversationsResult {
+    MessageQueryStatus status{
+        MessageQueryStatus::kStorageError
+    };
+
+    std::vector<ConversationRecord> records;
+    std::string message;
+
+    bool Succeeded() const noexcept {
+        return status ==
+               MessageQueryStatus::kSucceeded;
+    }
+};
+
+enum class MessageMutationStatus {
+    kSucceeded = 0,
+    kInvalidArgument,
+    kStorageError
+};
+
+const char* MessageMutationStatusToString(
+    MessageMutationStatus status
+);
+
+struct SavePrivateMessageResult {
+    MessageMutationStatus status{
+        MessageMutationStatus::kStorageError
+    };
+
+    std::uint64_t message_id{0};
+    std::string message;
+
+    bool Succeeded() const noexcept {
+        return status ==
+               MessageMutationStatus::kSucceeded;
+    }
+};
+
+struct UpdatePrivateMessagesResult {
+    MessageMutationStatus status{
+        MessageMutationStatus::kStorageError
+    };
+
+    std::uint64_t affected_rows{0};
+    std::string message;
+
+    bool Succeeded() const noexcept {
+        return status ==
+               MessageMutationStatus::kSucceeded;
+    }
+};
+
 class MessageRepository {
 public:
-    explicit MessageRepository(MySqlConnectionPool* pool);
+    explicit MessageRepository(
+        MySqlConnectionPool* pool
+    );
 
-    MessageRepository(const MessageRepository&) = delete;
-    MessageRepository& operator=(const MessageRepository&) = delete;
+    MessageRepository(
+        const MessageRepository&
+    ) = delete;
 
-    std::uint64_t SavePrivateMessage(
+    MessageRepository& operator=(
+        const MessageRepository&
+    ) = delete;
+
+    SavePrivateMessageResult
+    SavePrivateMessage(
         std::uint64_t from_user_id,
         std::uint64_t to_user_id,
         const std::string& content,
         DeliveryStatus delivery_status,
-        PrivateMessageType message_type = PrivateMessageType::kText,
-        const std::string& client_message_id = ""
+        PrivateMessageType message_type =
+            PrivateMessageType::kText,
+        const std::string& client_message_id =
+            ""
     );
 
-    std::vector<PrivateMessageRecord> ListPendingMessages(
+    ListPrivateMessagesResult
+    ListPendingMessages(
         std::uint64_t to_user_id,
         std::size_t limit
     );
 
-    std::vector<PrivateMessageRecord> ListDialogMessages(
+    ListPrivateMessagesResult
+    ListDialogMessages(
         std::uint64_t user_id,
         std::uint64_t peer_user_id,
         std::uint64_t before_message_id,
         std::size_t limit
     );
 
-    std::vector<ConversationRecord> ListConversations(
+    ListConversationsResult
+    ListConversations(
         std::uint64_t user_id,
         std::size_t limit
     );
 
-    bool MarkDelivered(std::uint64_t message_id);
-
-    bool MarkDeliveredBatch(
-        const std::vector<std::uint64_t>& message_ids
+    UpdatePrivateMessagesResult MarkDelivered(
+        std::uint64_t message_id
     );
 
-    const std::string& LastError() const;
+    UpdatePrivateMessagesResult MarkDeliveredBatch(
+        const std::vector<std::uint64_t>&
+            message_ids
+    );
 
-    std::size_t CountPendingMessages(std::uint64_t to_user_id);
-
-    std::uint64_t MarkReadByDialog(
+    UpdatePrivateMessagesResult MarkReadByDialog(
         std::uint64_t reader_user_id,
         std::uint64_t peer_user_id
     );
 
 private:
-    std::vector<PrivateMessageRecord> BuildMessagesFromResult(
+    static ListPrivateMessagesResult BuildMessagesFromResult(
         const MySqlQueryResult& result
     );
 
-    std::vector<ConversationRecord> BuildConversationsFromResult(
+    static ListConversationsResult BuildConversationsFromResult(
         const MySqlQueryResult& result
     );
-
-    void SetError(const std::string& error_message);
 
 private:
     MySqlConnectionPool* pool_{nullptr};
-    std::string last_error_;
 };
 
 }  // namespace tinyimx
