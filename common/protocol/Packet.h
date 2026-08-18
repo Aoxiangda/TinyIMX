@@ -39,6 +39,10 @@ enum class MessageType : std::uint16_t {
     kFriendRequestRejectRequest = 2017,
     kFriendRequestRejectResponse = 2018,
 
+    // Gateway-to-Gateway internal protocol.
+    kGatewayForwardChatRequest = 3001,
+    kGatewayForwardChatResponse = 3002,
+
     kHeartbeat = 9001,
     kError = 9999
 };
@@ -68,5 +72,6 @@ constexpr std::size_t kDefaultMaxBodySize = 1024 * 1024;
 std::string MessageTypeToString(MessageType type);
 
 bool IsKnownMessageType(MessageType type);
+bool IsGatewayInternalMessageType(MessageType type);
 
 }  // namespace tinyimx

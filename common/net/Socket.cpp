@@ -288,6 +288,14 @@ void Socket::Close() {
     }
 }
 
+int Socket::Release() noexcept {
+    const int fd = fd_;
+
+    fd_ = kInvalidFd;
+
+    return fd;
+}
+
 int Socket::Fd() const {
     return fd_;
 }

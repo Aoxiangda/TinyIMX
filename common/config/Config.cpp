@@ -1,5 +1,6 @@
 #include "common/config/Config.h"
 
+#include <cctype>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -30,6 +31,34 @@ bool IsValidCompressType(const std::string& compress) {
     return compress == "none" ||
            compress == "zstd" ||
            compress == "zlib";
+}
+
+bool IsValidInstanceId(const std::string& instance_id) {
+    if (instance_id.empty() ||
+        instance_id.size() > 64) {
+        return false;
+    }
+
+    for (char ch : instance_id) {
+        const unsigned char value =
+            static_cast<unsigned char>(
+                ch
+            );
+
+        if (std::isalnum(value) != 0) {
+            continue;
+        }
+
+        if (ch == '-' ||
+            ch == '_' ||
+            ch == '.') {
+            continue;
+        }
+
+        return false;
+    }
+
+    return true;
 }
 
 template <typename T>
@@ -117,6 +146,10 @@ const RedisConfig& Config::Redis() const {
     return redis_;
 }
 
+const GatewayRegistryConfig& Config::GatewayRegistry() const {
+    return gateway_registry_;
+}
+
 const McpConfig& Config::Mcp() const {
     return mcp_;
 }
@@ -165,19 +198,20 @@ void Config::Reset() {
     rpc_ = RpcConfig{};
     mysql_ = MySqlConfig{};
     redis_ = RedisConfig{};
+    gateway_registry_ = GatewayRegistryConfig{};
     mcp_ = McpConfig{};
 }
 
 bool Config::ApplyJsonConfig(const std::string& json_content) {
     try {
         json root = json::parse(json_content);
-
         if (root.contains("app")) {
             const auto& section = root.at("app");
+
             ReadIfExists(section, "name", &app_.name);
             ReadIfExists(section, "env", &app_.env);
+            ReadIfExists(section, "instance_id", &app_.instance_id);
         }
-
         if (root.contains("server")) {
             const auto& section = root.at("server");
 
@@ -265,6 +299,41 @@ bool Config::ApplyJsonConfig(const std::string& json_content) {
             ReadIfExists(section, "pool_size", &redis_.pool_size);
         }
 
+        if (root.contains("gateway_registry")) {
+            const auto& section =
+                root.at("gateway_registry");
+
+            ReadIfExists(
+                section,
+                "enable",
+                &gateway_registry_.enable
+            );
+            ReadIfExists(
+                section,
+                "advertise_host",
+                &gateway_registry_.advertise_host
+            );
+            ReadIfExists(
+                section,
+                "lease_ttl_seconds",
+                &gateway_registry_.lease_ttl_seconds
+            );
+
+            ReadIfExists(
+                section,
+                "heartbeat_interval_seconds",
+                &gateway_registry_.
+                    heartbeat_interval_seconds
+            );
+
+            ReadIfExists(
+                section,
+                "discovery_refresh_interval_seconds",
+                &gateway_registry_.
+                    discovery_refresh_interval_seconds
+            );
+        }
+
         if (root.contains("mcp")) {
             const auto& section = root.at("mcp");
             ReadIfExists(section, "enable", &mcp_.enable);
@@ -293,6 +362,12 @@ bool Config::Validate() {
 
     if (!IsValidEnv(app_.env)) {
         return SetError("app.env must be one of: dev, test, prod");
+    }
+
+    if (!IsValidInstanceId(app_.instance_id)) {
+        return SetError("app.instance_id must be 1-64 characters and contain "
+            "only letters, digits, '-', "
+            "'_' or '.'");
     }
 
     if (server_.host.empty()) {
@@ -455,6 +530,94 @@ bool Config::Validate() {
         }
     }
 
+    if (gateway_registry_.enable) {
+        if (!redis_.enable) {
+            return SetError(
+                "gateway_registry requires "
+                "redis.enable=true"
+            );
+        }
+
+        if (
+            gateway_registry_.
+                advertise_host.empty()
+        ) {
+            return SetError(
+                "gateway_registry."
+                "advertise_host cannot be empty "
+                "when gateway_registry.enable=true"
+            );
+        }
+
+        if (
+            gateway_registry_.
+                advertise_host == "0.0.0.0" ||
+            gateway_registry_.
+                advertise_host == "::"
+        ) {
+            return SetError(
+                "gateway_registry."
+                "advertise_host cannot be "
+                "a wildcard listen address"
+            );
+        }
+
+        if (
+            gateway_registry_.
+                lease_ttl_seconds < 3 ||
+            gateway_registry_.
+                lease_ttl_seconds > 300
+        ) {
+            return SetError(
+                "gateway_registry."
+                "lease_ttl_seconds "
+                "must be in range 3-300"
+            );
+        }
+
+        if (
+            gateway_registry_.
+                heartbeat_interval_seconds <
+                1 ||
+            gateway_registry_.
+                heartbeat_interval_seconds >
+                60
+        ) {
+            return SetError(
+                "gateway_registry."
+                "heartbeat_interval_seconds "
+                "must be in range 1-60"
+            );
+        }
+
+        if (
+            gateway_registry_.
+                discovery_refresh_interval_seconds < 1 ||
+            gateway_registry_.
+                discovery_refresh_interval_seconds > 60
+        ) {
+            return SetError(
+                "gateway_registry."
+                "discovery_refresh_interval_seconds "
+                "must be in range 1-60"
+            );
+        }
+
+        if (
+            gateway_registry_.
+                lease_ttl_seconds <
+            gateway_registry_.
+                heartbeat_interval_seconds *
+                3
+        ) {
+            return SetError(
+                "gateway_registry."
+                "lease_ttl_seconds "
+                "must be at least 3 times "
+                "heartbeat_interval_seconds"
+            );
+        }
+    }
     if (mcp_.enable) {
         if (mcp_.endpoint.empty()) {
             return SetError("mcp.endpoint cannot be empty when mcp.enable=true");

@@ -11,6 +11,7 @@ void RegisterInetAddressTests(TestRunner& runner);
 void RegisterBufferTests(TestRunner& runner);
 void RegisterEventLoopTests(TestRunner& runner);
 void RegisterTcpServerTests(TestRunner& runner);
+void RegisterTcpClientTests(TestRunner& runner);
 
 }  // namespace tinyimx::test
 
@@ -34,6 +35,7 @@ int main() {
     tinyimx::test::RegisterBufferTests(runner);
     tinyimx::test::RegisterEventLoopTests(runner);
     tinyimx::test::RegisterTcpServerTests(runner);
+    tinyimx::test::RegisterTcpClientTests(runner);
 
     const int failed_count = runner.RunAll("TinyIMX Network Tests");
 

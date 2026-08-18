@@ -385,6 +385,118 @@ bool RedisConnection::Expire(
     return reply->integer == 1;
 }
 
+bool RedisConnection::SAdd(
+    const std::string& key,
+    const std::string& member
+) {
+    RedisReplyPtr reply(
+        Command({
+            "SADD",
+            key,
+            member
+        }),
+        freeReplyObject
+    );
+
+    if (!reply ||
+        reply->type != REDIS_REPLY_INTEGER) {
+        SetError(
+            "redis sadd failed: invalid reply"
+        );
+
+        return false;
+    }
+
+    last_error_.clear();
+
+    return reply->integer >= 0;
+}
+
+bool RedisConnection::SRem(
+    const std::string& key,
+    const std::string& member
+) {
+    RedisReplyPtr reply(
+        Command({
+            "SREM",
+            key,
+            member
+        }),
+        freeReplyObject
+    );
+
+    if (!reply ||
+        reply->type != REDIS_REPLY_INTEGER) {
+        SetError(
+            "redis srem failed: invalid reply"
+        );
+
+        return false;
+    }
+
+    last_error_.clear();
+
+    return reply->integer >= 0;
+}
+
+std::optional<std::vector<std::string>>
+RedisConnection::SMembers(
+    const std::string& key
+) {
+    RedisReplyPtr reply(
+        Command({
+            "SMEMBERS",
+            key
+        }),
+        freeReplyObject
+    );
+
+    if (!reply ||
+        reply->type != REDIS_REPLY_ARRAY) {
+        SetError(
+            "redis smembers failed: invalid reply"
+        );
+
+        return std::nullopt;
+    }
+
+    std::vector<std::string> members;
+
+    members.reserve(
+        reply->elements
+    );
+
+    for (
+        std::size_t i = 0;
+        i < reply->elements;
+        ++i
+    ) {
+        const redisReply* element =
+            reply->element[i];
+
+        if (
+            element == nullptr ||
+            element->type != REDIS_REPLY_STRING
+        ) {
+            SetError(
+                "redis smembers failed: "
+                "invalid array element"
+            );
+
+            return std::nullopt;
+        }
+
+        members.emplace_back(
+            element->str,
+            element->len
+        );
+    }
+
+    last_error_.clear();
+
+    return members;
+}
+
 std::optional<std::int64_t>
 RedisConnection::EvalInteger(
     const std::string& script,

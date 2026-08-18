@@ -163,6 +163,8 @@ add_library(
         common/net/EventLoopThreadPool.cpp
         common/net/TcpConnection.cpp
         common/net/TcpServer.cpp
+        common/net/Connector.cpp
+        common/net/TcpClient.cpp
 )
 
 target_include_directories(tinyimx_net PUBLIC
@@ -235,6 +237,7 @@ add_executable(net_tests
     tests/net/buffer_test.cpp
     tests/net/event_loop_test.cpp
     tests/net/tcp_server_test.cpp
+    tests/net/tcp_client_test.cpp
 )
 
 target_link_libraries(net_tests PRIVATE
@@ -268,6 +271,8 @@ target_compile_features(tcp_echo_stress_client PRIVATE
 add_library(tinyimx_protocol
     common/protocol/Packet.cpp
     common/protocol/ProtocolCodec.cpp
+    common/protocol/GatewayPeerProtocol.cpp
+    common/protocol/ClientChatProtocol.cpp
 )
 
 target_include_directories(tinyimx_protocol PUBLIC
@@ -280,6 +285,7 @@ target_compile_features(tinyimx_protocol PUBLIC
 
 target_link_libraries(tinyimx_protocol PUBLIC
     tinyimx_net
+    nlohmann_json::nlohmann_json
 )
 
 add_executable(protocol_codec_demo
@@ -294,6 +300,8 @@ target_link_libraries(protocol_codec_demo PRIVATE
 add_executable(protocol_tests
     tests/protocol/protocol_test_main.cpp
     tests/protocol/protocol_codec_test.cpp
+    tests/protocol/gateway_peer_protocol_test.cpp
+    tests/protocol/client_chat_protocol_test.cpp
 )
 
 target_link_libraries(protocol_tests PRIVATE
@@ -338,6 +346,10 @@ add_library(tinyimx_gateway
     gateway/GatewayServer.cpp
     gateway/SessionManager.cpp
     gateway/OfflineMessageStore.cpp
+    gateway/GatewayRouteResolver.cpp
+    gateway/GatewayPeerTransport.cpp
+    gateway/GatewayPeerTransportManager.cpp
+    gateway/GatewayPeerDeliveryDeduplicator.cpp
 )
 
 target_include_directories(tinyimx_gateway PUBLIC
@@ -382,11 +394,36 @@ target_link_libraries(gateway_offline_client_demo PRIVATE
     tinyimx_protocol
 )
 
+add_executable(
+    gateway_peer_duplicate_client_demo
+    examples/gateway_peer_duplicate_client_demo.cpp
+)
+
+target_link_libraries(
+    gateway_peer_duplicate_client_demo
+    PRIVATE
+    tinyimx_protocol
+)
+
+
+add_executable(
+    gateway_peer_durable_replay_client_demo
+    examples/gateway_peer_durable_replay_client_demo.cpp
+)
+
+target_link_libraries(
+    gateway_peer_durable_replay_client_demo
+    PRIVATE
+    tinyimx_protocol
+)
+
 
 add_executable(gateway_tests
     tests/gateway/gateway_test_main.cpp
     tests/gateway/offline_message_store_test.cpp
     tests/gateway/session_manager_test.cpp
+    tests/gateway/gateway_peer_transport_test.cpp
+    tests/gateway/gateway_peer_delivery_deduplicator_test.cpp
 )
 
 target_link_libraries(gateway_tests PRIVATE
@@ -502,6 +539,50 @@ add_executable(message_repository_history_demo
 )
 
 target_link_libraries(message_repository_history_demo PRIVATE
+    tinyimx_config
+    tinyimx_logging
+    tinyimx_db
+    tinyimx_repository
+)
+
+add_executable(
+    message_repository_client_id_demo
+    examples/message_repository_client_id_demo.cpp
+)
+
+target_link_libraries(
+    message_repository_client_id_demo
+    PRIVATE
+    tinyimx_config
+    tinyimx_logging
+    tinyimx_db
+    tinyimx_repository
+)
+
+
+add_executable(
+    message_repository_idempotent_save_demo
+    examples/message_repository_idempotent_save_demo.cpp
+)
+
+target_link_libraries(
+    message_repository_idempotent_save_demo
+    PRIVATE
+    tinyimx_config
+    tinyimx_logging
+    tinyimx_db
+    tinyimx_repository
+)
+
+
+add_executable(
+    message_repository_idempotent_concurrent_demo
+    examples/message_repository_idempotent_concurrent_demo.cpp
+)
+
+target_link_libraries(
+    message_repository_idempotent_concurrent_demo
+    PRIVATE
     tinyimx_config
     tinyimx_logging
     tinyimx_db
@@ -864,3 +945,61 @@ if(BUILD_TESTING)
         COMMAND gateway_tests
     )
 endif()
+
+add_library(tinyimx_registry
+    services/registry/GatewayRegistry.cpp
+    services/registry/GatewayRegistryLease.cpp
+    services/registry/GatewayDiscovery.cpp
+)
+
+target_include_directories(tinyimx_registry PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_compile_features(tinyimx_registry PUBLIC
+    cxx_std_20
+)
+
+target_link_libraries(tinyimx_registry PUBLIC
+    tinyimx_cache
+    tinyimx_logging
+    nlohmann_json::nlohmann_json
+)
+
+target_link_libraries(
+    tinyimx_gateway
+    PUBLIC
+    tinyimx_registry
+)
+
+target_link_libraries(
+    gateway_demo
+    PRIVATE
+    tinyimx_registry
+)
+
+add_executable(
+    gateway_registry_demo
+    examples/gateway_registry_demo.cpp
+)
+
+target_link_libraries(
+    gateway_registry_demo
+    PRIVATE
+    tinyimx_registry
+    tinyimx_gateway
+    tinyimx_config
+    tinyimx_logging
+)
+
+
+add_executable(
+    gateway_cross_gateway_client_demo
+    examples/gateway_cross_gateway_client_demo.cpp
+)
+
+target_link_libraries(
+    gateway_cross_gateway_client_demo
+    PRIVATE
+    tinyimx_protocol
+)

@@ -15,10 +15,12 @@ void PrintConfig(const tinyimx::Config& config) {
     const auto& rpc = config.Rpc();
     const auto& mysql = config.MySql();
     const auto& redis = config.Redis();
+    const auto& gateway_registry = config.GatewayRegistry();
     const auto& mcp = config.Mcp();
 
     std::cout << "[ConfigDemo] app.name=" << app.name << '\n';
     std::cout << "[ConfigDemo] app.env=" << app.env << '\n';
+    std::cout << "[ConfigDemo] app.instance_id=" << app.instance_id << '\n';
 
     std::cout << "[ConfigDemo] server.host=" << server.host << '\n';
     std::cout << "[ConfigDemo] server.port=" << server.port << '\n';
@@ -97,7 +99,43 @@ void PrintConfig(const tinyimx::Config& config) {
     std::cout << "[ConfigDemo] redis.port=" << redis.port << '\n';
     std::cout << "[ConfigDemo] redis.db=" << redis.db << '\n';
     std::cout << "[ConfigDemo] redis.pool_size=" << redis.pool_size << '\n';
+    std::cout << "[ConfigDemo] "
+        << "gateway_registry.enable="
+        << (
+                gateway_registry.enable
+                ? "true"
+                : "false"
+        )
+        << '\n';
 
+        std::cout
+                << "[ConfigDemo] "
+                << "gateway_registry.advertise_host="
+                << gateway_registry.advertise_host
+                << '\n';
+    std::cout
+        << "[ConfigDemo] "
+        << "gateway_registry."
+        << "lease_ttl_seconds="
+        << gateway_registry.
+                lease_ttl_seconds
+        << '\n';
+
+        std::cout
+        << "[ConfigDemo] "
+        << "gateway_registry."
+        << "heartbeat_interval_seconds="
+        << gateway_registry.
+                heartbeat_interval_seconds
+        << '\n';
+
+        std::cout
+                << "[ConfigDemo] "
+                << "gateway_registry."
+                "discovery_refresh_interval_seconds="
+                << gateway_registry.
+                        discovery_refresh_interval_seconds
+                << '\n';
     std::cout << "[ConfigDemo] mcp.enable="
               << (mcp.enable ? "true" : "false") << '\n';
     std::cout << "[ConfigDemo] mcp.endpoint=" << mcp.endpoint << '\n';

@@ -1,7 +1,8 @@
 {
   "app": {
     "name": "TinyIMX-Gateway",
-    "env": "dev"
+    "env": "dev",
+    "instance_id": "tinyimx-gateway-1"
   },
   "server": {
     "host": "0.0.0.0",
@@ -59,6 +60,12 @@
     "password": "",
     "db": 0,
     "pool_size": 4
+  },
+  "gateway_registry": {
+    "enable": true,
+    "lease_ttl_seconds": 15,
+    "heartbeat_interval_seconds": 5,
+    "discovery_refresh_interval_seconds": 3
   },
   "mcp": {
     "enable": false,

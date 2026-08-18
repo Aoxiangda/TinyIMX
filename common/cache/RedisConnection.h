@@ -70,6 +70,21 @@ public:
         int ttl_seconds
     );
 
+    bool SAdd(
+        const std::string& key,
+        const std::string& member
+    );
+
+    bool SRem(
+        const std::string& key,
+        const std::string& member
+    );
+
+    std::optional<std::vector<std::string>>
+    SMembers(
+        const std::string& key
+    );
+
     std::optional<std::int64_t>
     EvalInteger(
         const std::string& script,

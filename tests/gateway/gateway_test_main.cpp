@@ -11,6 +11,9 @@ void RegisterOfflineMessageStoreTests(TestRunner& runner);
 
 void RegisterSessionManagerTests(TestRunner& runner);
 
+void RegisterGatewayPeerTransportTests(TestRunner& runner);
+
+void RegisterGatewayPeerDeliveryDeduplicatorTests(TestRunner& runner);
 }  // namespace tinyimx::test
 
 int main() {
@@ -31,7 +34,8 @@ int main() {
 
     tinyimx::test::RegisterOfflineMessageStoreTests(runner);
     tinyimx::test::RegisterSessionManagerTests(runner);
-
+    tinyimx::test::RegisterGatewayPeerTransportTests(runner);
+    tinyimx::test::RegisterGatewayPeerDeliveryDeduplicatorTests(runner);
     const int failed_count = runner.RunAll("TinyIMX Gateway Tests");
 
     tinyimx::Logger::Instance().Flush();

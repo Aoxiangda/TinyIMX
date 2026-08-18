@@ -6,6 +6,7 @@
 #include "common/protocol/ProtocolCodec.h"
 #include "gateway/SessionManager.h"
 #include "gateway/OfflineMessageStore.h"
+#include "gateway/GatewayPeerDeliveryDeduplicator.h"
 #include "services/repository/FriendRepository.h"
 
 #include <cstddef>
@@ -20,10 +21,12 @@ class FriendRequestRepository;
 
 class OnlineStatusCache;
 class UnreadCountCache;
+class GatewayRouteResolver;
+class GatewayPeerTransportManager;
 
 class EventLoop;
 
-
+struct GatewayForwardChatResponse;
 /*
     struct GatewayServerOptions {
         std::string name{"tinyimx-gateway"};
@@ -61,6 +64,15 @@ public:
     using PacketHandler =
         std::function<void(const TcpConnectionPtr&, const Packet&)>;
 
+    using GatewayPeerResponseDropCallback =
+        std::function<
+            bool(const GatewayForwardChatResponse&)>;
+
+    using GatewayPeerVerifyCallback = std::function<bool(
+            const std::string&source_gateway_id,
+            const std::string& source_lease_token,
+            std::string* error_message)>;
+
     GatewayServer(EventLoop* loop,
                   const InetAddress& listen_address,
                   GatewayServerOptions options);
@@ -90,8 +102,15 @@ public:
     );
 
     void SetOnlineStatusCache(OnlineStatusCache* online_status_cache);
+    void SetGatewayRouteResolver(GatewayRouteResolver* route_resolver);
+    void SetGatewayPeerVerifyCallback(GatewayPeerVerifyCallback callback);
     void SetUnreadCountCache(UnreadCountCache* unread_count_cache);
-/*
+    void SetGatewayPeerTransportManager(GatewayPeerTransportManager*manager);
+
+    void SetGatewayPeerResponseDropCallbackForTest(
+        GatewayPeerResponseDropCallback callback
+    );
+    /*
     private:
     void HandleConnection(const TcpConnectionPtr& connection);
     void HandleMessage(const TcpConnectionPtr& connection,
@@ -119,6 +138,8 @@ private:
 
     void HandleChatMessage(const TcpConnectionPtr& connection,
                            const Packet& packet);
+
+    void HandleGatewayForwardChatRequest(const TcpConnectionPtr& connection, const Packet& packet);
 
     void HandleReadRequest(const TcpConnectionPtr& connection,
                            const Packet& packet);
@@ -174,8 +195,9 @@ private:
     bool HasFriendRequestRepository() const;
 
     bool HasOnlineStatusCache() const;
+    bool HasGatewayRouteResolver() const;
     bool HasUnreadCountCache() const;
-
+    bool HasGatewayPeerTransportManager() const;
     void NotifyLoginReplaced(UserId user_id,
                              const TcpConnectionPtr& old_connection);
 
@@ -209,14 +231,26 @@ private:
     SessionManager session_manager_;
     OfflineMessageStore offline_message_store_;
 
+        /*
+    * Gateway-to-Gateway消息的
+    * 进程内业务幂等控制器。
+    *
+    * message_id:
+    *   kProcessing
+    *   kDelivered
+    */
+    GatewayPeerDeliveryDeduplicator gateway_peer_delivery_deduplicator_;
     MessageRepository* message_repository_{nullptr};
     UserRepository* user_repository_{nullptr};
     FriendRepository* friend_repository_{nullptr};
     FriendRequestRepository* friend_request_repository_{nullptr};
 
     OnlineStatusCache* online_status_cache_{nullptr};
+    GatewayRouteResolver* gateway_route_resolver_{nullptr};
+    GatewayPeerVerifyCallback gateway_peer_verify_callback_;
+    GatewayPeerResponseDropCallback gateway_peer_response_drop_callback_for_test_;
+    GatewayPeerTransportManager* gateway_peer_transport_manager_{nullptr};
     UnreadCountCache* unread_count_cache_{nullptr};
-
     PacketHandler packet_handler_;
 };
 

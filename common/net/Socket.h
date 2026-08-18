@@ -32,6 +32,7 @@ public:
 
     bool ShutdownWrite();
     void Close();
+    int Release() noexcept;
 
     int Fd() const;
     bool IsValid() const;

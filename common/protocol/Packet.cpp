@@ -57,6 +57,11 @@ std::string MessageTypeToString(MessageType type) {
         case MessageType::kFriendRequestRejectResponse:
             return "friend_request_reject_response";
 
+        case MessageType::kGatewayForwardChatRequest:
+            return "gateway_forward_chat_request";
+        case MessageType::kGatewayForwardChatResponse:
+            return "gateway_forward_chat_response";
+
         case MessageType::kHeartbeat:
             return "heartbeat";
         case MessageType::kError:
@@ -99,9 +104,26 @@ bool IsKnownMessageType(MessageType type) {
         case MessageType::kFriendRequestRejectRequest:
         case MessageType::kFriendRequestRejectResponse:
 
+        case MessageType::kGatewayForwardChatRequest:
+        case MessageType::kGatewayForwardChatResponse:
+
         case MessageType::kHeartbeat:
         case MessageType::kError:
             return true;
+        default:
+            return false;
+    }
+}
+
+bool IsGatewayInternalMessageType(MessageType type) {
+    switch (type) {
+        case MessageType::
+            kGatewayForwardChatRequest:
+
+        case MessageType::
+            kGatewayForwardChatResponse:
+            return true;
+
         default:
             return false;
     }

@@ -14,6 +14,8 @@ enum class QueueFullPolicy {
 struct AppConfig {
     std::string name{"TinyIMX-Gateway"};
     std::string env{"dev"};
+
+    std::string instance_id{"tinyimx-gateway-1"};
 };
 
 struct ServerConfig {
@@ -84,6 +86,14 @@ struct RedisConfig {
     std::string password{""};
     int db{0};
     int pool_size{4};
+};
+
+struct GatewayRegistryConfig {
+    bool enable{false};
+    std::string advertise_host;
+    int lease_ttl_seconds{15};
+    int heartbeat_interval_seconds{5};
+    int discovery_refresh_interval_seconds{3};
 };
 
 struct McpConfig {
