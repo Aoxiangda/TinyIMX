@@ -76,6 +76,154 @@ bool GetUserIdField(const Json& body,
     return true;
 }
 
+
+bool ParseCanonicalChatBody(
+    const std::string& content,
+    tinyimx::UserId expected_from_user_id,
+    tinyimx::UserId expected_to_user_id,
+    std::string* text,
+    std::string* error_message
+) {
+    if (text == nullptr) {
+        if (error_message != nullptr) {
+            *error_message =
+                "chat text output is null";
+        }
+
+        return false;
+    }
+
+
+    Json body;
+
+
+    try {
+        body =
+            Json::parse(
+                content
+            );
+    } catch (const std::exception& e) {
+        if (error_message != nullptr) {
+            *error_message =
+                std::string(
+                    "invalid persisted chat json: "
+                ) +
+                e.what();
+        }
+
+        return false;
+    }
+
+
+    if (!body.is_object()) {
+        if (error_message != nullptr) {
+            *error_message =
+                "persisted chat body "
+                "must be an object";
+        }
+
+        return false;
+    }
+
+
+    tinyimx::UserId
+        from_user_id = 0;
+
+    tinyimx::UserId
+        to_user_id = 0;
+
+
+    if (
+        !GetUserIdField(
+            body,
+            "from",
+            &from_user_id,
+            error_message
+        )
+    ) {
+        return false;
+    }
+
+
+    if (
+        !GetUserIdField(
+            body,
+            "to",
+            &to_user_id,
+            error_message
+        )
+    ) {
+        return false;
+    }
+
+
+    /*
+     * DB Record本身已经保存from/to。
+     *
+     * content里的canonical identity
+     * 必须与Record一致。
+     *
+     * 如果不一致，说明持久数据发生了漂移/
+     * 损坏，不能偷偷向错误用户投递。
+     */
+    if (
+        from_user_id !=
+            expected_from_user_id ||
+        to_user_id !=
+            expected_to_user_id
+    ) {
+        if (error_message != nullptr) {
+            *error_message =
+                "persisted chat identity mismatch";
+        }
+
+        return false;
+    }
+
+
+    if (
+        !body.contains("text") ||
+        !body.at("text").is_string()
+    ) {
+        if (error_message != nullptr) {
+            *error_message =
+                "missing or invalid persisted "
+                "chat text";
+        }
+
+        return false;
+    }
+
+
+    const std::string parsed_text =
+        body.at("text").
+            get<std::string>();
+
+
+    if (parsed_text.empty()) {
+        if (error_message != nullptr) {
+            *error_message =
+                "persisted chat text "
+                "must not be empty";
+        }
+
+        return false;
+    }
+
+
+    *text =
+        parsed_text;
+
+
+    if (error_message != nullptr) {
+        error_message->clear();
+    }
+
+
+    return true;
+}
+
+
 }  // namespace
 
 namespace tinyimx {
@@ -517,6 +665,1057 @@ bool GatewayServer::SendPacket(const TcpConnectionPtr& connection,
     return true;
 }
 
+
+std::uint32_t
+GatewayServer::NextReceiverDeliverySeq()
+    noexcept {
+    /*
+     * fetch_add使用relaxed即可。
+     *
+     * 我们这里只需要：
+     *
+     * 每个调用者拿到不同的数值，
+     *
+     * 不依赖这个atomic建立其他内存对象之间的
+     * happens-before关系。
+     */
+    for (;;) {
+        const std::uint32_t seq =
+            next_receiver_delivery_seq_.
+                fetch_add(
+                    1,
+                    std::memory_order_relaxed
+                );
+
+
+        /*
+         * Packet.seq == 0
+         * 统一视为无效/未分配身份。
+         *
+         * uint32_t最终发生wrap时：
+         *
+         * UINT32_MAX
+         *      ↓
+         *      0
+         *      ↓
+         *      1
+         *
+         * 这里直接跳过0。
+         */
+        if (seq != 0) {
+            return seq;
+        }
+    }
+}
+
+
+bool GatewayServer::
+BuildReceiverChatDeliveryPacket(
+    std::uint64_t message_id,
+    UserId from_user_id,
+    UserId to_user_id,
+    const std::string& text,
+    Packet* packet,
+    std::string* error_message
+) {
+    if (packet == nullptr) {
+        if (error_message != nullptr) {
+            *error_message =
+                "receiver delivery packet "
+                "output is null";
+        }
+
+        return false;
+    }
+
+
+    /*
+     * 业务字段的合法性由已经完成的
+     * ServerChatDelivery协议层统一负责。
+     *
+     * Gateway这里不要复制第二套校验规则。
+     */
+    ServerChatDelivery delivery;
+
+    delivery.message_id =
+        message_id;
+
+    delivery.from_user_id =
+        from_user_id;
+
+    delivery.to_user_id =
+        to_user_id;
+
+    delivery.text =
+        text;
+
+
+    std::string body;
+    std::string serialize_error;
+
+
+    if (
+        !SerializeServerChatDelivery(
+            delivery,
+            &body,
+            &serialize_error
+        )
+    ) {
+        if (error_message != nullptr) {
+            *error_message =
+                std::move(
+                    serialize_error
+                );
+        }
+
+        return false;
+    }
+
+
+    /*
+     * 先构造临时Packet。
+     *
+     * 只有所有步骤成功以后，
+     * 才覆盖调用方提供的output。
+     */
+    Packet built_packet;
+
+    built_packet.type =
+        MessageType::kChatDelivery;
+
+    built_packet.seq =
+        NextReceiverDeliverySeq();
+
+    built_packet.body =
+        std::move(body);
+
+
+    *packet =
+        std::move(
+            built_packet
+        );
+
+
+    if (error_message != nullptr) {
+        error_message->clear();
+    }
+
+
+    return true;
+}
+
+
+GatewayServer::
+ReceiverDeliverySubmitStatus
+GatewayServer::
+SubmitReceiverChatDelivery(
+    const TcpConnectionPtr& connection,
+    std::uint64_t message_id,
+    UserId from_user_id,
+    UserId to_user_id,
+    const std::string& text,
+    Packet* submitted_packet,
+    std::string* error_message
+) {
+    auto set_error =
+        [error_message](
+            const std::string& message
+        ) {
+            if (error_message != nullptr) {
+                *error_message =
+                    message;
+            }
+        };
+
+
+    if (
+        !connection ||
+        !connection->IsConnected()
+    ) {
+        set_error(
+            "receiver connection unavailable"
+        );
+
+        return
+            ReceiverDeliverySubmitStatus::
+                kConnectionUnavailable;
+    }
+
+
+    /*
+     * ============================================================
+     * 1. 先构造kChatDelivery
+     * ============================================================
+     *
+     * 此时还没有任何网络副作用，
+     * 也还没有登记Tracker。
+     */
+    Packet delivery_packet;
+
+    std::string build_error;
+
+
+    if (
+        !BuildReceiverChatDeliveryPacket(
+            message_id,
+            from_user_id,
+            to_user_id,
+            text,
+            &delivery_packet,
+            &build_error
+        )
+    ) {
+        set_error(
+            build_error
+        );
+
+        return
+            ReceiverDeliverySubmitStatus::
+                kBuildFailed;
+    }
+
+
+    /*
+     * ============================================================
+     * 2. 在RegisterAttempt以前完成Protocol Encode
+     * ============================================================
+     *
+     * 防止：
+     *
+     * Tracker认为D真实存在
+     * 但实际上Packet连编码都失败。
+     */
+    Buffer output;
+
+    std::string encode_error;
+
+
+    if (
+        !codec_.Encode(
+            delivery_packet,
+            &output,
+            &encode_error
+        )
+    ) {
+        set_error(
+            encode_error
+        );
+
+        return
+            ReceiverDeliverySubmitStatus::
+                kEncodeFailed;
+    }
+
+
+    const std::string bytes =
+        output.RetrieveAllAsString();
+
+
+    /*
+     * Encode可能花费了一点时间。
+     *
+     * 在真正登记Attempt以前再确认一次
+     * connection当前仍然Connected。
+     */
+    if (!connection->IsConnected()) {
+        set_error(
+            "receiver connection became "
+            "unavailable before attempt registration"
+        );
+
+        return
+            ReceiverDeliverySubmitStatus::
+                kConnectionUnavailable;
+    }
+
+
+    /*
+     * ============================================================
+     * 3. Register必须早于真正Send
+     * ============================================================
+     *
+     * 否则Receiver极快返回ACK时，
+     * Gateway可能先处理ACK、
+     * 后登记Attempt。
+     */
+    const
+        ReceiverDeliveryRegisterStatus
+        register_status =
+            receiver_delivery_tracker_.
+                RegisterAttempt(
+                    message_id,
+                    to_user_id,
+                    delivery_packet.seq
+                );
+
+
+    if (
+        register_status ==
+        ReceiverDeliveryRegisterStatus::
+            kAlreadyConfirmed
+    ) {
+        set_error(
+            "receiver message already confirmed"
+        );
+
+        return
+            ReceiverDeliverySubmitStatus::
+                kAlreadyConfirmed;
+    }
+
+
+    if (
+        register_status !=
+            ReceiverDeliveryRegisterStatus::
+                kRegistered &&
+        register_status !=
+            ReceiverDeliveryRegisterStatus::
+                kRetryRegistered
+    ) {
+        if (
+            register_status ==
+            ReceiverDeliveryRegisterStatus::
+                kDuplicateAttempt
+        ) {
+            set_error(
+                "duplicate receiver delivery seq"
+            );
+        } else if (
+            register_status ==
+            ReceiverDeliveryRegisterStatus::
+                kReceiverMismatch
+        ) {
+            set_error(
+                "receiver delivery identity mismatch"
+            );
+        } else {
+            set_error(
+                "receiver delivery tracker "
+                "rejected attempt"
+            );
+        }
+
+
+        return
+            ReceiverDeliverySubmitStatus::
+                kTrackerRejected;
+    }
+
+
+    /*
+     * ============================================================
+     * 4. Attempt登记完成以后才允许提交网络发送
+     * ============================================================
+     *
+     * 注意：
+     *
+     * TcpConnection::Send是void。
+     *
+     * 如果在提交以后连接断开，
+     * Gateway无法证明字节到底有没有到达Receiver。
+     *
+     * 所以这个Attempt不能回滚，
+     * 而应该进入WaitingAck，
+     * 由后续Timeout/Retry处理。
+     */
+    connection->Send(
+        bytes
+    );
+
+    /*
+    * Send已经提交以后开始ACK计时。
+    *
+    * 如果Timer调度失败：
+    *
+    * 网络Attempt已经存在，
+    * 不能回滚Tracker。
+    *
+    * 因为Receiver可能已经真正收到D。
+    */
+    if (
+        !ScheduleReceiverDeliveryAckTimeout(
+            connection,
+            message_id,
+            from_user_id,
+            to_user_id,
+            text,
+            delivery_packet.seq
+        )
+    ) {
+        LOG_ERROR(
+            "gateway submitted receiver "
+            "delivery but failed to arm "
+            "ack timeout"
+            << ", message_id="
+            << message_id
+            << ", delivery_seq="
+            << delivery_packet.seq
+            << ", from="
+            << from_user_id
+            << ", to="
+            << to_user_id
+        );
+    }
+
+
+    if (submitted_packet != nullptr) {
+        *submitted_packet =
+            delivery_packet;
+    }
+
+
+    if (error_message != nullptr) {
+        error_message->clear();
+    }
+
+
+    return
+        ReceiverDeliverySubmitStatus::
+            kSubmitted;
+}
+
+
+GatewayServer::
+ReceiverDeliverySubmitStatus
+GatewayServer::
+SubmitReceiverChatDeliveryRetry(
+    const TcpConnectionPtr& connection,
+    std::uint64_t message_id,
+    UserId from_user_id,
+    UserId to_user_id,
+    const std::string& text,
+    std::uint32_t timed_out_delivery_seq,
+    Packet* submitted_packet,
+    std::string* error_message
+) {
+    auto set_error =
+        [error_message](
+            const std::string& message
+        ) {
+            if (error_message != nullptr) {
+                *error_message =
+                    message;
+            }
+        };
+
+
+    if (
+        !connection ||
+        !connection->IsConnected()
+    ) {
+        set_error(
+            "receiver connection unavailable"
+        );
+
+        return
+            ReceiverDeliverySubmitStatus::
+                kConnectionUnavailable;
+    }
+
+
+    /*
+     * 1. 构造fresh D。
+     *
+     * message_id M保持不变。
+     */
+    Packet retry_packet;
+
+    std::string build_error;
+
+
+    if (
+        !BuildReceiverChatDeliveryPacket(
+            message_id,
+            from_user_id,
+            to_user_id,
+            text,
+            &retry_packet,
+            &build_error
+        )
+    ) {
+        set_error(
+            build_error
+        );
+
+        return
+            ReceiverDeliverySubmitStatus::
+                kBuildFailed;
+    }
+
+
+    /*
+     * 2. Encode必须在Tracker状态推进以前完成。
+     */
+    Buffer output;
+
+    std::string encode_error;
+
+
+    if (
+        !codec_.Encode(
+            retry_packet,
+            &output,
+            &encode_error
+        )
+    ) {
+        set_error(
+            encode_error
+        );
+
+        return
+            ReceiverDeliverySubmitStatus::
+                kEncodeFailed;
+    }
+
+
+    const std::string bytes =
+        output.RetrieveAllAsString();
+
+
+    if (!connection->IsConnected()) {
+        set_error(
+            "receiver connection became "
+            "unavailable before retry registration"
+        );
+
+        return
+            ReceiverDeliverySubmitStatus::
+                kConnectionUnavailable;
+    }
+
+
+    /*
+     * 3. F3-a新加入的原子Retry迁移。
+     *
+     * 这一步同时校验：
+     *
+     * current == timed_out D
+     * 尚未Confirmed
+     * attempt_count < max
+     * new D没有重复
+     */
+    const
+        ReceiverDeliveryRetryRegisterStatus
+        retry_status =
+            receiver_delivery_tracker_.
+                RegisterRetryAttempt(
+                    message_id,
+                    to_user_id,
+                    timed_out_delivery_seq,
+                    retry_packet.seq,
+                    options_.
+                        receiver_delivery_max_attempts
+                );
+
+
+    if (
+        retry_status ==
+        ReceiverDeliveryRetryRegisterStatus::
+            kAlreadyConfirmed
+    ) {
+        set_error(
+            "receiver message already confirmed"
+        );
+
+        return
+            ReceiverDeliverySubmitStatus::
+                kAlreadyConfirmed;
+    }
+
+
+    if (
+        retry_status ==
+        ReceiverDeliveryRetryRegisterStatus::
+            kStaleAttempt
+    ) {
+        set_error(
+            "receiver delivery timeout is stale"
+        );
+
+        return
+            ReceiverDeliverySubmitStatus::
+                kStaleAttempt;
+    }
+
+
+    if (
+        retry_status ==
+        ReceiverDeliveryRetryRegisterStatus::
+            kAttemptLimitReached
+    ) {
+        set_error(
+            "receiver delivery attempt limit reached"
+        );
+
+        return
+            ReceiverDeliverySubmitStatus::
+                kAttemptLimitReached;
+    }
+
+
+    if (
+        retry_status !=
+        ReceiverDeliveryRetryRegisterStatus::
+            kRetryRegistered
+    ) {
+        set_error(
+            "receiver delivery tracker "
+            "rejected retry attempt"
+        );
+
+        return
+            ReceiverDeliverySubmitStatus::
+                kTrackerRejected;
+    }
+
+
+    /*
+     * 4. Tracker已经原子推进：
+     *
+     * D_old → D_new
+     *
+     * 此后才允许网络提交。
+     */
+    connection->Send(
+        bytes
+    );
+
+
+    /*
+     * 5. 为新的D_new继续安排ACK Timeout。
+     */
+    if (
+        !ScheduleReceiverDeliveryAckTimeout(
+            connection,
+            message_id,
+            from_user_id,
+            to_user_id,
+            text,
+            retry_packet.seq
+        )
+    ) {
+        LOG_ERROR(
+            "gateway submitted receiver retry "
+            "but failed to arm next ack timeout"
+            << ", message_id="
+            << message_id
+            << ", timed_out_delivery_seq="
+            << timed_out_delivery_seq
+            << ", new_delivery_seq="
+            << retry_packet.seq
+            << ", receiver="
+            << to_user_id
+        );
+    }
+
+
+    if (submitted_packet != nullptr) {
+        *submitted_packet =
+            retry_packet;
+    }
+
+
+    if (error_message != nullptr) {
+        error_message->clear();
+    }
+
+
+    return
+        ReceiverDeliverySubmitStatus::
+            kSubmitted;
+}
+
+
+void GatewayServer::
+HandleReceiverDeliveryAckTimeout(
+    std::uint64_t message_id,
+    UserId from_user_id,
+    UserId to_user_id,
+    const std::string& text,
+    std::uint32_t timed_out_delivery_seq
+) {
+    if (
+        message_id == 0 ||
+        from_user_id == 0 ||
+        to_user_id == 0 ||
+        timed_out_delivery_seq == 0
+    ) {
+        return;
+    }
+
+
+    /*
+     * ============================================================
+     * 1. Fast-path检查
+     * ============================================================
+     *
+     * 注意它不是最终并发裁决。
+     *
+     * 最终裁决仍由：
+     *
+     * RegisterRetryAttempt()
+     *
+     * 在mutex里完成。
+     */
+    ReceiverDeliverySnapshot snapshot;
+
+
+    if (
+        !receiver_delivery_tracker_.
+            GetSnapshot(
+                message_id,
+                &snapshot
+            )
+    ) {
+        return;
+    }
+
+
+    /*
+     * Receiver ACK已经成功。
+     *
+     * Timer自然到期即可，无需再重试。
+     */
+    if (snapshot.confirmed) {
+        return;
+    }
+
+
+    /*
+     * 这个Timer已经不是current Attempt。
+     *
+     * 例如：
+     *
+     * D1 timer
+     * D1 timeout → D2
+     *
+     * 又碰到旧D1 callback。
+     */
+    if (
+        snapshot.current_delivery_seq !=
+        timed_out_delivery_seq
+    ) {
+        return;
+    }
+
+
+    /*
+     * ============================================================
+     * 2. 找Receiver当前Session
+     * ============================================================
+     *
+     * 不保存旧TcpConnection。
+     *
+     * 如果用户已经Reconnect，
+     * 这里拿的是新的Current Connection。
+     */
+    TcpConnectionPtr connection =
+        session_manager_.
+            FindConnection(
+                to_user_id
+            );
+
+
+    if (
+        !connection ||
+        !connection->IsConnected()
+    ) {
+        LOG_INFO(
+            "gateway receiver ack timeout "
+            "retry paused because receiver "
+            "has no active session"
+            << ", message_id="
+            << message_id
+            << ", delivery_seq="
+            << timed_out_delivery_seq
+            << ", receiver="
+            << to_user_id
+        );
+
+        /*
+         * F4/F6会负责Reconnect + Pending Replay。
+         *
+         * 当前绝不能假装ReceiverConfirmed。
+         */
+        return;
+    }
+
+
+    Packet retry_packet;
+
+    std::string retry_error;
+
+
+    const
+        ReceiverDeliverySubmitStatus
+        retry_status =
+            SubmitReceiverChatDeliveryRetry(
+                connection,
+                message_id,
+                from_user_id,
+                to_user_id,
+                text,
+                timed_out_delivery_seq,
+                &retry_packet,
+                &retry_error
+            );
+
+
+    if (
+        retry_status ==
+        ReceiverDeliverySubmitStatus::
+            kSubmitted
+    ) {
+        LOG_WARN(
+            "gateway receiver ack timeout "
+            "triggered delivery retry"
+            << ", message_id="
+            << message_id
+            << ", old_delivery_seq="
+            << timed_out_delivery_seq
+            << ", new_delivery_seq="
+            << retry_packet.seq
+            << ", receiver="
+            << to_user_id
+        );
+
+        return;
+    }
+
+
+    /*
+     * ACK在Timer触发附近到达。
+     *
+     * 正常竞态，不是错误。
+     */
+    if (
+        retry_status ==
+        ReceiverDeliverySubmitStatus::
+            kAlreadyConfirmed
+    ) {
+        return;
+    }
+
+
+    /*
+     * 旧Timer。
+     *
+     * 也是正常竞态。
+     */
+    if (
+        retry_status ==
+        ReceiverDeliverySubmitStatus::
+            kStaleAttempt
+    ) {
+        return;
+    }
+
+
+    /*
+     * 达到主动Retry上限。
+     *
+     * 注意：
+     *
+     * Tracker仍然保留历史D1/D2/D3。
+     *
+     * 任意一个真实Late ACK仍可以确认M。
+     */
+    if (
+        retry_status ==
+        ReceiverDeliverySubmitStatus::
+            kAttemptLimitReached
+    ) {
+        LOG_WARN(
+            "gateway receiver delivery "
+            "retry attempt limit reached"
+            << ", message_id="
+            << message_id
+            << ", current_delivery_seq="
+            << timed_out_delivery_seq
+            << ", receiver="
+            << to_user_id
+            << ", max_attempts="
+            << options_.
+                receiver_delivery_max_attempts
+        );
+
+        return;
+    }
+
+
+    if (
+        retry_status ==
+        ReceiverDeliverySubmitStatus::
+            kConnectionUnavailable
+    ) {
+        LOG_INFO(
+            "gateway receiver connection "
+            "became unavailable during "
+            "ack-timeout retry"
+            << ", message_id="
+            << message_id
+            << ", delivery_seq="
+            << timed_out_delivery_seq
+            << ", receiver="
+            << to_user_id
+        );
+
+        return;
+    }
+
+
+    LOG_ERROR(
+        "gateway receiver ack timeout "
+        "retry failed"
+        << ", message_id="
+        << message_id
+        << ", delivery_seq="
+        << timed_out_delivery_seq
+        << ", receiver="
+        << to_user_id
+        << ", submit_status="
+        << static_cast<int>(
+            retry_status
+        )
+        << ", error="
+        << retry_error
+    );
+}
+
+
+bool GatewayServer::
+ScheduleReceiverDeliveryAckTimeout(
+    const TcpConnectionPtr& connection,
+    std::uint64_t message_id,
+    UserId from_user_id,
+    UserId to_user_id,
+    const std::string& text,
+    std::uint32_t delivery_seq
+) {
+    if (
+        !connection ||
+        message_id == 0 ||
+        from_user_id == 0 ||
+        to_user_id == 0 ||
+        delivery_seq == 0
+    ) {
+        LOG_WARN(
+            "gateway cannot schedule "
+            "receiver delivery ack timeout"
+            << ", message_id="
+            << message_id
+            << ", delivery_seq="
+            << delivery_seq
+            << ", from="
+            << from_user_id
+            << ", to="
+            << to_user_id
+        );
+
+        return false;
+    }
+
+
+    EventLoop* timer_loop =
+        connection->GetLoop();
+
+
+    if (timer_loop == nullptr) {
+        LOG_ERROR(
+            "gateway receiver delivery "
+            "has no event loop for ack timer"
+            << ", message_id="
+            << message_id
+            << ", delivery_seq="
+            << delivery_seq
+            << ", receiver="
+            << to_user_id
+        );
+
+        return false;
+    }
+
+
+    if (
+        options_.
+            receiver_ack_timeout.
+            count() <= 0
+    ) {
+        LOG_ERROR(
+            "gateway receiver ack timeout "
+            "configuration is invalid"
+            << ", timeout_ms="
+            << options_.
+                receiver_ack_timeout.
+                count()
+        );
+
+        return false;
+    }
+
+
+    const auto timeout =
+        options_.receiver_ack_timeout;
+
+
+    const TimerId timer_id =
+        timer_loop->RunAfter(
+            timeout,
+            [
+                this,
+                message_id,
+                from_user_id,
+                to_user_id,
+                text,
+                delivery_seq
+            ]() {
+                HandleReceiverDeliveryAckTimeout(
+                    message_id,
+                    from_user_id,
+                    to_user_id,
+                    text,
+                    delivery_seq
+                );
+            }
+        );
+
+
+    if (!timer_id.IsValid()) {
+        LOG_ERROR(
+            "gateway failed to schedule "
+            "receiver delivery ack timeout"
+            << ", message_id="
+            << message_id
+            << ", delivery_seq="
+            << delivery_seq
+            << ", receiver="
+            << to_user_id
+            << ", timeout_ms="
+            << timeout.count()
+        );
+
+        return false;
+    }
+
+
+    LOG_INFO(
+        "gateway scheduled receiver "
+        "delivery ack timeout"
+        << ", message_id="
+        << message_id
+        << ", delivery_seq="
+        << delivery_seq
+        << ", receiver="
+        << to_user_id
+        << ", timeout_ms="
+        << timeout.count()
+    );
+
+
+    return true;
+}
+
+
 const std::string& GatewayServer::Name() const {
     return options_.name;
 }
@@ -698,6 +1897,12 @@ void GatewayServer::HandlePacket(const TcpConnectionPtr& connection,
             HandleChatMessage(connection, packet);
             return;
 
+        case MessageType::kChatDeliveryAck:
+            HandleReceiverChatDeliveryAck(
+                connection,
+                packet);
+            return;
+
         case MessageType::
             kGatewayForwardChatRequest:
             HandleGatewayForwardChatRequest(
@@ -762,6 +1967,479 @@ void GatewayServer::HandlePacket(const TcpConnectionPtr& connection,
             );
             return;
     }
+}
+
+
+void GatewayServer::
+HandleReceiverChatDeliveryAck(
+    const TcpConnectionPtr& connection,
+    const Packet& packet
+) {
+    if (!connection) {
+        return;
+    }
+
+
+    /*
+     * ============================================================
+     * 1. Delivery Attempt seq必须有效
+     * ============================================================
+     *
+     * body.message_id是稳定业务身份。
+     *
+     * Packet.seq是一次Gateway -> Receiver
+     * Delivery Attempt身份。
+     */
+    if (packet.seq == 0) {
+        LOG_WARN(
+            "gateway rejected receiver "
+            "delivery ack with zero seq"
+            << ", peer="
+            << connection->
+                PeerAddress().
+                ToString()
+        );
+
+        return;
+    }
+
+
+    /*
+     * ============================================================
+     * 2. 解析ACK body
+     * ============================================================
+     */
+    ReceiverChatDeliveryAck ack;
+
+    std::string
+        deserialize_error;
+
+
+    if (
+        !DeserializeReceiverChatDeliveryAck(
+            packet.body,
+            &ack,
+            &deserialize_error
+        )
+    ) {
+        LOG_WARN(
+            "gateway rejected invalid "
+            "receiver delivery ack"
+            << ", delivery_seq="
+            << packet.seq
+            << ", peer="
+            << connection->
+                PeerAddress().
+                ToString()
+            << ", error="
+            << deserialize_error
+        );
+
+        return;
+    }
+
+
+    /*
+     * ============================================================
+     * 3. Receiver身份必须来自Authenticated Session
+     * ============================================================
+     *
+     * ACK body不允许携带可信receiver identity。
+     */
+    const auto
+        receiver_user_id =
+            session_manager_.
+                FindUserByConnection(
+                    connection
+                );
+
+
+    if (!receiver_user_id.has_value()) {
+        LOG_WARN(
+            "gateway rejected receiver "
+            "delivery ack from "
+            "unauthenticated connection"
+            << ", message_id="
+            << ack.message_id
+            << ", delivery_seq="
+            << packet.seq
+            << ", peer="
+            << connection->
+                PeerAddress().
+                ToString()
+        );
+
+        return;
+    }
+
+
+    const UserId receiver =
+        receiver_user_id.value();
+
+
+    /*
+     * ============================================================
+     * 4. ACK必须基于持久化消息真相校验
+     * ============================================================
+     */
+    if (!HasMessageRepository()) {
+        LOG_ERROR(
+            "gateway cannot validate "
+            "receiver delivery ack: "
+            "message repository unavailable"
+            << ", message_id="
+            << ack.message_id
+            << ", delivery_seq="
+            << packet.seq
+            << ", receiver="
+            << receiver
+        );
+
+        return;
+    }
+
+
+    const FindPrivateMessageResult
+        query_result =
+            message_repository_->
+                FindPrivateMessageById(
+                    ack.message_id
+                );
+
+
+    if (!query_result.Succeeded()) {
+        LOG_WARN(
+            "gateway receiver delivery ack "
+            "message lookup failed"
+            << ", message_id="
+            << ack.message_id
+            << ", delivery_seq="
+            << packet.seq
+            << ", receiver="
+            << receiver
+            << ", status="
+            << MessageQueryStatusToString(
+                query_result.status
+            )
+            << ", error="
+            << query_result.message
+        );
+
+        return;
+    }
+
+
+    if (!query_result.Found()) {
+        LOG_WARN(
+            "gateway rejected receiver "
+            "delivery ack for unknown message"
+            << ", message_id="
+            << ack.message_id
+            << ", delivery_seq="
+            << packet.seq
+            << ", receiver="
+            << receiver
+        );
+
+        return;
+    }
+
+
+    const PrivateMessageRecord&
+        message =
+            query_result.record;
+
+
+    /*
+     * ============================================================
+     * 5. 持久化消息Receiver必须匹配Authenticated User
+     * ============================================================
+     *
+     * 例如：
+     *
+     * M:
+     *   from=10001
+     *   to=10002
+     *
+     * user10003不能发送：
+     *
+     * ACK(M)
+     */
+    if (
+        message.to_user_id !=
+        receiver
+    ) {
+        LOG_WARN(
+            "gateway rejected receiver "
+            "delivery ack identity mismatch"
+            << ", message_id="
+            << ack.message_id
+            << ", delivery_seq="
+            << packet.seq
+            << ", authenticated_receiver="
+            << receiver
+            << ", persisted_receiver="
+            << message.to_user_id
+            << ", sender="
+            << message.from_user_id
+        );
+
+        return;
+    }
+
+
+    /*
+     * ============================================================
+     * 6. Runtime Delivery Attempt Correlation
+     * ============================================================
+     *
+     * DB只能证明：
+     *
+     * M确实属于R。
+     *
+     * Tracker继续证明：
+     *
+     * D是否真的作为M的一次Delivery Attempt
+     * 从当前Gateway发出过。
+     */
+    const ReceiverDeliveryAckStatus
+        ack_status =
+            receiver_delivery_tracker_.
+                Acknowledge(
+                    ack.message_id,
+                    receiver,
+                    packet.seq
+                );
+
+    auto persist_receiver_confirmation =
+    [&]() -> bool {
+        const
+            UpdatePrivateMessagesResult
+            result =
+                message_repository_->
+                    MarkReceiverConfirmed(
+                        ack.message_id
+                    );
+
+
+        if (!result.Succeeded()) {
+            LOG_ERROR(
+                "gateway receiver ack confirmed "
+                "in runtime but durable receiver "
+                "confirmation failed"
+                << ", message_id="
+                << ack.message_id
+                << ", delivery_seq="
+                << packet.seq
+                << ", receiver="
+                << receiver
+                << ", status="
+                << MessageMutationStatusToString(
+                       result.status
+                   )
+                << ", error="
+                << result.message
+            );
+
+
+            return false;
+        }
+
+
+        LOG_INFO(
+            "gateway durable receiver "
+            "confirmation advanced"
+            << ", message_id="
+            << ack.message_id
+            << ", delivery_seq="
+            << packet.seq
+            << ", receiver="
+            << receiver
+            << ", affected_rows="
+            << result.affected_rows
+        );
+
+
+        return true;
+    };
+    /*
+     * ============================================================
+     * 7. 第一次ACK成功确认
+     * ============================================================
+     *
+     * 注意：
+     *
+     * 当前F2-b只确认Runtime状态机。
+     *
+     * 暂时不要在这里：
+     *
+     *     MarkDelivered()
+     *
+     * F6会统一迁移DB Delivery语义。
+     */
+    if (
+        ack_status ==
+        ReceiverDeliveryAckStatus::
+            kConfirmed
+    ) {
+        /*
+        * ============================================================
+        * Receiver应用层第一次真实确认M。
+        * ============================================================
+        *
+        * Runtime：
+        *
+        * WaitingAck -> Confirmed
+        *
+        * Persistent：
+        *
+        * Pending(0) -> ReceiverConfirmed(1)
+        */
+        const bool durable_confirmed =
+            persist_receiver_confirmation();
+
+
+        LOG_INFO(
+            "gateway receiver delivery "
+            "ack confirmed"
+            << ", message_id="
+            << ack.message_id
+            << ", delivery_seq="
+            << packet.seq
+            << ", receiver="
+            << receiver
+            << ", sender="
+            << message.from_user_id
+            << ", durable_confirmed="
+            << durable_confirmed
+        );
+
+
+        return;
+    }
+
+
+    /*
+     * Duplicate ACK完全合法。
+     *
+     * 例如：
+     *
+     * M/D1 ACK
+     *       ↓
+     * ACK Response网络行为导致Client再次ACK
+     *
+     * 或：
+     *
+     * M/D1
+     * timeout
+     * M/D2
+     *
+     * ACK D1确认成功
+     * ACK D2随后到达
+     */
+    if (
+        ack_status ==
+        ReceiverDeliveryAckStatus::
+            kDuplicate
+    ) {
+        /*
+        * Runtime已经Confirmed，
+        * 但第一次ACK时MySQL可能临时失败。
+        *
+        * Duplicate ACK是一个天然的
+        * durable-repair机会。
+        */
+        const bool durable_repaired =
+            persist_receiver_confirmation();
+
+
+        LOG_INFO(
+            "gateway ignored duplicate "
+            "receiver delivery ack"
+            << ", message_id="
+            << ack.message_id
+            << ", delivery_seq="
+            << packet.seq
+            << ", receiver="
+            << receiver
+            << ", durable_repaired="
+            << durable_repaired
+        );
+
+
+        return;
+    }
+
+    if (
+        ack_status ==
+        ReceiverDeliveryAckStatus::
+            kReceiverMismatch
+    ) {
+        LOG_WARN(
+            "gateway receiver delivery "
+            "tracker rejected receiver mismatch"
+            << ", message_id="
+            << ack.message_id
+            << ", delivery_seq="
+            << packet.seq
+            << ", receiver="
+            << receiver
+        );
+
+        return;
+    }
+
+
+    if (
+        ack_status ==
+        ReceiverDeliveryAckStatus::
+            kUnknownAttempt
+    ) {
+        LOG_WARN(
+            "gateway rejected receiver "
+            "delivery ack for unknown attempt"
+            << ", message_id="
+            << ack.message_id
+            << ", delivery_seq="
+            << packet.seq
+            << ", receiver="
+            << receiver
+        );
+
+        return;
+    }
+
+
+    if (
+        ack_status ==
+        ReceiverDeliveryAckStatus::
+            kUnknownMessage
+    ) {
+        LOG_WARN(
+            "gateway receiver delivery ack "
+            "has no active tracker entry"
+            << ", message_id="
+            << ack.message_id
+            << ", delivery_seq="
+            << packet.seq
+            << ", receiver="
+            << receiver
+        );
+
+        return;
+    }
+
+
+    LOG_WARN(
+        "gateway rejected invalid receiver "
+        "delivery ack"
+        << ", message_id="
+        << ack.message_id
+        << ", delivery_seq="
+        << packet.seq
+        << ", receiver="
+        << receiver
+    );
 }
 
 
@@ -1030,16 +2708,17 @@ void GatewayServer::HandleLoginRequest(
 
     std::size_t offline_count = 0;
     if (HasMessageRepository()) {
-        const auto pending_result =
+        const auto count_result =
             message_repository_->
-                ListPendingMessages(
-                    user_id,
-                    100
+                CountPendingMessages(
+                    user_id
                 );
 
-        if (pending_result.Succeeded()) {
+        if (count_result.Succeeded()) {
             offline_count =
-                pending_result.records.size();
+                static_cast<std::size_t>(
+                    count_result.count
+                );
         } else {
             LOG_WARN(
                 "gateway count persistent "
@@ -1048,10 +2727,10 @@ void GatewayServer::HandleLoginRequest(
                 << user_id
                 << ", status="
                 << MessageQueryStatusToString(
-                    pending_result.status
+                    count_result.status
                 )
                 << ", message="
-                << pending_result.message
+                << count_result.message
             );
         }
     }
@@ -1810,14 +3489,25 @@ void GatewayServer::HandleChatMessage(
                                         std::move(result)
                                 ]() mutable {
 
-                                    bool delivered =
+                                    /*
+                                    * Peer Response只能证明：
+                                    *
+                                    * Gateway B是否接受/提交了Receiver Delivery。
+                                    *
+                                    * Receiver是否真正确认，
+                                    * 必须以共享MySQL的ReceiverConfirmed状态为准。
+                                    */
+                                    bool peer_delivery_submitted =
                                         false;
+
+
+                                    bool receiver_confirmed =
+                                        false;
+
 
                                     bool stored_offline =
                                         false;
 
-                                    bool delivery_marked =
-                                        true;
 
                                     std::string reason;
 
@@ -1827,60 +3517,124 @@ void GatewayServer::HandleChatMessage(
                                         result.response.
                                             Delivered()
                                     ) {
-                                        delivered = true;
+                                        /*
+                                        * Peer层的kDelivered目前是历史命名。
+                                        *
+                                        * 它只证明：
+                                        *
+                                        * Gateway B已经接受并提交了
+                                        * Receiver Delivery。
+                                        *
+                                        * 不能直接映射为Sender delivered=true。
+                                        */
+                                        peer_delivery_submitted =
+                                            true;
+
 
                                         reason =
-                                            "remote_delivered";
+                                            "remote_delivery_awaiting_receiver_ack";
 
+
+                                        /*
+                                        * A和B共享MySQL。
+                                        *
+                                        * 如果Receiver ACK非常快，
+                                        * B可能已经把DB推进到ReceiverConfirmed。
+                                        *
+                                        * 因此这里读取一次最新Durable Truth。
+                                        *
+                                        * 不等待、不轮询Receiver ACK。
+                                        */
                                         if (
                                             stored_persistent &&
-                                            server_message_id
-                                                != 0 &&
+                                            server_message_id != 0 &&
                                             HasMessageRepository()
                                         ) {
-                                            const auto
-                                                mark_result =
+                                            const
+                                                FindPrivateMessageResult
+                                                confirmation_result =
                                                     message_repository_->
-                                                        MarkDelivered(
+                                                        FindPrivateMessageById(
                                                             server_message_id
                                                         );
 
+
                                             if (
-                                                !mark_result.
-                                                    Succeeded()
+                                                confirmation_result.Succeeded() &&
+                                                confirmation_result.Found()
                                             ) {
-                                                delivery_marked =
-                                                    false;
+                                                const std::uint32_t
+                                                    current_status =
+                                                        confirmation_result.
+                                                            record.
+                                                            delivery_status;
 
-                                                reason =
-                                                    "remote_delivered_mark_failed";
 
+                                                const std::uint32_t
+                                                    receiver_confirmed_status =
+                                                        static_cast<std::uint32_t>(
+                                                            DeliveryStatus::
+                                                                kReceiverConfirmed
+                                                        );
+
+
+                                                const std::uint32_t
+                                                    read_status =
+                                                        static_cast<std::uint32_t>(
+                                                            DeliveryStatus::
+                                                                kRead
+                                                        );
+
+
+                                                receiver_confirmed =
+                                                    current_status ==
+                                                        receiver_confirmed_status ||
+                                                    current_status ==
+                                                        read_status;
+
+
+                                                if (receiver_confirmed) {
+                                                    reason =
+                                                        "remote_receiver_confirmed";
+                                                }
+                                            } else {
+                                                /*
+                                                * 查询失败不能把Peer submission
+                                                * 误判成ReceiverConfirmed。
+                                                *
+                                                * Server消息已经持久化，
+                                                * Sender仍然得到success=true。
+                                                */
                                                 LOG_WARN(
-                                                    "gateway remote "
-                                                    "message delivered "
-                                                    "but mark delivered "
-                                                    "failed"
+                                                    "gateway remote receiver "
+                                                    "confirmation lookup failed"
                                                     << ", message_id="
                                                     << server_message_id
                                                     << ", from="
                                                     << from_user_id
                                                     << ", to="
                                                     << to_user_id
+                                                    << ", remote_gateway="
+                                                    << remote_gateway.gateway_id
                                                 );
                                             }
                                         }
                                     } else {
+                                        /*
+                                        * Peer没有成功接受本地Delivery。
+                                        *
+                                        * 如果消息已经持久化，
+                                        * Server仍然承担后续恢复责任。
+                                        */
                                         stored_offline =
                                             stored_persistent;
 
-                                        if (
-                                            result.Succeeded()
-                                        ) {
+
+                                        if (result.Succeeded()) {
                                             reason =
                                                 "remote_" +
                                                 GatewayForwardChatStatusToString(
-                                                    result.response.
-                                                        status
+                                                    result.response.status
                                                 );
                                         } else {
                                             reason =
@@ -1904,38 +3658,10 @@ void GatewayServer::HandleChatMessage(
                                         total_unread =
                                             receiver_total_unread;
 
-                                    if (
-                                        delivered &&
-                                        !stored_persistent
-                                    ) {
-                                        private_unread =
-                                            IncrementUnread(
-                                                to_user_id,
-                                                from_user_id,
-                                                &total_unread
-                                            );
-                                    }
-
-
-                                    if (
-                                        delivered &&
-                                        stored_persistent &&
-                                        !delivery_marked
-                                    ) {
-                                        /*
-                                        * 实际已经送达，
-                                        * 但数据库仍处于Pending。
-                                        *
-                                        * 先在ACK中暴露这一状态，
-                                        * 后续可靠性阶段再解决
-                                        * 幂等/重复投递问题。
-                                        */
-                                        stored_offline = true;
-                                    }
 
 
                                     const bool accepted =
-                                        delivered ||
+                                        peer_delivery_submitted ||
                                         stored_persistent;
 
 
@@ -1944,8 +3670,15 @@ void GatewayServer::HandleChatMessage(
                                     ack_body["success"] =
                                         accepted;
 
+                                    /*
+                                    * Sender delivered只代表：
+                                    *
+                                    * Receiver Application ACK
+                                    *
+                                    * 不能再代表Peer Gateway已经Send。
+                                    */
                                     ack_body["delivered"] =
-                                        delivered;
+                                        receiver_confirmed;
 
                                     ack_body["stored_offline"] =
                                         stored_offline;
@@ -1954,6 +3687,24 @@ void GatewayServer::HandleChatMessage(
                                         "stored_persistent"
                                     ] =
                                         stored_persistent;
+
+
+                                    /*
+                                    * M12 Client Send Idempotency
+                                    *
+                                    * client_message_id：
+                                    * Client一次逻辑发送的稳定业务ID。
+                                    *
+                                    * reused：
+                                    * 当前Client Request是否复用了
+                                    * 已经存在的server message。
+                                    */
+                                    ack_body["client_message_id"] =
+                                        client_message_id;
+
+                                    ack_body["reused"] =
+                                        client_request_reused;
+
 
                                     ack_body["message_id"] =
                                         server_message_id;
@@ -2015,17 +3766,17 @@ void GatewayServer::HandleChatMessage(
 
 
                                     LOG_INFO(
-                                        "gateway remote chat "
-                                        "completed"
+                                        "gateway remote chat completed"
                                         << ", from="
                                         << from_user_id
                                         << ", to="
                                         << to_user_id
                                         << ", remote_gateway="
-                                        << remote_gateway.
-                                            gateway_id
-                                        << ", delivered="
-                                        << delivered
+                                        << remote_gateway.gateway_id
+                                        << ", peer_delivery_submitted="
+                                        << peer_delivery_submitted
+                                        << ", receiver_confirmed="
+                                        << receiver_confirmed
                                         << ", reason="
                                         << reason
                                     );
@@ -2145,125 +3896,1111 @@ void GatewayServer::HandleChatMessage(
         }
     }
 
-    TcpConnectionPtr target_connection =
-        session_manager_.FindConnection(to_user_id);
+       /*
+     * ============================================================
+     * M12-v1.1-f-2-a
+     * Same-Gateway Local Sequential Idempotency
+     * ============================================================
+     */
 
-    const bool delivered =
-        target_connection && target_connection->IsConnected();
+    TcpConnectionPtr target_connection =
+        session_manager_.
+            FindConnection(
+                to_user_id
+            );
+
+
+    /*
+     * target_online：
+     *
+     * 只表示当前Gateway上存在一个
+     * 可用的Receiver Connection。
+     *
+     * 注意：
+     *
+     * target_online != delivered
+     *
+     * 在线并不能说明消息已经真正完成Push。
+     */
+    const bool target_online =
+        target_connection &&
+        target_connection->
+            IsConnected();
+
+
+    bool delivered = false;
 
     bool stored_offline = false;
 
-    Packet forward_packet;
-    forward_packet.type = MessageType::kChatMessage;
-    forward_packet.seq = packet.seq;
-    forward_packet.body = server_body_text;
-
-    std::uint64_t server_message_id = 0;
     bool stored_persistent = false;
 
-    if (HasMessageRepository()) {
-        const SavePrivateMessageResult
-            save_result =
-                message_repository_->
-                    SavePrivateMessage(
-                        from_user_id,
-                        to_user_id,
-                        server_body_text,
-                        delivered
-                            ? DeliveryStatus::
-                                kDelivered
-                            : DeliveryStatus::
-                                kPending
+    bool client_request_reused = false;
+
+    std::uint64_t
+        server_message_id = 0;
+
+
+    /*
+     * ============================================================
+     * 1. Reliable Client Send必须有持久化Repository
+     * ============================================================
+     *
+     * M12要求：
+     *
+     * same
+     * (from_user_id, client_message_id)
+     *
+     * 必须映射到same server_message_id。
+     *
+     * 没有MySQL UNIQUE约束时无法保证该语义，
+     * 因此这里不再静默降级到纯内存发送。
+     */
+    if (!HasMessageRepository()) {
+        ClientChatAck ack;
+
+        ack.success = false;
+        ack.delivered = false;
+
+        ack.client_message_id =
+            request.client_message_id;
+
+        ack.from_user_id =
+            from_user_id;
+
+        ack.to_user_id =
+            to_user_id;
+
+        ack.reason =
+            "message_persistence_unavailable";
+
+
+        send_client_chat_ack(
+            ack
+        );
+
+
+        LOG_WARN(
+            "gateway rejected local reliable chat: "
+            "message repository unavailable"
+            << ", client_message_id="
+            << request.client_message_id
+            << ", from="
+            << from_user_id
+            << ", to="
+            << to_user_id
+        );
+
+
+        return;
+    }
+
+
+    /*
+     * ============================================================
+     * 2. 持久化时统一从Pending开始
+     * ============================================================
+     *
+     * 旧逻辑：
+     *
+     * target online
+     *     ↓
+     * INSERT Delivered
+     *     ↓
+     * SendPacket
+     *
+     * 存在：
+     *
+     * DB Delivered
+     *     ↓ crash
+     * Receiver什么都没收到
+     *
+     * 新逻辑：
+     *
+     * Pending
+     *   ↓
+     * Send
+     *   ↓
+     * MarkDelivered
+     */
+    const
+        IdempotentSavePrivateMessageResult
+        persist_result =
+            message_repository_->
+                SavePrivateMessageIdempotent(
+                    from_user_id,
+                    to_user_id,
+                    server_body_text,
+                    request.
+                        client_message_id,
+                    PrivateMessageType::kText
+                );
+
+
+    /*
+     * ============================================================
+     * 3. 持久化失败 / Idempotency Conflict
+     * ============================================================
+     */
+    if (!persist_result.Succeeded()) {
+        ClientChatAck ack;
+
+        ack.success = false;
+
+        ack.delivered = false;
+
+        ack.client_message_id =
+            request.client_message_id;
+
+        ack.message_id =
+            persist_result.message_id;
+
+        ack.from_user_id =
+            from_user_id;
+
+        ack.to_user_id =
+            to_user_id;
+
+
+        if (
+            persist_result.status ==
+            IdempotentSavePrivateMessageStatus::
+                kIdempotencyConflict
+        ) {
+            ack.reason =
+                "client_message_id_conflict";
+        } else {
+            ack.reason =
+                "message_persistence_failed";
+        }
+
+
+        send_client_chat_ack(
+            ack
+        );
+
+
+        LOG_WARN(
+            "gateway local idempotent "
+            "persistence failed"
+            << ", client_message_id="
+            << request.client_message_id
+            << ", from="
+            << from_user_id
+            << ", to="
+            << to_user_id
+            << ", message_id="
+            << persist_result.message_id
+            << ", status="
+            << IdempotentSavePrivateMessageStatusToString(
+                   persist_result.status
+               )
+            << ", message="
+            << persist_result.message
+        );
+
+
+        return;
+    }
+
+
+    /*
+     * ============================================================
+     * 4. Repository已经决定业务消息身份
+     * ============================================================
+     */
+    server_message_id =
+        persist_result.message_id;
+
+    stored_persistent = true;
+
+    client_request_reused =
+        persist_result.Reused();
+
+
+    LOG_INFO(
+        "gateway local message "
+        "idempotent persistence accepted"
+        << ", client_message_id="
+        << request.client_message_id
+        << ", message_id="
+        << server_message_id
+        << ", created="
+        << persist_result.Created()
+        << ", reused="
+        << persist_result.Reused()
+        << ", from="
+        << from_user_id
+        << ", to="
+        << to_user_id
+    );
+
+
+    /*
+     * ============================================================
+     * 5. 判断持久消息过去是否已经完成Delivery
+     * ============================================================
+     *
+     * PrivateMessageRecord.delivery_status
+     * 当前是uint32_t。
+     */
+    const std::uint32_t
+        persisted_delivery_status =
+            persist_result.record.
+                delivery_status;
+
+
+    const std::uint32_t
+        receiver_confirmed_status =
+            static_cast<std::uint32_t>(
+                DeliveryStatus::
+                    kReceiverConfirmed
+            );
+
+
+    const std::uint32_t
+        read_status =
+            static_cast<std::uint32_t>(
+                DeliveryStatus::
+                    kRead
+            );
+
+
+    const bool
+        already_receiver_confirmed =
+            persisted_delivery_status ==
+                receiver_confirmed_status ||
+            persisted_delivery_status ==
+                read_status;
+
+
+    /*
+     * ============================================================
+     * 6. 顺序Retry：
+     *
+     * Reused + Delivered/Read
+     *
+     * 表示这条逻辑业务消息过去已经完成过Push。
+     *
+     * 此时绝对不能：
+     *
+     * SendPacket(receiver)
+     * IncrementUnread()
+     * ============================================================
+     */
+    if (
+        client_request_reused &&
+        already_receiver_confirmed
+    ){
+        delivered = true;
+
+
+        const std::int64_t
+            receiver_private_unread =
+                GetPrivateUnread(
+                    to_user_id,
+                    from_user_id
+                );
+
+
+        const std::int64_t
+            receiver_total_unread =
+                GetTotalUnread(
+                    to_user_id
+                );
+
+
+        ClientChatAck ack;
+
+        ack.success = true;
+
+        ack.delivered = true;
+
+        ack.stored_offline = false;
+
+        ack.stored_persistent = true;
+
+        ack.reused = true;
+
+        ack.client_message_id =
+            request.client_message_id;
+
+        ack.message_id =
+            server_message_id;
+
+        ack.from_user_id =
+            from_user_id;
+
+        ack.to_user_id =
+            to_user_id;
+
+        ack.receiver_private_unread =
+            receiver_private_unread;
+
+        ack.receiver_total_unread =
+            receiver_total_unread;
+
+        ack.reason =
+            "local_already_receiver_confirmed";
+
+
+        send_client_chat_ack(
+            ack
+        );
+
+
+        LOG_INFO(
+            "gateway suppressed already "
+            "receiver-confirmed local client retry"
+            << ", client_message_id="
+            << request.client_message_id
+            << ", message_id="
+            << server_message_id
+            << ", persisted_status="
+            << persisted_delivery_status
+            << ", from="
+            << from_user_id
+            << ", to="
+            << to_user_id
+        );
+
+
+        return;
+    }
+
+
+    /*
+     * 到这里意味着：
+     *
+     * Created + Pending
+     *
+     * 或
+     *
+     * Reused + Pending
+     *
+     * 都需要继续尝试推进Delivery。
+     */
+
+
+     /*
+    * 当前请求是否发现：
+    *
+    * 同一server message已经在本进程内
+    * 完成过Receiver-visible Push。
+    *
+    * 典型场景：
+    *
+    * SendPacket成功
+    *     ↓
+    * DB MarkDelivered失败
+    *     ↓
+    * Memory已经Delivered
+    *     ↓
+    * Client Retry
+    *
+    * 这时绝不能重新Push，
+    * 但可以重新尝试修复MySQL状态。
+    */
+    bool local_delivery_already_completed = false;
+
+    /*
+     * ============================================================
+     * 7. Local Online Delivery
+     * ============================================================
+     */
+        /*
+     * ============================================================
+     * 7. Local Online Delivery Ownership
+     * ============================================================
+     *
+     * MySQL UNIQUE解决：
+     *
+     * 一次Logical Send只能创建一个server message。
+     *
+     * 这里解决：
+     *
+     * 同一个server message同一时刻
+     * 只能有一个执行者真正调用SendPacket。
+     */
+    if (target_online) {
+        const
+            MessageDeliveryDedupBeginStatus
+            delivery_begin_status =
+                message_delivery_deduplicator_.
+                    Begin(
+                        server_message_id
                     );
 
-        if (save_result.Succeeded()) {
-            server_message_id =
-                save_result.message_id;
 
-            stored_persistent = true;
-        } else {
-            LOG_WARN(
-                "gateway save private "
-                "message failed"
+        /*
+         * ========================================================
+         * 7.1 当前线程获得唯一Delivery Ownership
+         * ========================================================
+         */
+        if (
+            delivery_begin_status ==
+            MessageDeliveryDedupBeginStatus::
+                kAcquired
+        ) {
+            LOG_INFO(
+                "gateway local delivery ownership acquired"
+                << ", client_message_id="
+                << request.client_message_id
+                << ", message_id="
+                << server_message_id
                 << ", from="
                 << from_user_id
                 << ", to="
                 << to_user_id
-                << ", status="
-                << MessageMutationStatusToString(
-                    save_result.status
-                )
-                << ", message="
-                << save_result.message
+            );
+
+
+            /*
+            * ============================================================
+            * M12-v1.4:
+            * Build independent Gateway -> Receiver Delivery
+            * ============================================================
+            *
+            * 这里绝对不能继续：
+            *
+            * receiver_packet.seq = sender_packet.seq
+            *
+            * Receiver Delivery属于新的Network Attempt Domain。
+            */
+
+            Packet forward_packet;
+
+            std::string
+                delivery_submit_error;
+
+
+            const
+                ReceiverDeliverySubmitStatus
+                delivery_submit_status =
+                    SubmitReceiverChatDelivery(
+                        target_connection,
+                        server_message_id,
+                        from_user_id,
+                        to_user_id,
+                        request.text,
+                        &forward_packet,
+                        &delivery_submit_error
+                    );
+
+
+            const bool
+                receiver_already_confirmed =
+                    delivery_submit_status ==
+                    ReceiverDeliverySubmitStatus::
+                        kAlreadyConfirmed;
+
+
+            delivered =
+                delivery_submit_status ==
+                    ReceiverDeliverySubmitStatus::
+                        kSubmitted ||
+                receiver_already_confirmed;
+
+
+            if (
+                delivery_submit_status ==
+                ReceiverDeliverySubmitStatus::
+                    kSubmitted
+            ) {
+                LOG_INFO(
+                    "gateway submitted tracked local "
+                    "receiver chat delivery"
+                    << ", client_message_id="
+                    << request.client_message_id
+                    << ", message_id="
+                    << server_message_id
+                    << ", delivery_seq="
+                    << forward_packet.seq
+                    << ", from="
+                    << from_user_id
+                    << ", to="
+                    << to_user_id
+                );
+            } else if (
+                receiver_already_confirmed
+            ) {
+                /*
+                * Tracker已经确认过该消息，
+                * 不应该重新Push。
+                */
+                local_delivery_already_completed =
+                    true;
+
+
+                LOG_INFO(
+                    "gateway suppressed local receiver "
+                    "delivery already confirmed by tracker"
+                    << ", client_message_id="
+                    << request.client_message_id
+                    << ", message_id="
+                    << server_message_id
+                    << ", from="
+                    << from_user_id
+                    << ", to="
+                    << to_user_id
+                );
+            }
+
+            /*
+             * SendPacket返回false：
+             *
+             * 当前实现意味着：
+             *
+             * - connection不可用
+             * 或
+             * - Protocol Encode失败
+             *
+             * 尚未调用connection->Send()，
+             * 因此可以安全释放Ownership。
+             */
+            if (!delivered) {
+                const bool aborted =
+                    message_delivery_deduplicator_.
+                        Abort(
+                            server_message_id
+                        );
+
+
+                if (!aborted) {
+                    LOG_ERROR(
+                        "gateway local delivery "
+                        "ownership abort failed"
+                        << ", client_message_id="
+                        << request.client_message_id
+                        << ", message_id="
+                        << server_message_id
+                        << ", from="
+                        << from_user_id
+                        << ", to="
+                        << to_user_id
+                    );
+                }
+
+
+                LOG_WARN(
+                    "gateway local tracked receiver "
+                    "delivery submission failed and "
+                    "ownership released"
+                    << ", client_message_id="
+                    << request.client_message_id
+                    << ", message_id="
+                    << server_message_id
+                    << ", from="
+                    << from_user_id
+                    << ", to="
+                    << to_user_id
+                    << ", submit_status="
+                    << static_cast<int>(
+                        delivery_submit_status
+                    )
+                    << ", error="
+                    << delivery_submit_error
+                );
+            } else {
+                /*
+                * 当前存在两种成功语义：
+                *
+                * 1. kSubmitted
+                *
+                *    Delivery Attempt已经登记，
+                *    并提交给TcpConnection。
+                *
+                * 2. kAlreadyConfirmed
+                *
+                *    Tracker已经知道Receiver确认过M，
+                *    因此无需再次Send。
+                *
+                * 当前F2阶段暂时继续保留原有
+                * durable MarkDelivered行为。
+                *
+                * F6会把真正的持久化Delivered推进点
+                * 移到Receiver ACK Handler。
+                */
+
+
+
+
+
+                /*
+                 * 无论MySQL MarkDelivered成功与否，
+                 * SendPacket已经成功以后，
+                 * 当前进程必须记住：
+                 *
+                 * 这条消息已经产生过投递副作用。
+                 */
+                const bool memory_marked =
+                    message_delivery_deduplicator_.
+                        MarkDelivered(
+                            server_message_id
+                        );
+
+
+                if (!memory_marked) {
+                    LOG_ERROR(
+                        "gateway local message pushed "
+                        "but memory delivery state "
+                        "advance failed"
+                        << ", client_message_id="
+                        << request.client_message_id
+                        << ", message_id="
+                        << server_message_id
+                        << ", from="
+                        << from_user_id
+                        << ", to="
+                        << to_user_id
+                    );
+                }
+
+
+                LOG_INFO(
+                    "gateway local receiver delivery "
+                    "submitted and awaiting receiver ack"
+                    << ", client_message_id="
+                    << request.client_message_id
+                    << ", message_id="
+                    << server_message_id
+                    << ", memory_send_side_effect_marked="
+                    << memory_marked
+                    << ", from="
+                    << from_user_id
+                    << ", to="
+                    << to_user_id
+                );
+            }
+        }
+
+
+        /*
+         * ========================================================
+         * 7.2 同一条Message正在由其他线程投递
+         * ========================================================
+         *
+         * 最关键原则：
+         *
+         * 当前线程没有Execution Ownership，
+         * 因此绝对不能调用SendPacket。
+         */
+        else if (
+            delivery_begin_status ==
+            MessageDeliveryDedupBeginStatus::
+                kAlreadyProcessing
+        ) {
+            const std::int64_t
+                receiver_private_unread =
+                    GetPrivateUnread(
+                        to_user_id,
+                        from_user_id
+                    );
+
+
+            const std::int64_t
+                receiver_total_unread =
+                    GetTotalUnread(
+                        to_user_id
+                    );
+
+
+            ClientChatAck ack;
+
+            /*
+             * 消息已经成功进入MySQL，
+             * 所以Logical Send已经被Server接受。
+             */
+            ack.success = true;
+
+            /*
+             * 但当前线程不能确认Owner
+             * 最终是否已经完成Delivery。
+             */
+            ack.delivered = false;
+
+            ack.stored_offline = false;
+
+            ack.stored_persistent = true;
+
+            ack.reused =
+                client_request_reused;
+
+            ack.client_message_id =
+                request.client_message_id;
+
+            ack.message_id =
+                server_message_id;
+
+            ack.from_user_id =
+                from_user_id;
+
+            ack.to_user_id =
+                to_user_id;
+
+            ack.receiver_private_unread =
+                receiver_private_unread;
+
+            ack.receiver_total_unread =
+                receiver_total_unread;
+
+            ack.reason =
+                "local_delivery_in_progress";
+
+
+            send_client_chat_ack(
+                ack
+            );
+
+
+            LOG_INFO(
+                "gateway suppressed concurrent "
+                "local delivery attempt"
+                << ", client_message_id="
+                << request.client_message_id
+                << ", message_id="
+                << server_message_id
+                << ", from="
+                << from_user_id
+                << ", to="
+                << to_user_id
+            );
+
+
+            return;
+        }
+
+
+        /*
+         * ========================================================
+         * 7.3 当前进程已经完成过这条消息的投递
+         * ========================================================
+         *
+         * 这里最典型的是：
+         *
+         * 第一次Send成功
+         *     ↓
+         * MySQL MarkDelivered失败
+         *     ↓
+         * Memory MarkDelivered成功
+         *     ↓
+         * Retry
+         *
+         * DB仍Pending，但内存明确知道：
+         * 不能再次Push。
+         */
+
+
+        else if (
+            delivery_begin_status ==
+            MessageDeliveryDedupBeginStatus::
+                kAlreadyDelivered
+        ) {
+            /*
+            * 注意：
+            *
+            * 这里的AlreadyDelivered是
+            * MessageDeliveryDeduplicator历史命名。
+            *
+            * 新语义仅表示：
+            *
+            * Receiver-visible Send Side Effect
+            * 已经提交过。
+            *
+            * 并不代表ReceiverConfirmed。
+            */
+            delivered = true;
+
+            local_delivery_already_completed =
+                true;
+
+
+            LOG_INFO(
+                "gateway suppressed duplicate local "
+                "receiver send by memory ownership state"
+                << ", client_message_id="
+                << request.client_message_id
+                << ", message_id="
+                << server_message_id
+                << ", receiver_confirmation="
+                "still determined by tracker/mysql"
+                << ", from="
+                << from_user_id
+                << ", to="
+                << to_user_id
             );
         }
-    }
 
-    if (delivered) {
-        SendPacket(target_connection, forward_packet);
-    } else {
-        if (HasMessageRepository()) {
-            stored_offline = stored_persistent;
-        } else {
-            stored_offline =
-                offline_message_store_.Store(to_user_id, forward_packet);
+
+        /*
+         * ========================================================
+         * 7.4 理论上不应发生
+         * ========================================================
+         *
+         * server_message_id来自数据库，
+         * 正常情况下一定 > 0。
+         */
+        else {
+            ClientChatAck ack;
+
+            ack.success = false;
+
+            ack.delivered = false;
+
+            ack.stored_offline = false;
+
+            ack.stored_persistent = true;
+
+            ack.reused =
+                client_request_reused;
+
+            ack.client_message_id =
+                request.client_message_id;
+
+            ack.message_id =
+                server_message_id;
+
+            ack.from_user_id =
+                from_user_id;
+
+            ack.to_user_id =
+                to_user_id;
+
+            ack.reason =
+                "invalid_local_delivery_message_id";
+
+
+            send_client_chat_ack(
+                ack
+            );
+
+
+            LOG_ERROR(
+                "gateway local delivery ownership "
+                "begin rejected invalid message id"
+                << ", client_message_id="
+                << request.client_message_id
+                << ", message_id="
+                << server_message_id
+                << ", from="
+                << from_user_id
+                << ", to="
+                << to_user_id
+            );
+
+
+            return;
         }
     }
 
-    std::int64_t receiver_private_unread = 0;
-    std::int64_t receiver_total_unread = 0;
 
-    const bool message_accepted =
-        delivered || stored_offline || stored_persistent;
+    /*
+     * ============================================================
+     * 8. Offline / Local Push Failed
+     * ============================================================
+     *
+     * 只要消息已经持久化为Pending，
+     * 后续Receiver登录时
+     * PushPersistentOfflineMessages()
+     * 可以继续恢复。
+     *
+     * 因此MySQL是当前可靠离线消息事实源。
+     */
+    if (!delivered) {
+        stored_offline =
+            stored_persistent;
+    }
 
-    if (message_accepted) {
+
+    /*
+     * ============================================================
+     * 9. Unread Side Effect
+     * ============================================================
+     *
+     * Unread绑定：
+     *
+     * 新业务消息Created
+     *
+     * 而不是：
+     *
+     * 网络Request次数。
+     */
+    std::int64_t
+        receiver_private_unread = 0;
+
+    std::int64_t
+        receiver_total_unread = 0;
+
+
+    if (!client_request_reused) {
         receiver_private_unread =
             IncrementUnread(
                 to_user_id,
                 from_user_id,
                 &receiver_total_unread
             );
+    } else {
+        receiver_private_unread =
+            GetPrivateUnread(
+                to_user_id,
+                from_user_id
+            );
+
+        receiver_total_unread =
+            GetTotalUnread(
+                to_user_id
+            );
+
+
+        LOG_INFO(
+            "gateway skipped unread increment "
+            "for reused local client message"
+            << ", client_message_id="
+            << request.client_message_id
+            << ", message_id="
+            << server_message_id
+            << ", private_unread="
+            << receiver_private_unread
+            << ", total_unread="
+            << receiver_total_unread
+        );
     }
 
-    Json ack_body;
-    ack_body["success"] = message_accepted;
-    ack_body["from"] = from_user_id;
-    ack_body["to"] = to_user_id;
-    ack_body["delivered"] = delivered;
-    ack_body["stored_offline"] = stored_offline;
-    ack_body["stored_persistent"] = stored_persistent;
-    ack_body["message_id"] = server_message_id;
-    ack_body["receiver_private_unread"] = receiver_private_unread;
-    ack_body["receiver_total_unread"] = receiver_total_unread;
 
-    if (!message_accepted) {
-        ack_body["reason"] = "message_not_accepted";
-    } else if (!delivered) {
-        ack_body["reason"] = stored_offline
-            ? "target_user_offline"
-            : "store_offline_failed";
+    /*
+    * ============================================================
+    * 10. Receiver Confirmation Snapshot
+    * ============================================================
+    *
+    * DB快照可能还是Pending，
+    * 但Receiver ACK有可能在本次处理过程中
+    * 已经从另一个Sub-Reactor到达。
+    */
+    bool receiver_confirmed_now =
+        already_receiver_confirmed;
+
+
+    ReceiverDeliverySnapshot
+        receiver_delivery_snapshot;
+
+
+    if (
+        receiver_delivery_tracker_.
+            GetSnapshot(
+                server_message_id,
+                &receiver_delivery_snapshot
+            ) &&
+        receiver_delivery_snapshot.confirmed
+    ) {
+        receiver_confirmed_now = true;
     }
 
-    Packet ack;
-    ack.type = MessageType::kChatAck;
-    ack.seq = packet.seq;
-    ack.body = ack_body.dump();
 
-    SendPacket(connection, ack);
+    /*
+    * ============================================================
+    * 11. Client ACK
+    * ============================================================
+    */
+    ClientChatAck ack;
 
-    LOG_INFO("gateway chat message handled"
-             << ", from=" << from_user_id
-             << ", to=" << to_user_id
-             << ", delivered=" << delivered
-             << ", stored_offline=" << stored_offline
-             << ", stored_persistent=" << stored_persistent
-             << ", message_id=" << server_message_id
-             << ", receiver_private_unread=" << receiver_private_unread
-             << ", receiver_total_unread=" << receiver_total_unread
-             << ", offline_total="
-             << offline_message_store_.TotalCount());
+
+    /*
+     * 一旦已经进入MySQL，
+     * 当前逻辑发送已经被Server接受。
+     *
+     * delivered只表示当前Delivery是否已经完成。
+     */
+    ack.success =
+        stored_persistent;
+
+    ack.delivered =
+        receiver_confirmed_now;
+
+    ack.stored_offline =
+        stored_offline;
+
+    ack.stored_persistent =
+        stored_persistent;
+
+    ack.reused =
+        client_request_reused;
+
+    ack.client_message_id =
+        request.client_message_id;
+
+    ack.message_id =
+        server_message_id;
+
+    ack.from_user_id =
+        from_user_id;
+
+    ack.to_user_id =
+        to_user_id;
+
+    ack.receiver_private_unread =
+        receiver_private_unread;
+
+    ack.receiver_total_unread =
+        receiver_total_unread;
+
+
+    if (receiver_confirmed_now) {
+        if (client_request_reused) {
+            ack.reason =
+                "local_already_receiver_confirmed";
+        } else {
+            ack.reason =
+                "local_receiver_confirmed";
+        }
+    } else if (
+        delivered ||
+        local_delivery_already_completed
+    ) {
+        /*
+        * 已经存在Receiver-visible Send副作用，
+        * 但是Receiver应用层ACK尚未确认。
+        */
+        ack.reason =
+            "local_delivery_awaiting_receiver_ack";
+    } else if (target_online) {
+        ack.reason =
+            "local_push_failed_stored_pending";
+    } else {
+        ack.reason =
+            "target_user_offline";
+    }
+
+
+    send_client_chat_ack(
+        ack
+    );
+
+
+    LOG_INFO(
+        "gateway local chat handled"
+        << ", client_message_id="
+        << request.client_message_id
+        << ", message_id="
+        << server_message_id
+        << ", from="
+        << from_user_id
+        << ", to="
+        << to_user_id
+        << ", target_online="
+        << target_online
+        << ", send_side_effect_committed="
+        << delivered
+        << ", stored_offline="
+        << stored_offline
+        << ", stored_persistent="
+        << stored_persistent
+        << ", reused="
+        << client_request_reused
+        << ", receiver_private_unread="
+        << receiver_private_unread
+        << ", receiver_total_unread="
+        << receiver_total_unread
+    );
 }
-
 
 
 void GatewayServer::
@@ -2544,9 +5281,9 @@ HandleGatewayForwardChatRequest(
      * 只有合法Peer现在才允许进入
      * message_id幂等状态机。
      */
-  const GatewayPeerDedupBeginStatus
+  const MessageDeliveryDedupBeginStatus
         dedup_status =
-            gateway_peer_delivery_deduplicator_.
+            message_delivery_deduplicator_.
                 Begin(
                     request.message_id
                 );
@@ -2559,7 +5296,7 @@ HandleGatewayForwardChatRequest(
         */
         if (
             dedup_status ==
-            GatewayPeerDedupBeginStatus::
+            MessageDeliveryDedupBeginStatus::
                 kAlreadyDelivered
         ) {
             response.status =
@@ -2601,7 +5338,7 @@ HandleGatewayForwardChatRequest(
         */
         if (
             dedup_status ==
-            GatewayPeerDedupBeginStatus::
+            MessageDeliveryDedupBeginStatus::
                 kAlreadyProcessing
         ) {
             response.status =
@@ -2636,7 +5373,7 @@ HandleGatewayForwardChatRequest(
 
         if (
             dedup_status !=
-            GatewayPeerDedupBeginStatus::
+            MessageDeliveryDedupBeginStatus::
                 kAcquired
         ) {
             response.status =
@@ -2665,7 +5402,7 @@ HandleGatewayForwardChatRequest(
      * 都必须Abort()释放Processing状态。
      */
     if (message_repository_ == nullptr) {
-        gateway_peer_delivery_deduplicator_.
+        message_delivery_deduplicator_.
             Abort(
                 request.message_id
             );
@@ -2707,7 +5444,7 @@ HandleGatewayForwardChatRequest(
 
 
     if (!persisted_result.Succeeded()) {
-        gateway_peer_delivery_deduplicator_.
+        message_delivery_deduplicator_.
             Abort(
                 request.message_id
             );
@@ -2745,7 +5482,7 @@ HandleGatewayForwardChatRequest(
     }
 
         if (!persisted_result.Found()) {
-        gateway_peer_delivery_deduplicator_.
+        message_delivery_deduplicator_.
             Abort(
                 request.message_id
             );
@@ -2802,7 +5539,7 @@ HandleGatewayForwardChatRequest(
         persisted_message.content !=
             request.message_body
     ) {
-        gateway_peer_delivery_deduplicator_.
+        message_delivery_deduplicator_.
             Abort(
                 request.message_id
             );
@@ -2843,12 +5580,13 @@ HandleGatewayForwardChatRequest(
                 delivery_status;
 
 
-                    const std::uint32_t
-        delivered_status =
+    const std::uint32_t
+        receiver_confirmed_status =
             static_cast<std::uint32_t>(
                 DeliveryStatus::
-                    kDelivered
+                    kReceiverConfirmed
             );
+
 
     const std::uint32_t
         read_status =
@@ -2860,7 +5598,7 @@ HandleGatewayForwardChatRequest(
 
     if (
         persisted_status ==
-            delivered_status ||
+            receiver_confirmed_status ||
         persisted_status ==
             read_status
     ) {
@@ -2876,7 +5614,7 @@ HandleGatewayForwardChatRequest(
          * 后续重复RPC就不用继续访问MySQL。
          */
         const bool restored =
-            gateway_peer_delivery_deduplicator_.
+            message_delivery_deduplicator_.
                 MarkDelivered(
                     request.message_id
                 );
@@ -2936,7 +5674,7 @@ HandleGatewayForwardChatRequest(
         persisted_status ==
         failed_status
     ) {
-        gateway_peer_delivery_deduplicator_.
+        message_delivery_deduplicator_.
             Abort(
                 request.message_id
             );
@@ -2976,7 +5714,7 @@ HandleGatewayForwardChatRequest(
         persisted_status !=
         pending_status
     ) {
-        gateway_peer_delivery_deduplicator_.
+        message_delivery_deduplicator_.
             Abort(
                 request.message_id
             );
@@ -3031,7 +5769,7 @@ HandleGatewayForwardChatRequest(
         * 所以释放message_id执行权，
         * 允许未来重新Retry。
         */
-        gateway_peer_delivery_deduplicator_.
+        message_delivery_deduplicator_.
             Abort(
                 request.message_id
             );
@@ -3061,150 +5799,261 @@ HandleGatewayForwardChatRequest(
 
 
     /*
-     * 6. 构造普通客户端能够理解的
-     * kChatMessage。
-     *
-     * 内部协议3001到这里终止，
-     * 不能直接把3001发给用户。
-     */
-    Packet forward_packet;
+    * ============================================================
+    * 6. Gateway Peer RPC Domain
+    *        ->
+    *    Receiver Delivery Domain
+    * ============================================================
+    *
+    * packet.seq：
+    *     Gateway A -> Gateway B
+    *     当前一次Peer RPC Attempt身份。
+    *
+    * 它绝对不能继续传播给Receiver。
+    *
+    * Receiver需要新的：
+    *
+    *     kChatDelivery
+    *     +
+    *     independent delivery seq
+    *     +
+    *     stable body.message_id
+    */
 
-    forward_packet.type =
-        MessageType::kChatMessage;
 
-    forward_packet.seq =
-        packet.seq;
+    /*
+    * persisted_message.content保存的是
+    * Server canonical chat body。
+    *
+    * 这里使用已经通过数据库身份校验的
+    * persisted record作为Server Truth，
+    * 而不是直接信任Peer提交的业务body。
+    */
+    std::string message_text;
 
-    forward_packet.body =
-        request.message_body;
+    std::string parse_error;
 
 
     if (
-        !SendPacket(
-            target_connection,
-            forward_packet
+        !ParseCanonicalChatBody(
+            persisted_message.content,
+            persisted_message.from_user_id,
+            persisted_message.to_user_id,
+            &message_text,
+            &parse_error
         )
     ) {
-
-        gateway_peer_delivery_deduplicator_.
+        /*
+        * 目前尚未产生Receiver业务副作用，
+        * 可以安全释放message_id ownership。
+        */
+        message_delivery_deduplicator_.
             Abort(
                 request.message_id
             );
+
+
         response.status =
             GatewayForwardChatStatus::
-                kTargetNotConnected;
+                kInternalError;
+
+        response.duplicate =
+            false;
 
         response.error_message =
-            "target connection became "
-            "unavailable";
+            "invalid persisted chat body: " +
+            parse_error;
 
-        send_response(response);
 
-        LOG_WARN(
-            "gateway forward chat local "
-            "send failed"
-            << ", message_id="
-            << request.message_id
-            << ", source_gateway="
-            << request.source_gateway_id
-            << ", to="
-            << request.to_user_id
+        send_response(
+            response
         );
 
-        return;
-    }
 
-
-
-        /*
-     * 7. 本地客户端发送路径已经接受消息。
-     *
-     * 此时用户侧副作用已经发生，
-     * 因此立即把共享MySQL中的消息状态
-     * 从Pending推进到Delivered。
-     *
-     * 这样即使后续Gateway Peer Response
-     * 丢失，Gateway B重启以后仍然可以
-     * 从MySQL恢复“已经投递”的事实。
-     */
-    const UpdatePrivateMessagesResult
-        durable_mark_result =
-            message_repository_->
-                MarkDelivered(
-                    request.message_id
-                );
-
-
-    if (!durable_mark_result.Succeeded()) {
-        /*
-         * 非常重要：
-         *
-         * 此时绝对不能Abort内存Dedup。
-         *
-         * 因为SendPacket已经成功，
-         * 用户侧副作用已经发生。
-         *
-         * 如果这里Abort，
-         * 随后的Retry可能再次Push，
-         * 直接制造重复消息。
-         */
         LOG_ERROR(
-            "gateway peer local delivery "
-            "succeeded but durable mark failed"
+            "gateway peer receiver delivery "
+            "rejected invalid persisted chat body"
             << ", message_id="
             << request.message_id
             << ", source_gateway="
             << request.source_gateway_id
             << ", from="
-            << request.from_user_id
+            << persisted_message.from_user_id
             << ", to="
-            << request.to_user_id
-            << ", status="
-            << MessageMutationStatusToString(
-                   durable_mark_result.status
-               )
+            << persisted_message.to_user_id
             << ", error="
-            << durable_mark_result.message
+            << parse_error
         );
-        } else if (
-            durable_mark_result.
-                affected_rows == 0
+
+
+        return;
+    }
+
+
+    Packet forward_packet;
+
+    std::string
+        delivery_submit_error;
+
+
+    const
+        ReceiverDeliverySubmitStatus
+        delivery_submit_status =
+            SubmitReceiverChatDelivery(
+                target_connection,
+                persisted_message.message_id,
+                persisted_message.from_user_id,
+                persisted_message.to_user_id,
+                message_text,
+                &forward_packet,
+                &delivery_submit_error
+            );
+
+
+    const bool
+        receiver_already_confirmed =
+            delivery_submit_status ==
+            ReceiverDeliverySubmitStatus::
+                kAlreadyConfirmed;
+
+
+    if (
+        delivery_submit_status !=
+            ReceiverDeliverySubmitStatus::
+                kSubmitted &&
+        !receiver_already_confirmed
+    ) {
+        /*
+        * 还没有产生Receiver Send提交。
+        *
+        * 当前Peer Delivery Ownership可以安全释放。
+        */
+        message_delivery_deduplicator_.
+            Abort(
+                request.message_id
+            );
+
+
+        if (
+            delivery_submit_status ==
+            ReceiverDeliverySubmitStatus::
+                kConnectionUnavailable
         ) {
-            LOG_WARN(
-                "gateway peer durable delivery "
-                "mark changed zero rows"
-                << ", message_id="
-                << request.message_id
-                << ", source_gateway="
-                << request.source_gateway_id
-                << ", from="
-                << request.from_user_id
-                << ", to="
-                << request.to_user_id
-            );
+            response.status =
+                GatewayForwardChatStatus::
+                    kTargetNotConnected;
         } else {
-            LOG_INFO(
-                "gateway peer durable delivery "
-                "state advanced"
-                << ", message_id="
-                << request.message_id
-                << ", source_gateway="
-                << request.source_gateway_id
-                << ", from="
-                << request.from_user_id
-                << ", to="
-                << request.to_user_id
-                << ", affected_rows="
-                << durable_mark_result.
-                    affected_rows
-            );
+            response.status =
+                GatewayForwardChatStatus::
+                    kInternalError;
         }
 
+
+        response.duplicate =
+            false;
+
+        response.error_message =
+            delivery_submit_error;
+
+
+        send_response(
+            response
+        );
+
+
+        LOG_WARN(
+            "gateway peer tracked receiver "
+            "delivery submission failed"
+            << ", message_id="
+            << request.message_id
+            << ", source_gateway="
+            << request.source_gateway_id
+            << ", peer_seq="
+            << packet.seq
+            << ", from="
+            << persisted_message.from_user_id
+            << ", to="
+            << persisted_message.to_user_id
+            << ", submit_status="
+            << static_cast<int>(
+                delivery_submit_status
+            )
+            << ", error="
+            << delivery_submit_error
+        );
+
+
+        return;
+    }
+
+
+    if (receiver_already_confirmed) {
+        /*
+        * Tracker已经拥有Receiver确认事实。
+        *
+        * 当前Peer RPC属于业务重复请求，
+        * 不再Push Receiver。
+        */
+        response.duplicate =
+            true;
+
+
+        LOG_INFO(
+            "gateway peer receiver delivery "
+            "already confirmed by tracker"
+            << ", message_id="
+            << request.message_id
+            << ", source_gateway="
+            << request.source_gateway_id
+            << ", peer_seq="
+            << packet.seq
+            << ", from="
+            << persisted_message.from_user_id
+            << ", to="
+            << persisted_message.to_user_id
+        );
+    } else {
+        LOG_INFO(
+            "gateway submitted tracked peer "
+            "receiver chat delivery"
+            << ", message_id="
+            << request.message_id
+            << ", source_gateway="
+            << request.source_gateway_id
+            << ", peer_seq="
+            << packet.seq
+            << ", delivery_seq="
+            << forward_packet.seq
+            << ", from="
+            << persisted_message.from_user_id
+            << ", to="
+            << persisted_message.to_user_id
+        );
+    }
+
+
     /*
-     * 7. 服务端RPC成功。
-     */
+    * ============================================================
+    * Receiver Delivery已经提交。
+    * ============================================================
+    *
+    * 注意：
+    *
+    * 这里仅允许推进Process-local Send Side Effect状态。
+    *
+    * 绝对不能推进MySQL ReceiverConfirmed。
+    *
+    * Durable状态仍保持：
+    *
+    *     Pending
+    *
+    * 只有Receiver kChatDeliveryAck
+    * 才允许：
+    *
+    *     Pending -> ReceiverConfirmed
+    */
     const bool dedup_marked =
-        gateway_peer_delivery_deduplicator_.
+        message_delivery_deduplicator_.
             MarkDelivered(
                 request.message_id
             );
@@ -3240,6 +6089,8 @@ HandleGatewayForwardChatRequest(
 
     response.error_message.clear();
 
+    response.duplicate = receiver_already_confirmed;
+
     send_response(response);
 
     LOG_INFO(
@@ -3253,8 +6104,10 @@ HandleGatewayForwardChatRequest(
         << request.from_user_id
         << ", to="
         << request.to_user_id
-        << ", seq="
+        << ", peer_seq="
         << packet.seq
+        << ", delivery_seq="
+        << forward_packet.seq
     );
 }
 
@@ -5064,82 +7917,594 @@ void GatewayServer::PushPersistentOfflineMessages(
         return;
     }
 
-    auto pending_result =
-        message_repository_->
-            ListPendingMessages(
-                user_id,
-                100
-            );
+    /*
+     * Persistent Replay单页大小。
+     *
+     * Repository单次查询最多返回100条，
+     * Gateway显式保持相同page size。
+     */
+    constexpr std::size_t
+        kPendingReplayPageSize = 100;
 
-    if (!pending_result.Succeeded()) {
-        LOG_WARN(
-            "gateway list persistent "
-            "offline messages failed"
-            << ", user_id="
-            << user_id
-            << ", status="
-            << MessageQueryStatusToString(
-                pending_result.status
-            )
-            << ", message="
-            << pending_result.message
-        );
+    /*
+     * Keyset Pagination cursor。
+     *
+     * server message_id从1开始，0保留为无效值，
+     * 因此after_message_id=0表示从最早Pending消息开始。
+     *
+     * 注意：
+     * cursor只表示“本轮Replay扫描到哪里”，
+     * 绝不表示消息已经ReceiverConfirmed。
+     */
+    std::uint64_t
+        after_message_id = 0;
 
-        return;
-    }
+    std::size_t
+        total_scanned = 0;
 
-    auto pending_messages =
-        std::move(
-            pending_result.records
-        );
+    std::size_t
+        page_index = 0;
 
-    if (pending_messages.empty()) {
-        return;
-    }
 
-    LOG_INFO("gateway pushing persistent offline messages"
-             << ", user_id=" << user_id
-             << ", count=" << pending_messages.size());
-
-    std::vector<std::uint64_t> delivered_message_ids;
-    delivered_message_ids.reserve(pending_messages.size());
-
-    for (const auto& message : pending_messages) {
-        Packet packet;
-        packet.type = MessageType::kChatMessage;
-        packet.seq = static_cast<std::uint32_t>(message.message_id);
-        packet.body = message.content;
-
-        if (SendPacket(connection, packet)) {
-            delivered_message_ids.push_back(message.message_id);
-        }
-    }
-
-    if (!delivered_message_ids.empty()) {
-        const UpdatePrivateMessagesResult
-            delivered_result =
-                message_repository_->
-                    MarkDeliveredBatch(
-                        delivered_message_ids
-                    );
-
-        if (!delivered_result.Succeeded()) {
-            LOG_WARN(
-                "gateway mark persistent "
-                "offline messages delivered "
-                "failed"
+    for (;;) {
+        /*
+         * 每一页开始前都重新确认TCP connection仍然可用。
+         */
+        if (
+            !connection ||
+            !connection->IsConnected()
+        ) {
+            LOG_INFO(
+                "gateway persistent offline replay stopped: "
+                "receiver connection unavailable"
                 << ", user_id="
                 << user_id
-                << ", requested_count="
-                << delivered_message_ids.size()
+                << ", after_message_id="
+                << after_message_id
+                << ", total_scanned="
+                << total_scanned
+            );
+
+            return;
+        }
+
+
+        /*
+         * Connection仍然Connected并不代表它仍然是该用户的
+         * Current Session。
+         *
+         * Duplicate Login可能已经通过BindOrReplace()把user_id
+         * 绑定到另一条新Connection。旧Connection在真正close前
+         * 可能仍然短暂处于Connected状态，此时不能继续向旧Session
+         * replay persistent messages。
+         */
+        const TcpConnectionPtr
+            current_connection =
+                session_manager_.
+                    FindConnection(
+                        user_id
+                    );
+
+
+        if (
+            !current_connection ||
+            current_connection != connection
+        ) {
+            LOG_INFO(
+                "gateway persistent offline replay stopped: "
+                "session is no longer current"
+                << ", user_id="
+                << user_id
+                << ", after_message_id="
+                << after_message_id
+                << ", total_scanned="
+                << total_scanned
+            );
+
+            return;
+        }
+
+
+        /*
+         * 按稳定server message_id进行Keyset Pagination。
+         *
+         * 第1页：message_id > 0
+         * 第2页：message_id > page1_last_message_id
+         * ...
+         *
+         * 不能反复调用ListPendingMessages(user_id, 100)，
+         * 因为上一页在Receiver ACK之前仍然是Pending，
+         * 会被下一次查询再次选中。
+         */
+        auto pending_result =
+            message_repository_->
+                ListPendingMessagesAfter(
+                    user_id,
+                    after_message_id,
+                    kPendingReplayPageSize
+                );
+
+
+        if (!pending_result.Succeeded()) {
+            LOG_WARN(
+                "gateway list persistent "
+                "offline messages page failed"
+                << ", user_id="
+                << user_id
+                << ", after_message_id="
+                << after_message_id
                 << ", status="
-                << MessageMutationStatusToString(
-                    delivered_result.status
+                << MessageQueryStatusToString(
+                    pending_result.status
                 )
                 << ", message="
-                << delivered_result.message
+                << pending_result.message
+            );
+
+            return;
+        }
+
+
+        auto pending_messages =
+            std::move(
+                pending_result.records
+            );
+
+
+        if (pending_messages.empty()) {
+            break;
+        }
+
+
+        ++page_index;
+
+
+        /*
+         * Repository契约要求：
+         *
+         * ORDER BY message_id ASC
+         *
+         * 因此当前页最后一个message_id必须严格大于cursor。
+         * 如果未来SQL或Repository实现被改坏，这个防御可以避免
+         * cursor不前进造成无限循环。
+         */
+        const std::uint64_t
+            page_last_message_id =
+                pending_messages.back().
+                    message_id;
+
+
+        if (
+            page_last_message_id == 0 ||
+            page_last_message_id <=
+                after_message_id
+        ) {
+            LOG_ERROR(
+                "gateway persistent offline replay "
+                "cursor did not advance"
+                << ", user_id="
+                << user_id
+                << ", page_index="
+                << page_index
+                << ", after_message_id="
+                << after_message_id
+                << ", page_last_message_id="
+                << page_last_message_id
+            );
+
+            return;
+        }
+
+
+        LOG_INFO(
+            "gateway pushing persistent offline "
+            "message page"
+            << ", user_id="
+            << user_id
+            << ", page_index="
+            << page_index
+            << ", after_message_id="
+            << after_message_id
+            << ", page_count="
+            << pending_messages.size()
+            << ", page_last_message_id="
+            << page_last_message_id
+        );
+
+
+        /*
+         * 这里只收集：
+         *
+         * Tracker已经由真实Receiver ACK确认，
+         * 但MySQL仍然因为之前写入失败而保持Pending
+         * 的消息。
+         *
+         * 绝不能把“刚刚Send成功”的message_id
+         * 放进这里。
+         *
+         * repair集合保持Page-local，避免大Backlog时
+         * 一次累积过多message_id。
+         */
+        std::vector<std::uint64_t>
+            receiver_confirmed_repair_ids;
+
+        receiver_confirmed_repair_ids.reserve(
+            pending_messages.size()
+        );
+
+
+        for (
+            const auto& message :
+                pending_messages
+        ) {
+            /*
+             * Replay期间Receiver可能断线。
+             */
+            if (!connection->IsConnected()) {
+                LOG_INFO(
+                    "gateway persistent offline replay stopped "
+                    "during page: receiver disconnected"
+                    << ", user_id="
+                    << user_id
+                    << ", message_id="
+                    << message.message_id
+                    << ", page_index="
+                    << page_index
+                );
+
+                return;
+            }
+
+
+            /*
+             * Replay期间也可能发生Duplicate Login，
+             * 因此每条消息提交前再次确认当前Session ownership。
+             */
+            const TcpConnectionPtr
+                active_connection =
+                    session_manager_.
+                        FindConnection(
+                            user_id
+                        );
+
+
+            if (
+                !active_connection ||
+                active_connection != connection
+            ) {
+                LOG_INFO(
+                    "gateway persistent offline replay stopped "
+                    "during page: session replaced"
+                    << ", user_id="
+                    << user_id
+                    << ", message_id="
+                    << message.message_id
+                    << ", page_index="
+                    << page_index
+                );
+
+                return;
+            }
+
+
+            /*
+             * 当前DB content保存的是历史canonical body：
+             *
+             * {
+             *   "from": ...,
+             *   "to": ...,
+             *   "text": ...
+             * }
+             *
+             * Receiver的新Delivery协议要求：
+             *
+             * message_id由Record提供，
+             * from/to由Record提供，
+             * text从canonical body提取。
+             */
+            std::string message_text;
+
+            std::string
+                parse_error;
+
+
+            if (
+                !ParseCanonicalChatBody(
+                    message.content,
+                    message.from_user_id,
+                    message.to_user_id,
+                    &message_text,
+                    &parse_error
+                )
+            ) {
+                LOG_WARN(
+                    "gateway rejected invalid "
+                    "persistent offline chat body"
+                    << ", user_id="
+                    << user_id
+                    << ", message_id="
+                    << message.message_id
+                    << ", from="
+                    << message.from_user_id
+                    << ", to="
+                    << message.to_user_id
+                    << ", error="
+                    << parse_error
+                );
+
+                /*
+                 * Poison record不能阻塞整个Page或后续Page。
+                 * 当前消息仍保持Pending，后续登录还可以再次观察，
+                 * 但本轮cursor允许继续向后推进。
+                 */
+                continue;
+            }
+
+
+            Packet packet;
+
+            std::string
+                submit_error;
+
+
+            const
+                ReceiverDeliverySubmitStatus
+                submit_status =
+                    SubmitReceiverChatDelivery(
+                        connection,
+                        message.message_id,
+                        message.from_user_id,
+                        message.to_user_id,
+                        message_text,
+                        &packet,
+                        &submit_error
+                    );
+
+
+            if (
+                submit_status ==
+                    ReceiverDeliverySubmitStatus::
+                        kSubmitted
+            ) {
+                /*
+                 * 网络Attempt已经提交，
+                 * 但Receiver应用层尚未确认。
+                 *
+                 * DB必须继续保持Pending。
+                 *
+                 * SubmitReceiverChatDelivery内部已经：
+                 *
+                 * Build
+                 * → Encode
+                 * → RegisterAttempt
+                 * → Send
+                 * → ACK Timer
+                 *
+                 * 后续只有HandleReceiverChatDeliveryAck()
+                 * 才能推进ReceiverConfirmed。
+                 */
+                LOG_INFO(
+                    "gateway submitted tracked "
+                    "persistent offline receiver "
+                    "chat delivery and awaiting "
+                    "receiver ack"
+                    << ", user_id="
+                    << user_id
+                    << ", message_id="
+                    << message.message_id
+                    << ", delivery_seq="
+                    << packet.seq
+                    << ", from="
+                    << message.from_user_id
+                    << ", to="
+                    << message.to_user_id
+                    << ", page_index="
+                    << page_index
+                );
+
+                continue;
+            }
+
+
+            if (
+                submit_status ==
+                    ReceiverDeliverySubmitStatus::
+                        kAlreadyConfirmed
+            ) {
+                /*
+                 * 只有这个分支允许进入durable repair集合。
+                 *
+                 * 原因：
+                 *
+                 * Tracker已经拥有真实Receiver ACK证据，
+                 * 但ListPendingMessagesAfter仍然返回M，
+                 * 说明Runtime与Durable State可能出现：
+                 *
+                 * Tracker = Confirmed
+                 * DB      = Pending
+                 *
+                 * 因此这里可以安全修复：
+                 *
+                 * Pending -> ReceiverConfirmed
+                 */
+                receiver_confirmed_repair_ids.
+                    push_back(
+                        message.message_id
+                    );
+
+
+                LOG_INFO(
+                    "gateway persistent offline replay "
+                    "found runtime-confirmed message "
+                    "requiring durable repair"
+                    << ", user_id="
+                    << user_id
+                    << ", message_id="
+                    << message.message_id
+                    << ", page_index="
+                    << page_index
+                );
+
+
+                continue;
+            }
+
+
+            if (
+                submit_status ==
+                    ReceiverDeliverySubmitStatus::
+                        kConnectionUnavailable
+            ) {
+                LOG_INFO(
+                    "gateway persistent offline replay stopped: "
+                    "connection became unavailable during submit"
+                    << ", user_id="
+                    << user_id
+                    << ", message_id="
+                    << message.message_id
+                    << ", page_index="
+                    << page_index
+                );
+
+                return;
+            }
+
+
+            /*
+             * kBuildFailed / kEncodeFailed / kTrackerRejected /
+             * kAttemptLimitReached / kStaleAttempt等单条失败，
+             * 不应该让一个Poison/Exceptional Record阻塞后续消息。
+             *
+             * 记录问题后继续扫描本页。
+             */
+            LOG_WARN(
+                "gateway persistent offline tracked "
+                "receiver delivery submission failed"
+                << ", user_id="
+                << user_id
+                << ", message_id="
+                << message.message_id
+                << ", from="
+                << message.from_user_id
+                << ", to="
+                << message.to_user_id
+                << ", submit_status="
+                << static_cast<int>(
+                    submit_status
+                )
+                << ", error="
+                << submit_error
+                << ", page_index="
+                << page_index
+            );
+
+
+            LOG_WARN(
+                "gateway persistent offline "
+                "receiver delivery send failed"
+                << ", user_id="
+                << user_id
+                << ", message_id="
+                << message.message_id
+                << ", delivery_seq="
+                << packet.seq
+                << ", page_index="
+                << page_index
             );
         }
+
+
+        if (
+            !receiver_confirmed_repair_ids.empty()
+        ) {
+            const UpdatePrivateMessagesResult
+                repair_result =
+                    message_repository_->
+                        MarkReceiverConfirmedBatch(
+                            receiver_confirmed_repair_ids
+                        );
+
+
+            if (!repair_result.Succeeded()) {
+                LOG_WARN(
+                    "gateway persistent offline "
+                    "receiver-confirmed durable "
+                    "repair failed"
+                    << ", user_id="
+                    << user_id
+                    << ", requested_count="
+                    << receiver_confirmed_repair_ids.
+                        size()
+                    << ", status="
+                    << MessageMutationStatusToString(
+                        repair_result.status
+                    )
+                    << ", message="
+                    << repair_result.message
+                    << ", page_index="
+                    << page_index
+                );
+            } else {
+                LOG_INFO(
+                    "gateway persistent offline "
+                    "receiver-confirmed durable "
+                    "repair completed"
+                    << ", user_id="
+                    << user_id
+                    << ", requested_count="
+                    << receiver_confirmed_repair_ids.
+                        size()
+                    << ", affected_rows="
+                    << repair_result.affected_rows
+                    << ", page_index="
+                    << page_index
+                );
+            }
+        }
+
+
+        /*
+         * 当前Page已经完整扫描结束。
+         *
+         * total_scanned只表示本轮Replay扫描量，
+         * 不等于ReceiverConfirmed数量。
+         */
+        total_scanned +=
+            pending_messages.size();
+
+
+        /*
+         * 不足一整页表示查询这一刻已经没有下一页。
+         */
+        if (
+            pending_messages.size() <
+                kPendingReplayPageSize
+        ) {
+            break;
+        }
+
+
+        /*
+         * 下一页只查询严格大于当前页最后一个M的记录。
+         *
+         * 即使当前Page仍全部是Pending，
+         * 也不会被下一页再次选中。
+         */
+        after_message_id =
+            page_last_message_id;
+    }
+
+
+    if (total_scanned != 0) {
+        LOG_INFO(
+            "gateway persistent offline replay completed"
+            << ", user_id="
+            << user_id
+            << ", page_count="
+            << page_index
+            << ", total_scanned="
+            << total_scanned
+        );
     }
 }
 

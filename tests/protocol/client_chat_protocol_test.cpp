@@ -1,4 +1,5 @@
 #include "common/protocol/ClientChatProtocol.h"
+#include "common/protocol/Packet.h"
 #include "tests/concurrency/TestFramework.h"
 
 #include <string>
@@ -357,5 +358,416 @@ namespace tinyimx::test{
             );
         }
     );
+
+    runner.Add(
+    "ClientChatProtocol.DeliveryMessageTypes",
+    []() {
+        TINYIMX_EXPECT_TRUE(
+            tinyimx::IsKnownMessageType(
+                tinyimx::MessageType::
+                    kChatDelivery
+            )
+        );
+
+        TINYIMX_EXPECT_TRUE(
+            tinyimx::IsKnownMessageType(
+                tinyimx::MessageType::
+                    kChatDeliveryAck
+            )
+        );
+
+        TINYIMX_EXPECT_TRUE(
+            !tinyimx::
+                IsGatewayInternalMessageType(
+                    tinyimx::MessageType::
+                        kChatDelivery
+                )
+        );
+
+        TINYIMX_EXPECT_TRUE(
+            !tinyimx::
+                IsGatewayInternalMessageType(
+                    tinyimx::MessageType::
+                        kChatDeliveryAck
+                )
+        );
+
+        TINYIMX_EXPECT_EQ(
+            tinyimx::MessageTypeToString(
+                tinyimx::MessageType::
+                    kChatDelivery
+            ),
+            std::string("chat_delivery")
+        );
+
+        TINYIMX_EXPECT_EQ(
+            tinyimx::MessageTypeToString(
+                tinyimx::MessageType::
+                    kChatDeliveryAck
+            ),
+            std::string(
+                "chat_delivery_ack"
+            )
+        );
+    }
+);
+
+
+runner.Add(
+    "ClientChatProtocol.DeliveryRoundTrip",
+    []() {
+        tinyimx::ServerChatDelivery
+            delivery;
+
+        delivery.message_id =
+            105;
+
+        delivery.from_user_id =
+            10001;
+
+        delivery.to_user_id =
+            10002;
+
+        delivery.text =
+            "receiver delivery";
+
+
+        std::string body;
+        std::string error;
+
+
+        TINYIMX_EXPECT_TRUE(
+            tinyimx::
+                SerializeServerChatDelivery(
+                    delivery,
+                    &body,
+                    &error
+                )
+        );
+
+
+        /*
+         * seq不属于body；
+         * client_message_id也不属于
+         * Receiver Delivery Domain。
+         */
+        TINYIMX_EXPECT_TRUE(
+            body.find("\"seq\"") ==
+                std::string::npos
+        );
+
+        TINYIMX_EXPECT_TRUE(
+            body.find(
+                "client_message_id"
+            ) ==
+                std::string::npos
+        );
+
+
+        tinyimx::ServerChatDelivery
+            parsed;
+
+
+        TINYIMX_EXPECT_TRUE(
+            tinyimx::
+                DeserializeServerChatDelivery(
+                    body,
+                    &parsed,
+                    &error
+                )
+        );
+
+
+        TINYIMX_EXPECT_EQ(
+            parsed.message_id,
+            std::uint64_t{105}
+        );
+
+        TINYIMX_EXPECT_EQ(
+            parsed.from_user_id,
+            std::uint64_t{10001}
+        );
+
+        TINYIMX_EXPECT_EQ(
+            parsed.to_user_id,
+            std::uint64_t{10002}
+        );
+
+        TINYIMX_EXPECT_EQ(
+            parsed.text,
+            std::string(
+                "receiver delivery"
+            )
+        );
+    }
+);
+
+
+runner.Add(
+    "ClientChatProtocol.DeliveryRejectsZeroMessageId",
+    []() {
+        tinyimx::ServerChatDelivery
+            delivery;
+
+        delivery.message_id =
+            0;
+
+        delivery.from_user_id =
+            10001;
+
+        delivery.to_user_id =
+            10002;
+
+        delivery.text =
+            "invalid";
+
+
+        std::string body;
+        std::string error;
+
+
+        TINYIMX_EXPECT_TRUE(
+            !tinyimx::
+                SerializeServerChatDelivery(
+                    delivery,
+                    &body,
+                    &error
+                )
+        );
+
+        TINYIMX_EXPECT_TRUE(
+            !error.empty()
+        );
+    }
+);
+
+
+runner.Add(
+    "ClientChatProtocol.DeliveryRejectsEmptyText",
+    []() {
+        tinyimx::ServerChatDelivery
+            delivery;
+
+        delivery.message_id =
+            105;
+
+        delivery.from_user_id =
+            10001;
+
+        delivery.to_user_id =
+            10002;
+
+
+        std::string body;
+        std::string error;
+
+
+        TINYIMX_EXPECT_TRUE(
+            !tinyimx::
+                SerializeServerChatDelivery(
+                    delivery,
+                    &body,
+                    &error
+                )
+        );
+
+        TINYIMX_EXPECT_TRUE(
+            !error.empty()
+        );
+    }
+);
+
+
+runner.Add(
+    "ClientChatProtocol.DeliveryRejectsMissingMessageId",
+    []() {
+        tinyimx::ServerChatDelivery
+            parsed;
+
+        std::string error;
+
+
+        TINYIMX_EXPECT_TRUE(
+            !tinyimx::
+                DeserializeServerChatDelivery(
+                    R"({"from":10001,"to":10002,"text":"hello"})",
+                    &parsed,
+                    &error
+                )
+        );
+
+        TINYIMX_EXPECT_TRUE(
+            !error.empty()
+        );
+    }
+);
+
+
+runner.Add(
+    "ClientChatProtocol.DeliveryRejectsStringMessageId",
+    []() {
+        tinyimx::ServerChatDelivery
+            parsed;
+
+        std::string error;
+
+
+        TINYIMX_EXPECT_TRUE(
+            !tinyimx::
+                DeserializeServerChatDelivery(
+                    R"({"message_id":"105","from":10001,"to":10002,"text":"hello"})",
+                    &parsed,
+                    &error
+                )
+        );
+
+        TINYIMX_EXPECT_TRUE(
+            !error.empty()
+        );
+    }
+);
+
+
+runner.Add(
+    "ClientChatProtocol.DeliveryRejectsMalformedJson",
+    []() {
+        tinyimx::ServerChatDelivery
+            parsed;
+
+        std::string error;
+
+
+        TINYIMX_EXPECT_TRUE(
+            !tinyimx::
+                DeserializeServerChatDelivery(
+                    R"({"message_id":105)",
+                    &parsed,
+                    &error
+                )
+        );
+
+        TINYIMX_EXPECT_TRUE(
+            !error.empty()
+        );
+    }
+);
+
+
+runner.Add(
+    "ClientChatProtocol.DeliveryAckRoundTrip",
+    []() {
+        tinyimx::ReceiverChatDeliveryAck
+            ack;
+
+        ack.message_id =
+            105;
+
+
+        std::string body;
+        std::string error;
+
+
+        TINYIMX_EXPECT_TRUE(
+            tinyimx::
+                SerializeReceiverChatDeliveryAck(
+                    ack,
+                    &body,
+                    &error
+                )
+        );
+
+
+        TINYIMX_EXPECT_TRUE(
+            body.find(
+                "receiver_user_id"
+            ) ==
+                std::string::npos
+        );
+
+        TINYIMX_EXPECT_TRUE(
+            body.find(
+                "client_message_id"
+            ) ==
+                std::string::npos
+        );
+
+
+        tinyimx::ReceiverChatDeliveryAck
+            parsed;
+
+
+        TINYIMX_EXPECT_TRUE(
+            tinyimx::
+                DeserializeReceiverChatDeliveryAck(
+                    body,
+                    &parsed,
+                    &error
+                )
+        );
+
+
+        TINYIMX_EXPECT_EQ(
+            parsed.message_id,
+            std::uint64_t{105}
+        );
+    }
+);
+
+
+runner.Add(
+    "ClientChatProtocol.DeliveryAckRejectsZeroMessageId",
+    []() {
+        tinyimx::ReceiverChatDeliveryAck
+            ack;
+
+        ack.message_id =
+            0;
+
+
+        std::string body;
+        std::string error;
+
+
+        TINYIMX_EXPECT_TRUE(
+            !tinyimx::
+                SerializeReceiverChatDeliveryAck(
+                    ack,
+                    &body,
+                    &error
+                )
+        );
+
+        TINYIMX_EXPECT_TRUE(
+            !error.empty()
+        );
+    }
+);
+
+
+runner.Add(
+    "ClientChatProtocol.DeliveryAckRejectsMissingMessageId",
+    []() {
+        tinyimx::ReceiverChatDeliveryAck
+            parsed;
+
+        std::string error;
+
+
+        TINYIMX_EXPECT_TRUE(
+            !tinyimx::
+                DeserializeReceiverChatDeliveryAck(
+                    R"({})",
+                    &parsed,
+                    &error
+                )
+        );
+
+        TINYIMX_EXPECT_TRUE(
+            !error.empty()
+        );
+    }
+);
+
+
 }
 }

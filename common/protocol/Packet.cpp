@@ -57,6 +57,12 @@ std::string MessageTypeToString(MessageType type) {
         case MessageType::kFriendRequestRejectResponse:
             return "friend_request_reject_response";
 
+        case MessageType::kChatDelivery:
+            return "chat_delivery";
+
+        case MessageType::kChatDeliveryAck:
+            return "chat_delivery_ack";
+
         case MessageType::kGatewayForwardChatRequest:
             return "gateway_forward_chat_request";
         case MessageType::kGatewayForwardChatResponse:
@@ -103,6 +109,9 @@ bool IsKnownMessageType(MessageType type) {
 
         case MessageType::kFriendRequestRejectRequest:
         case MessageType::kFriendRequestRejectResponse:
+
+        case MessageType::kChatDelivery:
+        case MessageType::kChatDeliveryAck:
 
         case MessageType::kGatewayForwardChatRequest:
         case MessageType::kGatewayForwardChatResponse:

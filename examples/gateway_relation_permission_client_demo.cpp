@@ -1,4 +1,5 @@
 #include "common/net/Buffer.h"
+#include "common/protocol/ClientChatProtocol.h"
 #include "common/protocol/ProtocolCodec.h"
 
 #include <arpa/inet.h>
@@ -11,10 +12,34 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <chrono>
 
 namespace {
 
 using Json = nlohmann::json;
+
+
+std::string MakeClientMessageId(
+    const std::string& prefix,
+    std::uint32_t seq
+) {
+    const auto now =
+        std::chrono::system_clock::now()
+            .time_since_epoch();
+
+    const auto nanoseconds =
+        std::chrono::duration_cast<
+            std::chrono::nanoseconds
+        >(now).count();
+
+
+    return
+        prefix +
+        std::to_string(nanoseconds) +
+        "-" +
+        std::to_string(seq);
+}
+
 
 bool SetSocketTimeout(int fd, int seconds) {
     timeval timeout {};
@@ -181,20 +206,62 @@ tinyimx::Packet MakeLoginRequest(const std::string& username,
     return packet;
 }
 
-tinyimx::Packet MakeChatMessage(std::uint64_t to_user_id,
-                                 const std::string& text,
-                                 std::uint32_t seq) {
+
+tinyimx::Packet MakeChatMessage(
+    std::uint64_t to_user_id,
+    const std::string& text,
+    std::uint32_t seq,
+    const std::string& client_message_id
+) {
+    tinyimx::ClientChatRequest request;
+
+    request.client_message_id =
+        client_message_id;
+
+    request.to_user_id =
+        to_user_id;
+
+    request.text =
+        text;
+
+
+    std::string body;
+    std::string error_message;
+
+
+    if (
+        !tinyimx::
+            SerializeClientChatRequest(
+                request,
+                &body,
+                &error_message
+            )
+    ) {
+        std::cerr
+            << "serialize client chat request failed"
+            << ", error="
+            << error_message
+            << '\n';
+
+        return {};
+    }
+
+
     tinyimx::Packet packet;
-    packet.type = tinyimx::MessageType::kChatMessage;
-    packet.seq = seq;
+
+    packet.type =
+        tinyimx::MessageType::kChatMessage;
+
+    packet.seq =
+        seq;
+
     packet.body =
-        Json{
-            {"to", to_user_id},
-            {"text", text}
-        }.dump();
+        std::move(body);
+
 
     return packet;
 }
+
 
 void PrintPacket(const std::string& tag,
                  const tinyimx::Packet& packet) {
@@ -320,11 +387,27 @@ bool SendAndExpectRejected(
     std::uint32_t seq,
     const std::string& expected_reason
 ) {
-    if (!SendPacket(
+    const std::string client_message_id =
+        MakeClientMessageId(
+            "m12-relation-",
+            seq
+        );
+
+    if (
+        !SendPacket(
             fd,
             codec,
-            MakeChatMessage(to_user_id, text, seq))) {
-        std::cerr << "send chat failed\n";
+            MakeChatMessage(
+                to_user_id,
+                text,
+                seq,
+                client_message_id
+            )
+        )
+    ) {
+        std::cerr
+            << "send chat failed\n";
+
         return false;
     }
 

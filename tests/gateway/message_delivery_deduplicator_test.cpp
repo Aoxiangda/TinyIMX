@@ -1,6 +1,6 @@
 #include "tests/concurrency/TestFramework.h"
 
-#include "gateway/GatewayPeerDeliveryDeduplicator.h"
+#include "gateway/MessageDeliveryDeduplicator.h"
 
 #include <atomic>
 #include <cstdint>
@@ -11,20 +11,20 @@ namespace tinyimx::test {
 
 
 void
-RegisterGatewayPeerDeliveryDeduplicatorTests(
+RegisterMessageDeliveryDeduplicatorTests(
     TestRunner& runner
 ) {
     runner.Add(
-        "GatewayPeerDeliveryDeduplicator."
+        "MessageDeliveryDeduplicator."
         "SuppressesDeliveredDuplicate",
         []() {
-            GatewayPeerDeliveryDeduplicator
+            MessageDeliveryDeduplicator
                 deduplicator(100);
 
 
             TINYIMX_EXPECT_EQ(
                 deduplicator.Begin(65),
-                GatewayPeerDedupBeginStatus::
+                MessageDeliveryDedupBeginStatus::
                     kAcquired
             );
 
@@ -37,7 +37,7 @@ RegisterGatewayPeerDeliveryDeduplicatorTests(
 
             TINYIMX_EXPECT_EQ(
                 deduplicator.Begin(65),
-                GatewayPeerDedupBeginStatus::
+                MessageDeliveryDedupBeginStatus::
                     kAlreadyDelivered
             );
         }
@@ -45,16 +45,16 @@ RegisterGatewayPeerDeliveryDeduplicatorTests(
 
 
     runner.Add(
-        "GatewayPeerDeliveryDeduplicator."
+        "MessageDeliveryDeduplicator."
         "AbortAllowsRetry",
         []() {
-            GatewayPeerDeliveryDeduplicator
+            MessageDeliveryDeduplicator
                 deduplicator(100);
 
 
             TINYIMX_EXPECT_EQ(
                 deduplicator.Begin(66),
-                GatewayPeerDedupBeginStatus::
+                MessageDeliveryDedupBeginStatus::
                     kAcquired
             );
 
@@ -69,7 +69,7 @@ RegisterGatewayPeerDeliveryDeduplicatorTests(
              */
             TINYIMX_EXPECT_EQ(
                 deduplicator.Begin(66),
-                GatewayPeerDedupBeginStatus::
+                MessageDeliveryDedupBeginStatus::
                     kAcquired
             );
         }
@@ -77,10 +77,10 @@ RegisterGatewayPeerDeliveryDeduplicatorTests(
 
 
     runner.Add(
-        "GatewayPeerDeliveryDeduplicator."
+        "MessageDeliveryDeduplicator."
         "ConcurrentBeginHasSingleOwner",
         []() {
-            GatewayPeerDeliveryDeduplicator
+            MessageDeliveryDeduplicator
                 deduplicator(100);
 
 
@@ -115,7 +115,7 @@ RegisterGatewayPeerDeliveryDeduplicatorTests(
 
                         if (
                             status ==
-                            GatewayPeerDedupBeginStatus::
+                            MessageDeliveryDedupBeginStatus::
                                 kAcquired
                         ) {
                             acquired_count.
@@ -128,7 +128,7 @@ RegisterGatewayPeerDeliveryDeduplicatorTests(
 
                         if (
                             status ==
-                            GatewayPeerDedupBeginStatus::
+                            MessageDeliveryDedupBeginStatus::
                                 kAlreadyProcessing
                         ) {
                             processing_count.
@@ -166,19 +166,19 @@ RegisterGatewayPeerDeliveryDeduplicatorTests(
 
 
     runner.Add(
-        "GatewayPeerDeliveryDeduplicator."
+        "MessageDeliveryDeduplicator."
         "EvictsOldDeliveredEntries",
         []() {
             /*
              * 只允许缓存最近2条。
              */
-            GatewayPeerDeliveryDeduplicator
+            MessageDeliveryDeduplicator
                 deduplicator(2);
 
 
             TINYIMX_EXPECT_EQ(
                 deduplicator.Begin(101),
-                GatewayPeerDedupBeginStatus::
+                MessageDeliveryDedupBeginStatus::
                     kAcquired
             );
 
@@ -190,7 +190,7 @@ RegisterGatewayPeerDeliveryDeduplicatorTests(
 
             TINYIMX_EXPECT_EQ(
                 deduplicator.Begin(102),
-                GatewayPeerDedupBeginStatus::
+                MessageDeliveryDedupBeginStatus::
                     kAcquired
             );
 
@@ -202,7 +202,7 @@ RegisterGatewayPeerDeliveryDeduplicatorTests(
 
             TINYIMX_EXPECT_EQ(
                 deduplicator.Begin(103),
-                GatewayPeerDedupBeginStatus::
+                MessageDeliveryDedupBeginStatus::
                     kAcquired
             );
 
@@ -220,7 +220,7 @@ RegisterGatewayPeerDeliveryDeduplicatorTests(
              */
             TINYIMX_EXPECT_EQ(
                 deduplicator.Begin(101),
-                GatewayPeerDedupBeginStatus::
+                MessageDeliveryDedupBeginStatus::
                     kAcquired
             );
 

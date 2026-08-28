@@ -39,6 +39,28 @@ enum class MessageType : std::uint16_t {
     kFriendRequestRejectRequest = 2017,
     kFriendRequestRejectResponse = 2018,
 
+    /*
+    * Gateway -> Receiver:
+    *
+    * kChatDelivery
+    *     一次Receiver消息投递Attempt。
+    *
+    * Receiver -> Gateway:
+    *
+    * kChatDeliveryAck
+    *     Receiver应用协议层确认收到Server Message。
+    *
+    * 注意：
+    *
+    * Packet.seq
+    *     = Delivery Attempt Identity
+    *
+    * body.message_id
+    *     = Stable Server Business Identity
+    */
+    kChatDelivery = 2019,
+    kChatDeliveryAck = 2020,
+
     // Gateway-to-Gateway internal protocol.
     kGatewayForwardChatRequest = 3001,
     kGatewayForwardChatResponse = 3002,

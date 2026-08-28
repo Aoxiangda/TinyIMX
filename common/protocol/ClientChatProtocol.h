@@ -105,6 +105,50 @@ struct ClientChatAck {
 };
 
 
+/*
+ * Gateway -> Receiver Client
+ *
+ * 一次Server Message的Receiver投递协议模型。
+ *
+ * Packet.seq不放在body中。
+ *
+ * Packet.seq：
+ *     当前一次Delivery Attempt Identity。
+ *
+ * message_id：
+ *     稳定Server Business Message Identity。
+ *
+ * 同一条message_id允许经历多个不同Packet.seq。
+ */
+struct ServerChatDelivery {
+    std::uint64_t message_id{0};
+
+    std::uint64_t from_user_id{0};
+
+    std::uint64_t to_user_id{0};
+
+    std::string text;
+};
+
+
+/*
+ * Receiver Client -> Gateway
+ *
+ * Receiver应用协议层已经成功解析并接受：
+ *
+ *     server message_id
+ *
+ * Packet.seq仍然在Packet Header中，
+ * 用于标识ACK对应的Delivery Attempt。
+ *
+ * Receiver身份不放在body中：
+ * Gateway必须从Authenticated Session取得真实用户身份。
+ */
+struct ReceiverChatDeliveryAck {
+    std::uint64_t message_id{0};
+};
+
+
 bool SerializeClientChatRequest(
     const ClientChatRequest& request,
     std::string* body,
@@ -131,5 +175,34 @@ bool DeserializeClientChatAck(
     ClientChatAck* ack,
     std::string* error_message = nullptr
 );
+
+
+bool SerializeServerChatDelivery(
+    const ServerChatDelivery& delivery,
+    std::string* body,
+    std::string* error_message = nullptr
+);
+
+
+bool DeserializeServerChatDelivery(
+    const std::string& body,
+    ServerChatDelivery* delivery,
+    std::string* error_message = nullptr
+);
+
+
+bool SerializeReceiverChatDeliveryAck(
+    const ReceiverChatDeliveryAck& ack,
+    std::string* body,
+    std::string* error_message = nullptr
+);
+
+
+bool DeserializeReceiverChatDeliveryAck(
+    const std::string& body,
+    ReceiverChatDeliveryAck* ack,
+    std::string* error_message = nullptr
+);
+
 
 }  // namespace tinyimx

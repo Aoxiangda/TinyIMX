@@ -1,5 +1,6 @@
 #include "common/net/Buffer.h"
 #include "common/protocol/ProtocolCodec.h"
+#include "common/protocol/ClientChatProtocol.h"
 
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
@@ -11,10 +12,34 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <chrono>
+#include <optional>
 
 namespace {
 
 using Json = nlohmann::json;
+
+std::string MakeClientMessageId(
+    const std::string& prefix,
+    std::uint32_t seq
+) {
+    const auto now =
+        std::chrono::system_clock::now()
+            .time_since_epoch();
+
+    const auto nanoseconds =
+        std::chrono::duration_cast<
+            std::chrono::nanoseconds
+        >(now).count();
+
+
+    return
+        prefix +
+        std::to_string(nanoseconds) +
+        "-" +
+        std::to_string(seq);
+}
+
 
 bool SetSocketTimeout(int fd, int seconds) {
     timeval timeout {};
@@ -181,15 +206,68 @@ tinyimx::Packet MakeLoginRequest(const std::string& username,
     return packet;
 }
 
-tinyimx::Packet MakeChatMessage(const Json& body,
-                                 std::uint32_t seq) {
+
+tinyimx::Packet MakeChatMessage(
+    std::uint64_t to_user_id,
+    const std::string& text,
+    std::uint32_t seq,
+    const std::string& client_message_id,
+    std::optional<std::uint64_t>
+        claimed_from_user_id =
+            std::nullopt
+) {
+    tinyimx::ClientChatRequest request;
+
+    request.client_message_id =
+        client_message_id;
+
+    request.to_user_id =
+        to_user_id;
+
+    request.text =
+        text;
+
+    request.claimed_from_user_id =
+        claimed_from_user_id;
+
+
+    std::string body;
+    std::string error_message;
+
+
+    if (
+        !tinyimx::
+            SerializeClientChatRequest(
+                request,
+                &body,
+                &error_message
+            )
+    ) {
+        std::cerr
+            << "serialize client chat request failed"
+            << ", error="
+            << error_message
+            << '\n';
+
+        return {};
+    }
+
+
     tinyimx::Packet packet;
-    packet.type = tinyimx::MessageType::kChatMessage;
-    packet.seq = seq;
-    packet.body = body.dump();
+
+    packet.type =
+        tinyimx::MessageType::kChatMessage;
+
+    packet.seq =
+        seq;
+
+    packet.body =
+        std::move(body);
+
 
     return packet;
 }
+
 
 void PrintPacket(const std::string& tag,
                  const tinyimx::Packet& packet) {
@@ -303,12 +381,14 @@ int main(int argc, char* argv[]) {
              no_login_fd,
              codec,
              MakeChatMessage(
-                 Json{
-                     {"to", 10001},
-                     {"text", "message without login"}
-                 },
-                 1
-             )
+                10001,
+                "message without login",
+                1,
+                MakeClientMessageId(
+                    "m12-no-login-",
+                    1
+                )
+            )
          );
 
     tinyimx::Packet no_login_ack;
@@ -367,14 +447,16 @@ int main(int argc, char* argv[]) {
          SendPacket(
              spoof_fd,
              codec,
-             MakeChatMessage(
-                 Json{
-                     {"from", 10001},
-                     {"to", 10001},
-                     {"text", "fake message from user10001"}
-                 },
-                 3
-             )
+            MakeChatMessage(
+                10001,
+                "fake message from user10001",
+                3,
+                MakeClientMessageId(
+                    "m12-spoof-",
+                    3
+                ),
+                10001
+            )
          );
 
     tinyimx::Packet spoof_ack;

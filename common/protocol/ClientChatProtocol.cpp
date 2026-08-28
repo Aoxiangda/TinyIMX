@@ -111,6 +111,88 @@ bool ReadPositiveUserId(
 }
 
 
+bool ReadPositiveMessageId(
+    const Json& object,
+    std::uint64_t* value,
+    std::string* error_message
+) {
+    if (value == nullptr) {
+        SetError(
+            error_message,
+            "invalid message_id output"
+        );
+
+        return false;
+    }
+
+
+    if (!object.contains("message_id")) {
+        SetError(
+            error_message,
+            "missing field: message_id"
+        );
+
+        return false;
+    }
+
+
+    const Json& field =
+        object.at("message_id");
+
+
+    if (field.is_number_unsigned()) {
+        const auto parsed =
+            field.get<std::uint64_t>();
+
+        if (parsed == 0) {
+            SetError(
+                error_message,
+                "message_id must be positive"
+            );
+
+            return false;
+        }
+
+
+        *value =
+            parsed;
+
+        return true;
+    }
+
+
+    if (field.is_number_integer()) {
+        const auto parsed =
+            field.get<std::int64_t>();
+
+        if (parsed <= 0) {
+            SetError(
+                error_message,
+                "message_id must be positive"
+            );
+
+            return false;
+        }
+
+
+        *value =
+            static_cast<std::uint64_t>(
+                parsed
+            );
+
+        return true;
+    }
+
+
+    SetError(
+        error_message,
+        "message_id must be an integer"
+    );
+
+    return false;
+}
+
+
 bool ValidateClientMessageId(
     const std::string& value,
     std::string* error_message
@@ -727,5 +809,339 @@ bool DeserializeClientChatAck(
 
     return true;
 }
+
+bool SerializeServerChatDelivery(
+    const ServerChatDelivery& delivery,
+    std::string* body,
+    std::string* error_message
+) {
+    if (body == nullptr) {
+        SetError(
+            error_message,
+            "output body is null"
+        );
+
+        return false;
+    }
+
+
+    if (delivery.message_id == 0) {
+        SetError(
+            error_message,
+            "message_id must be positive"
+        );
+
+        return false;
+    }
+
+
+    if (
+        delivery.from_user_id == 0 ||
+        delivery.to_user_id == 0
+    ) {
+        SetError(
+            error_message,
+            "chat delivery requires valid users"
+        );
+
+        return false;
+    }
+
+
+    /*
+     * 当前Client Chat协议真实语义
+     * 只要求text非空。
+     *
+     * 本阶段不额外发明新的text长度限制。
+     */
+    if (delivery.text.empty()) {
+        SetError(
+            error_message,
+            "text must not be empty"
+        );
+
+        return false;
+    }
+
+
+    Json json{
+        {
+            "message_id",
+            delivery.message_id
+        },
+        {
+            "from",
+            delivery.from_user_id
+        },
+        {
+            "to",
+            delivery.to_user_id
+        },
+        {
+            "text",
+            delivery.text
+        }
+    };
+
+
+    *body =
+        json.dump();
+
+    return true;
+}
+
+
+bool DeserializeServerChatDelivery(
+    const std::string& body,
+    ServerChatDelivery* delivery,
+    std::string* error_message
+) {
+    if (delivery == nullptr) {
+        SetError(
+            error_message,
+            "delivery output is null"
+        );
+
+        return false;
+    }
+
+
+    Json json;
+
+
+    try {
+        json =
+            Json::parse(body);
+    } catch (const std::exception& e) {
+        SetError(
+            error_message,
+            std::string(
+                "invalid chat delivery json: "
+            ) +
+                e.what()
+        );
+
+        return false;
+    }
+
+
+    if (!json.is_object()) {
+        SetError(
+            error_message,
+            "chat delivery body must be an object"
+        );
+
+        return false;
+    }
+
+
+    std::uint64_t message_id =
+        0;
+
+
+    if (
+        !ReadPositiveMessageId(
+            json,
+            &message_id,
+            error_message
+        )
+    ) {
+        return false;
+    }
+
+
+    std::uint64_t from_user_id =
+        0;
+
+
+    if (
+        !ReadPositiveUserId(
+            json,
+            "from",
+            &from_user_id,
+            error_message
+        )
+    ) {
+        return false;
+    }
+
+
+    std::uint64_t to_user_id =
+        0;
+
+
+    if (
+        !ReadPositiveUserId(
+            json,
+            "to",
+            &to_user_id,
+            error_message
+        )
+    ) {
+        return false;
+    }
+
+
+    if (
+        !json.contains("text") ||
+        !json.at("text").is_string()
+    ) {
+        SetError(
+            error_message,
+            "missing or invalid text"
+        );
+
+        return false;
+    }
+
+
+    const std::string text =
+        json.at("text").
+            get<std::string>();
+
+
+    if (text.empty()) {
+        SetError(
+            error_message,
+            "text must not be empty"
+        );
+
+        return false;
+    }
+
+
+    ServerChatDelivery parsed;
+
+    parsed.message_id =
+        message_id;
+
+    parsed.from_user_id =
+        from_user_id;
+
+    parsed.to_user_id =
+        to_user_id;
+
+    parsed.text =
+        text;
+
+
+    *delivery =
+        std::move(parsed);
+
+    return true;
+}
+
+
+bool SerializeReceiverChatDeliveryAck(
+    const ReceiverChatDeliveryAck& ack,
+    std::string* body,
+    std::string* error_message
+) {
+    if (body == nullptr) {
+        SetError(
+            error_message,
+            "output body is null"
+        );
+
+        return false;
+    }
+
+
+    if (ack.message_id == 0) {
+        SetError(
+            error_message,
+            "message_id must be positive"
+        );
+
+        return false;
+    }
+
+
+    Json json{
+        {
+            "message_id",
+            ack.message_id
+        }
+    };
+
+
+    *body =
+        json.dump();
+
+    return true;
+}
+
+
+bool DeserializeReceiverChatDeliveryAck(
+    const std::string& body,
+    ReceiverChatDeliveryAck* ack,
+    std::string* error_message
+) {
+    if (ack == nullptr) {
+        SetError(
+            error_message,
+            "delivery ack output is null"
+        );
+
+        return false;
+    }
+
+
+    Json json;
+
+
+    try {
+        json =
+            Json::parse(body);
+    } catch (const std::exception& e) {
+        SetError(
+            error_message,
+            std::string(
+                "invalid chat delivery ack json: "
+            ) +
+                e.what()
+        );
+
+        return false;
+    }
+
+
+    if (!json.is_object()) {
+        SetError(
+            error_message,
+            "chat delivery ack body must be an object"
+        );
+
+        return false;
+    }
+
+
+    std::uint64_t message_id =
+        0;
+
+
+    if (
+        !ReadPositiveMessageId(
+            json,
+            &message_id,
+            error_message
+        )
+    ) {
+        return false;
+    }
+
+
+    ReceiverChatDeliveryAck parsed;
+
+    parsed.message_id =
+        message_id;
+
+
+    *ack =
+        std::move(parsed);
+
+    return true;
+}
+
 
 }  // namespace tinyimx

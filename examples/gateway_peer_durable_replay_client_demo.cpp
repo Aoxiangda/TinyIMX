@@ -886,7 +886,7 @@ int main(
      * Memory Dedup应该为空。
      *
      * 因此这一次必须依赖MySQL
-     * 识别message_id已经Delivered。
+     * 识别message_id已经ReceiverConfirmed。
      */
     tinyimx::Packet first_replay;
 
@@ -997,7 +997,7 @@ int main(
      *
      * 第一轮持久化命中后，
      * Gateway B应已经把Memory Dedup
-     * 恢复为Delivered。
+     * 恢复为本地Delivered去重状态。
      *
      * 所以第二轮应该走内存Fast Path。
      */

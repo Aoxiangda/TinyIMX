@@ -16,6 +16,7 @@
 #include <vector>
 #include <chrono>
 #include <thread>
+#include <unordered_set>
 namespace {
 
 using Json = nlohmann::json;
@@ -896,6 +897,204 @@ bool ExpectNoPacketWithin(
     return true;
 }
 
+class ReceiverBusinessDeduplicator final {
+public:
+    bool ApplyOnce(
+        std::uint64_t message_id
+    ) {
+        if (message_id == 0) {
+            return false;
+        }
+
+        const auto [iterator, inserted] =
+            applied_message_ids_.insert(
+                message_id
+            );
+
+        (void)iterator;
+
+        if (inserted) {
+            ++business_apply_count_;
+        }
+
+        return inserted;
+    }
+
+    std::size_t BusinessApplyCount() const {
+        return business_apply_count_;
+    }
+
+private:
+    std::unordered_set<std::uint64_t>
+        applied_message_ids_;
+
+    std::size_t
+        business_apply_count_{0};
+};
+
+
+bool WaitForReconnectReplay(
+    int fd,
+    const tinyimx::ProtocolCodec& codec,
+    tinyimx::Buffer* input_buffer,
+    std::uint64_t expected_message_id,
+    const std::string& expected_text,
+    tinyimx::Packet* login_response,
+    tinyimx::Packet* delivery_packet,
+    std::uint32_t* delivery_seq
+) {
+    if (
+        input_buffer == nullptr ||
+        login_response == nullptr ||
+        delivery_packet == nullptr ||
+        delivery_seq == nullptr ||
+        expected_message_id == 0
+    ) {
+        return false;
+    }
+
+
+    bool login_found = false;
+    bool delivery_found = false;
+
+
+    std::vector<tinyimx::Packet>
+        packets;
+
+
+    std::size_t scanned = 0;
+
+
+    /*
+     * LoginResponse和Offline Replay
+     * 可能一次recv同时到达。
+     *
+     * 所以不能假设：
+     *
+     * packets[0] = login
+     * packets[1] = target delivery
+     *
+     * 必须按MessageType + message_id寻找。
+     */
+    for (
+        std::size_t round = 0;
+        round < 32 &&
+        (!login_found || !delivery_found);
+        ++round
+    ) {
+        const std::size_t
+            required_count =
+                packets.size() + 1;
+
+
+        if (
+            !WaitForPackets(
+                fd,
+                codec,
+                input_buffer,
+                required_count,
+                &packets
+            )
+        ) {
+            return false;
+        }
+
+
+        while (
+            scanned <
+            packets.size()
+        ) {
+            const tinyimx::Packet&
+                packet =
+                    packets[scanned++];
+
+
+            PrintPacket(
+                "[user_b reconnect@gateway-b]",
+                packet
+            );
+
+
+            if (
+                packet.type ==
+                    tinyimx::MessageType::
+                        kLoginResponse
+            ) {
+                *login_response =
+                    packet;
+
+                login_found = true;
+
+                continue;
+            }
+
+
+            if (
+                packet.type !=
+                    tinyimx::MessageType::
+                        kChatDelivery
+            ) {
+                continue;
+            }
+
+
+            std::uint64_t
+                actual_message_id = 0;
+
+            std::uint32_t
+                actual_delivery_seq = 0;
+
+
+            if (
+                !ValidateReceiverDelivery(
+                    packet,
+                    expected_text,
+                    &actual_message_id,
+                    &actual_delivery_seq
+                )
+            ) {
+                continue;
+            }
+
+
+            /*
+             * 登录时可能还有历史Pending消息。
+             *
+             * 我们只寻找本次测试的稳定M。
+             */
+            if (
+                actual_message_id !=
+                    expected_message_id
+            ) {
+                std::cout
+                    << "[INFO] ignored unrelated "
+                       "pending replay"
+                    << ", actual_message_id="
+                    << actual_message_id
+                    << ", expected_message_id="
+                    << expected_message_id
+                    << '\n';
+
+                continue;
+            }
+
+
+            *delivery_packet =
+                packet;
+
+            *delivery_seq =
+                actual_delivery_seq;
+
+            delivery_found = true;
+        }
+    }
+
+
+    return
+        login_found &&
+        delivery_found;
+}
+
 
 }  // namespace
 
@@ -929,9 +1128,9 @@ int main(
 
 
     std::cout
-        << "========== TinyIMX "
-           "Cross Gateway Client "
-           "Demo ==========\n";
+        << "========== TinyIMX F6 "
+            "Cross Gateway Reconnect/Dedup "
+            "Demo ==========\n";
 
 
     tinyimx::ProtocolCodec codec;
@@ -950,7 +1149,7 @@ int main(
     /*
      * user10002 → Gateway B
      */
-    const int user_b_fd =
+    int user_b_fd =
         ConnectToServer(
             host,
             gateway_b_port
@@ -995,7 +1194,7 @@ int main(
             MakeLoginRequest(
                 "user10002",
                 "123456",
-                1
+                4
             )
         )
     ) {
@@ -1166,10 +1365,16 @@ int main(
 
     bool ok = true;
 
+
+    ReceiverBusinessDeduplicator
+        receiver_business_dedup;
+
+
     PrintPacket(
         "[user_b@gateway-b]",
         user_b_chat_packets.front()
     );
+
 
     std::uint64_t
         receiver_server_message_id = 0;
@@ -1199,6 +1404,30 @@ int main(
     /*
      * user10001收到Gateway A最终ACK。
      */
+
+
+    if (
+        receiver_business_dedup.
+            ApplyOnce(
+                receiver_server_message_id
+            )
+    ) {
+        std::cout
+            << "[APPLY] receiver business effect"
+            << ", message_id="
+            << receiver_server_message_id
+            << ", apply_count="
+            << receiver_business_dedup.
+                BusinessApplyCount()
+            << '\n';
+    } else {
+        std::cerr
+            << "[FAIL] first receiver delivery "
+            "was unexpectedly duplicate\n";
+
+        ok = false;
+    }
+
     std::vector<tinyimx::Packet>
         user_a_ack_packets;
 
@@ -1276,41 +1505,271 @@ int main(
      *
      * Pending -> ReceiverConfirmed
      */
+    std::cout
+        << "[SIMULATED DISCONNECT BEFORE ACK]"
+        << ", message_id="
+        << receiver_server_message_id
+        << ", delivery_seq="
+        << receiver_delivery_seq
+        << '\n';
+
+
+    ::shutdown(
+        user_b_fd,
+        SHUT_RDWR
+    );
+
+
+    ::close(
+        user_b_fd
+    );
+
+
+    user_b_fd = -1;
+
+
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(
+            1900
+        )
+    );
+
+    /*
+    * ============================================================
+    * 5. Receiver重新连接Gateway B
+    * ============================================================
+    */
+    user_b_fd =
+        ConnectToServer(
+            host,
+            gateway_b_port
+        );
+
+
+    if (user_b_fd < 0) {
+        std::cerr
+            << "reconnect user B to "
+            "gateway B failed\n";
+
+        ::close(user_a_fd);
+
+        return 1;
+    }
+
+
+    /*
+    * 新TCP连接必须使用新的Input Buffer。
+    *
+    * 旧Connection的Buffer不能跨TCP连接复用。
+    */
+    tinyimx::Buffer user_b_reconnect_input_buffer;
+
+    if (
+        !SendPacket(
+            user_b_fd,
+            codec,
+            MakeLoginRequest(
+                "user10002",
+                "123456",
+                4
+            )
+        )
+    ) {
+        std::cerr
+            << "send reconnect login failed\n";
+
+        ::close(user_a_fd);
+        ::close(user_b_fd);
+
+        return 1;
+    }
+
+    tinyimx::Packet
+        reconnect_login_response;
+
+
+    tinyimx::Packet
+        reconnect_delivery_packet;
+
+
+    std::uint32_t
+        reconnect_delivery_seq = 0;
+
+
+    if (
+        !WaitForReconnectReplay(
+            user_b_fd,
+            codec,
+            &user_b_reconnect_input_buffer,
+            receiver_server_message_id,
+            message_text,
+            &reconnect_login_response,
+            &reconnect_delivery_packet,
+            &reconnect_delivery_seq
+        )
+    ) {
+        std::cerr
+            << "[FAIL] cross gateway reconnect "
+            "did not replay pending message"
+            << ", message_id="
+            << receiver_server_message_id
+            << '\n';
+
+        ::close(user_a_fd);
+        ::close(user_b_fd);
+
+        return 1;
+    }
+
+
+    std::uint64_t
+        reconnect_message_id = 0;
+
+
+    std::uint32_t
+        validated_reconnect_delivery_seq = 0;
+
+
+    if (
+        !ValidateReceiverDelivery(
+            reconnect_delivery_packet,
+            message_text,
+            &reconnect_message_id,
+            &validated_reconnect_delivery_seq
+        )
+    ) {
+        std::cerr
+            << "[FAIL] reconnect receiver "
+            "delivery invalid\n";
+
+        ok = false;
+    }
+
+
+    if (
+        reconnect_message_id ==
+            receiver_server_message_id &&
+        reconnect_delivery_seq ==
+            validated_reconnect_delivery_seq &&
+        reconnect_delivery_seq != 0 &&
+        reconnect_delivery_seq !=
+            receiver_delivery_seq
+    ) {
+        std::cout
+            << "[PASS] cross gateway reconnect "
+            "replay kept stable M and "
+            "allocated fresh D"
+            << ", message_id="
+            << reconnect_message_id
+            << ", first_delivery_seq="
+            << receiver_delivery_seq
+            << ", reconnect_delivery_seq="
+            << reconnect_delivery_seq
+            << '\n';
+    } else {
+        std::cerr
+            << "[FAIL] reconnect delivery "
+            "identity mismatch"
+            << ", first_message_id="
+            << receiver_server_message_id
+            << ", reconnect_message_id="
+            << reconnect_message_id
+            << ", first_delivery_seq="
+            << receiver_delivery_seq
+            << ", reconnect_delivery_seq="
+            << reconnect_delivery_seq
+            << '\n';
+
+        ok = false;
+    }
+
+
+
+    /*
+    * ============================================================
+    * 6. Receiver按稳定message_id幂等消费
+    * ============================================================
+    *
+    * M已经在D1执行过业务。
+    *
+    * D2只是同一个M的重放。
+    */
+    if (
+        receiver_business_dedup.
+            ApplyOnce(
+                reconnect_message_id
+            )
+    ) {
+        std::cerr
+            << "[FAIL] duplicate message "
+            "reapplied receiver business effect"
+            << ", message_id="
+            << reconnect_message_id
+            << '\n';
+
+        ok = false;
+    } else {
+        std::cout
+            << "[PASS] receiver dedup suppressed "
+            "duplicate business effect"
+            << ", message_id="
+            << reconnect_message_id
+            << ", apply_count="
+            << receiver_business_dedup.
+                BusinessApplyCount()
+            << '\n';
+    }
+
+
+    /*
+    * Duplicate M不能重新产生业务副作用，
+    * 但当前Delivery Attempt D2必须ACK。
+    */
     if (
         !SendPacket(
             user_b_fd,
             codec,
             MakeReceiverChatDeliveryAck(
-                receiver_server_message_id,
-                receiver_delivery_seq
+                reconnect_message_id,
+                reconnect_delivery_seq
             )
         )
     ) {
-        std::cerr << "send cross gateway receiver ack failed\n";
+        std::cerr
+            << "send reconnect receiver "
+            "delivery ack failed\n";
+
         ::close(user_a_fd);
         ::close(user_b_fd);
+
         return 1;
     }
 
+
     std::cout
-        << "[SENT] cross gateway receiver delivery ack"
-        << ", message_id=" << receiver_server_message_id
-        << ", delivery_seq=" << receiver_delivery_seq
+        << "[SENT] reconnect receiver ACK"
+        << ", message_id="
+        << reconnect_message_id
+        << ", delivery_seq="
+        << reconnect_delivery_seq
         << '\n';
 
+
     /*
-     * kChatDeliveryAck is one-way. Give Gateway B enough time
-     * to commit ReceiverConfirmed to the shared MySQL before
-     * Sender performs the idempotent retry.
-     */
+    * 给Gateway B完成：
+    *
+    * Pending -> ReceiverConfirmed
+    *
+    * 一个很短的处理窗口。
+    */
     std::this_thread::sleep_for(
-        std::chrono::milliseconds(300)
+        std::chrono::milliseconds(
+            300
+        )
     );
-
-
         /*
     * =====================================================
-    * 5. Client Retry
+    * 7. Sender Client Retry
     *
     * seq变化：
     * 3 -> 4
@@ -1324,7 +1783,7 @@ int main(
             codec,
             MakeChatMessage(
                 10002,
-                4,
+                5,
                 message_text,
                 client_message_id
             )
@@ -1398,6 +1857,27 @@ int main(
         ok = false;
     }
 
+    if (
+        receiver_business_dedup.
+            BusinessApplyCount() == 1
+    ) {
+        std::cout
+            << "[PASS] receiver business effect "
+            "executed once across reconnect"
+            << ", apply_count=1\n";
+    } else {
+        std::cerr
+            << "[FAIL] receiver business effect "
+            "count mismatch"
+            << ", expected=1"
+            << ", actual="
+            << receiver_business_dedup.
+                BusinessApplyCount()
+            << '\n';
+
+        ok = false;
+    }
+
 
     if (
         ExpectNoPacketWithin(
@@ -1428,22 +1908,41 @@ int main(
         << server_message_id
         << '\n';
 
+    std::cout
+        << "verification_first_delivery_seq="
+        << receiver_delivery_seq
+        << '\n';
+
+
+    std::cout
+        << "verification_reconnect_delivery_seq="
+        << reconnect_delivery_seq
+        << '\n';
+
+
+    std::cout
+        << "verification_receiver_apply_count="
+        << receiver_business_dedup.
+            BusinessApplyCount()
+        << '\n';
+
+
     ::close(user_a_fd);
     ::close(user_b_fd);
 
 
     if (!ok) {
         std::cerr
-            << "cross gateway "
-               "validation failed\n";
+            << "F6 cross gateway reconnect/dedup "
+            "validation failed\n";
 
         return 1;
     }
 
 
     std::cout
-        << "cross gateway "
-           "validation passed\n"
+        << "F6 cross gateway reconnect/dedup "
+        "validation passed\n"
         << "================================"
            "================\n";
 

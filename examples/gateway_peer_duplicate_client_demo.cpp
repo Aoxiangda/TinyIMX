@@ -1,8 +1,13 @@
+#include "common/config/Config.h"
+#include "common/db/MySqlConnectionPool.h"
 #include "common/net/Buffer.h"
 
+#include "common/protocol/ClientChatProtocol.h"
 #include "common/protocol/GatewayPeerProtocol.h"
 #include "common/protocol/Packet.h"
 #include "common/protocol/ProtocolCodec.h"
+
+#include "services/repository/MessageRepository.h"
 
 #include <nlohmann/json.hpp>
 
@@ -22,6 +27,25 @@
 namespace {
 
 using Json = nlohmann::json;
+
+
+std::string MakeFixtureClientMessageId() {
+    const auto now =
+        std::chrono::system_clock::now()
+            .time_since_epoch();
+
+    const auto nanoseconds =
+        std::chrono::duration_cast<
+            std::chrono::nanoseconds
+        >(now).count();
+
+
+    return
+        "m12-peer-duplicate-" +
+        std::to_string(
+            nanoseconds
+        );
+}
 
 
 int ConnectToServer(
@@ -452,13 +476,65 @@ tinyimx::Packet MakeLoginRequest(
 }
 
 
+tinyimx::Packet MakeReceiverChatDeliveryAck(
+    std::uint64_t message_id,
+    std::uint32_t delivery_seq
+) {
+    tinyimx::ReceiverChatDeliveryAck ack;
+
+    ack.message_id =
+        message_id;
+
+
+    std::string body;
+    std::string error_message;
+
+
+    if (
+        !tinyimx::SerializeReceiverChatDeliveryAck(
+            ack,
+            &body,
+            &error_message
+        )
+    ) {
+        std::cerr
+            << "serialize receiver delivery ACK failed"
+            << ", error="
+            << error_message
+            << '\n';
+
+        return {};
+    }
+
+
+    tinyimx::Packet packet;
+
+    packet.type =
+        tinyimx::MessageType::
+            kChatDeliveryAck;
+
+    /*
+     * Receiver ACK必须引用真实Delivery Attempt D。
+     */
+    packet.seq =
+        delivery_seq;
+
+    packet.body =
+        std::move(body);
+
+
+    return packet;
+}
+
+
 bool BuildForwardPacket(
     const std::string& source_gateway_id,
     const std::string& lease_token,
     std::uint64_t message_id,
     std::uint32_t rpc_seq,
+    const std::string& message_body,
     tinyimx::Packet* packet
-) {
+){
     if (packet == nullptr) {
         return false;
     }
@@ -484,11 +560,7 @@ bool BuildForwardPacket(
         10002;
 
     request.message_body =
-        Json{
-            {"from", 10001},
-            {"to", 10002},
-            {"text", "duplicate-dedup-test"}
-        }.dump();
+        message_body;
 
 
     std::string body;
@@ -544,6 +616,99 @@ void PrintPacket(
         << " body="
         << packet.body
         << '\n';
+}
+
+
+bool ValidateReceiverDelivery(
+    const tinyimx::Packet& packet,
+    std::uint64_t expected_message_id,
+    const std::string& expected_text,
+    std::uint32_t* delivery_seq
+) {
+    if (
+        packet.type !=
+        tinyimx::MessageType::
+            kChatDelivery
+    ) {
+        std::cerr
+            << "expected chat_delivery"
+            << ", actual="
+            << tinyimx::
+                MessageTypeToString(
+                    packet.type
+                )
+            << '\n';
+
+        return false;
+    }
+
+
+    if (packet.seq == 0) {
+        std::cerr
+            << "receiver delivery seq "
+               "must not be zero\n";
+
+        return false;
+    }
+
+
+    tinyimx::ServerChatDelivery
+        delivery;
+
+    std::string error_message;
+
+
+    if (
+        !tinyimx::
+            DeserializeServerChatDelivery(
+                packet.body,
+                &delivery,
+                &error_message
+            )
+    ) {
+        std::cerr
+            << "deserialize receiver "
+               "delivery failed"
+            << ", error="
+            << error_message
+            << ", body="
+            << packet.body
+            << '\n';
+
+        return false;
+    }
+
+
+    if (
+        delivery.message_id !=
+            expected_message_id ||
+        delivery.from_user_id !=
+            10001 ||
+        delivery.to_user_id !=
+            10002 ||
+        delivery.text !=
+            expected_text
+    ) {
+        std::cerr
+            << "receiver delivery "
+               "identity mismatch"
+            << ", expected_message_id="
+            << expected_message_id
+            << ", body="
+            << packet.body
+            << '\n';
+
+        return false;
+    }
+
+
+    if (delivery_seq != nullptr) {
+        *delivery_seq =
+            packet.seq;
+    }
+
+
+    return true;
 }
 
 
@@ -761,7 +926,8 @@ int main(
             << " <host>"
             << " <gateway-b-port>"
             << " <source-gateway-id>"
-            << " <source-lease-token>\n";
+            << " <source-lease-token>"
+            << " [config-path]\n";
 
         return 1;
     }
@@ -788,27 +954,21 @@ int main(
         source_lease_token =
             argv[4];
 
+
+    std::string config_path =
+        "config/gateway-b.local.json";
+
+
+    if (argc >= 6) {
+        config_path =
+            argv[5];
+    }
+
+
     const std::string
         invalid_lease_token =
             source_lease_token +
             "-invalid";
-
-    /*
-     * 每次运行自动生成不同的业务message_id，
-     * 避免上一次运行留下的进程内Dedup记录
-     * 干扰本次实验。
-     */
-    const std::uint64_t message_id =
-        static_cast<std::uint64_t>(
-            std::chrono::
-                duration_cast<
-                    std::chrono::microseconds
-                >(
-                    std::chrono::
-                        system_clock::now().
-                            time_since_epoch()
-                ).count()
-        );
 
 
     std::cout
@@ -822,10 +982,58 @@ int main(
         << '\n'
         << "source_gateway="
         << source_gateway_id
-        << '\n'
-        << "message_id="
-        << message_id
         << '\n';
+
+        tinyimx::Config config;
+
+
+    if (
+        !config.LoadFromFile(
+            config_path
+        )
+    ) {
+        std::cerr
+            << "load config failed"
+            << ", path="
+            << config_path
+            << ", error="
+            << config.LastError()
+            << '\n';
+
+        return 1;
+    }
+
+
+    if (!config.MySql().enable) {
+        std::cerr
+            << "mysql must be enabled "
+            "for durable peer duplicate test\n";
+
+        return 1;
+    }
+
+
+    tinyimx::MySqlConnectionPool
+        mysql_pool;
+
+
+    if (
+        !mysql_pool.Initialize(
+            config.MySql()
+        )
+    ) {
+        std::cerr
+            << "mysql pool initialize failed\n";
+
+        return 1;
+    }
+
+
+    tinyimx::MessageRepository
+        message_repository(
+            &mysql_pool
+        );
+
 
 
     tinyimx::ProtocolCodec
@@ -898,7 +1106,97 @@ int main(
         return 1;
     }
 
+    const std::string
+        message_text =
+            "duplicate-dedup-test";
 
+
+    const std::string
+        canonical_message_body =
+            Json{
+                {"from", 10001},
+                {"to", 10002},
+                {"text", message_text}
+            }.dump();
+
+
+    const std::string
+        fixture_client_message_id =
+            MakeFixtureClientMessageId();
+
+
+    const auto fixture_result =
+        message_repository.
+            SavePrivateMessageIdempotent(
+                10001,
+                10002,
+                canonical_message_body,
+                fixture_client_message_id,
+                tinyimx::
+                    PrivateMessageType::
+                        kText
+            );
+
+
+    if (
+        !fixture_result.Created() ||
+        fixture_result.message_id == 0
+    ) {
+        std::cerr
+            << "failed to create durable "
+            "peer duplicate fixture"
+            << ", status="
+            << tinyimx::
+                IdempotentSavePrivateMessageStatusToString(
+                    fixture_result.status
+                )
+            << ", error="
+            << fixture_result.message
+            << '\n';
+
+        ::close(user_fd);
+
+        return 1;
+    }
+
+
+    if (
+        fixture_result.record.delivery_status !=
+        static_cast<std::uint32_t>(
+            tinyimx::
+                DeliveryStatus::
+                    kPending
+        )
+    ) {
+        std::cerr
+            << "fixture message must begin "
+            "in pending state"
+            << ", actual="
+            << fixture_result.record.delivery_status
+            << '\n';
+
+        ::close(user_fd);
+
+        return 1;
+    }
+
+
+    const std::uint64_t
+        message_id =
+            fixture_result.message_id;
+
+
+    std::cout
+        << "fixture_client_message_id="
+        << fixture_client_message_id
+        << '\n'
+        << "fixture_message_id="
+        << message_id
+        << '\n'
+        << "fixture_message_text="
+        << message_text
+        << '\n'
+        << "[PASS] durable pending fixture created\n";
     /*
      * 第二条连接：
      * Gateway Peer。
@@ -943,6 +1241,7 @@ int main(
             invalid_lease_token,
             message_id,
             7101,
+            canonical_message_body,
             &unauthorized_request
         )
     ) {
@@ -1065,6 +1364,7 @@ int main(
             source_lease_token,
             message_id,
             7001,
+            canonical_message_body,
             &first_request
         )
     ) {
@@ -1125,14 +1425,21 @@ int main(
     );
 
 
+    std::uint32_t
+        receiver_delivery_seq = 0;
+
+
     if (
-        first_user_packets.front().type !=
-        tinyimx::MessageType::
-            kChatMessage
+        !ValidateReceiverDelivery(
+            first_user_packets.front(),
+            message_id,
+            message_text,
+            &receiver_delivery_seq
+        )
     ) {
         std::cerr
-            << "first delivery is not "
-               "chat_message\n";
+            << "first receiver delivery "
+            "invalid\n";
 
         ::close(peer_fd);
         ::close(user_fd);
@@ -1140,6 +1447,69 @@ int main(
         return 1;
     }
 
+
+    std::cout
+        << "[PASS] receiver got "
+        "chat_delivery"
+        << ", message_id="
+        << message_id
+        << ", delivery_seq="
+        << receiver_delivery_seq
+        << '\n';
+
+    /*
+     * M12最终送达语义：
+     *
+     * Peer Response的kDelivered只是历史Peer层命名，
+     * 不能推进MySQL ReceiverConfirmed。
+     *
+     * 只有Receiver应用层ACK(M,D)才能推进：
+     *
+     *     Pending -> ReceiverConfirmed
+     *
+     * 这一步同时把当前fixture变成后续
+     * gateway_peer_durable_replay_client_demo
+     * 可以使用的durable ReceiverConfirmed fixture。
+     */
+    if (
+        !SendPacket(
+            user_fd,
+            user_codec,
+            MakeReceiverChatDeliveryAck(
+                message_id,
+                receiver_delivery_seq
+            )
+        )
+    ) {
+        std::cerr
+            << "send receiver delivery ACK failed"
+            << ", message_id="
+            << message_id
+            << ", delivery_seq="
+            << receiver_delivery_seq
+            << '\n';
+
+        ::close(peer_fd);
+        ::close(user_fd);
+
+        return 1;
+    }
+
+
+    std::cout
+        << "[SENT] receiver delivery ACK"
+        << ", message_id="
+        << message_id
+        << ", delivery_seq="
+        << receiver_delivery_seq
+        << '\n';
+
+
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(
+            300
+        )
+    );
 
     /*
      * Peer收到第一次Response。
@@ -1204,6 +1574,7 @@ int main(
             source_lease_token,
             message_id,
             7002,
+            canonical_message_body,
             &second_request
         )
     ) {
@@ -1296,8 +1667,9 @@ int main(
         )
     ) {
         std::cerr
-            << "FAILED: duplicate RPC "
-               "caused second user delivery\n";
+            << "[FAIL] user10002 received "
+            "unexpected second "
+            "chat_delivery\n";
 
         ::close(peer_fd);
         ::close(user_fd);
@@ -1305,13 +1677,13 @@ int main(
         return 1;
     }
 
-
     std::cout
         << "\n[PASS] first RPC delivered once\n"
         << "[PASS] duplicate RPC returned "
            "duplicate=true\n"
         << "[PASS] user10002 received no "
-           "second chat_message\n"
+            "second chat_delivery\n"
+
         << "\nGateway peer duplicate "
            "delivery validation passed\n"
         << "================================"

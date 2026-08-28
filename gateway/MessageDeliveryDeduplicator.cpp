@@ -1,12 +1,13 @@
-#include "gateway/GatewayPeerDeliveryDeduplicator.h"
+#include "gateway/MessageDeliveryDeduplicator.h"
 
 #include <algorithm>
+
 
 namespace tinyimx {
 
 
-GatewayPeerDeliveryDeduplicator::
-GatewayPeerDeliveryDeduplicator(
+MessageDeliveryDeduplicator::
+MessageDeliveryDeduplicator(
     std::size_t max_recent_delivered
 )
     : max_recent_delivered_(
@@ -18,20 +19,29 @@ GatewayPeerDeliveryDeduplicator(
 }
 
 
-GatewayPeerDedupBeginStatus
-GatewayPeerDeliveryDeduplicator::Begin(
+MessageDeliveryDedupBeginStatus
+MessageDeliveryDeduplicator::Begin(
     std::uint64_t message_id
 ) {
     if (message_id == 0) {
         return
-            GatewayPeerDedupBeginStatus::
+            MessageDeliveryDedupBeginStatus::
                 kInvalidArgument;
     }
 
 
     /*
-     * 从find到insert整个过程
-     * 必须属于同一个临界区。
+     * find + insert必须属于同一个临界区。
+     *
+     * 否则：
+     *
+     * Thread A find miss
+     * Thread B find miss
+     *
+     * A认为自己是Owner
+     * B也认为自己是Owner
+     *
+     * 就可能产生两次SendPacket副作用。
      */
     std::lock_guard<std::mutex>
         lock(mutex_);
@@ -44,7 +54,9 @@ GatewayPeerDeliveryDeduplicator::Begin(
 
 
     /*
-     * 第一次看见。
+     * 第一次看到该server message。
+     *
+     * 当前调用者成为唯一Owner。
      */
     if (
         iterator ==
@@ -57,35 +69,39 @@ GatewayPeerDeliveryDeduplicator::Begin(
 
 
         return
-            GatewayPeerDedupBeginStatus::
+            MessageDeliveryDedupBeginStatus::
                 kAcquired;
     }
 
 
     /*
-     * 已经成功处理过。
+     * 已经完成过真实投递副作用。
      */
     if (
         iterator->second ==
         State::kDelivered
     ) {
         return
-            GatewayPeerDedupBeginStatus::
+            MessageDeliveryDedupBeginStatus::
                 kAlreadyDelivered;
     }
 
 
     /*
-     * 剩余情况只有Processing。
+     * 剩余唯一状态：
+     *
+     * Processing。
+     *
+     * 表示另一执行者已经拥有Owner权限。
      */
     return
-        GatewayPeerDedupBeginStatus::
+        MessageDeliveryDedupBeginStatus::
             kAlreadyProcessing;
 }
 
 
 bool
-GatewayPeerDeliveryDeduplicator::
+MessageDeliveryDeduplicator::
 MarkDelivered(
     std::uint64_t message_id
 ) {
@@ -105,11 +121,11 @@ MarkDelivered(
 
 
     /*
-     * 正常生命周期要求：
+     * 正常状态机要求：
      *
-     * Begin成功
+     * Begin(kAcquired)
      * ↓
-     * 才允许MarkDelivered。
+     * MarkDelivered
      */
     if (
         iterator ==
@@ -120,11 +136,7 @@ MarkDelivered(
 
 
     /*
-     * MarkDelivered自身也做幂等。
-     *
-     * 已经Delivered再次Mark，
-     * 直接认为成功，
-     * 不重复进入delivered_order_。
+     * MarkDelivered自身保持幂等。
      */
     if (
         iterator->second ==
@@ -152,7 +164,7 @@ MarkDelivered(
 
 
 bool
-GatewayPeerDeliveryDeduplicator::Abort(
+MessageDeliveryDeduplicator::Abort(
     std::uint64_t message_id
 ) {
     if (message_id == 0) {
@@ -172,7 +184,9 @@ GatewayPeerDeliveryDeduplicator::Abort(
 
     /*
      * 已经不存在：
-     * 清理目标已经满足。
+     *
+     * 目标状态本来就是NotSeen，
+     * 因此认为Abort成功。
      */
     if (
         iterator ==
@@ -183,8 +197,11 @@ GatewayPeerDeliveryDeduplicator::Abort(
 
 
     /*
-     * 已经产生真实投递副作用的
-     * Delivered不能被重新打开。
+     * 一旦已经Delivered，
+     * 就不能重新打开执行权。
+     *
+     * 因为真实Receiver副作用
+     * 可能已经发生。
      */
     if (
         iterator->second ==
@@ -204,7 +221,7 @@ GatewayPeerDeliveryDeduplicator::Abort(
 
 
 std::size_t
-GatewayPeerDeliveryDeduplicator::Size()
+MessageDeliveryDeduplicator::Size()
     const {
     std::lock_guard<std::mutex>
         lock(mutex_);
@@ -215,7 +232,7 @@ GatewayPeerDeliveryDeduplicator::Size()
 
 
 std::size_t
-GatewayPeerDeliveryDeduplicator::
+MessageDeliveryDeduplicator::
 DeliveredCount() const {
     std::lock_guard<std::mutex>
         lock(mutex_);
@@ -226,7 +243,7 @@ DeliveredCount() const {
 
 
 void
-GatewayPeerDeliveryDeduplicator::
+MessageDeliveryDeduplicator::
 TrimDeliveredLocked() {
     while (
         delivered_order_.size() >
@@ -258,5 +275,6 @@ TrimDeliveredLocked() {
         }
     }
 }
+
 
 }  // namespace tinyimx

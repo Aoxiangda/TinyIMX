@@ -365,8 +365,8 @@ MessageRepository::FindPrivateMessageById(
                 kInvalidArgument;
 
         result.message =
-            "message repository find failed: "
-            "invalid message id";
+            "message repository mark receiver "
+            "confirmed failed: invalid message id";
 
         return result;
     }
@@ -1404,6 +1404,20 @@ ListPrivateMessagesResult MessageRepository::ListPendingMessages(
     std::uint64_t to_user_id,
     std::size_t limit
 ) {
+    return ListPendingMessagesAfter(
+        to_user_id,
+        0,
+        limit
+    );
+}
+
+
+ListPrivateMessagesResult
+MessageRepository::ListPendingMessagesAfter(
+    std::uint64_t to_user_id,
+    std::uint64_t after_message_id,
+    std::size_t limit
+) {
     ListPrivateMessagesResult result;
 
     if (to_user_id == 0) {
@@ -1473,6 +1487,9 @@ ListPrivateMessagesResult MessageRepository::ListPendingMessages(
         std::to_string(to_user_id) +
         " "
         "AND delivery_status = 0 "
+        "AND message_id > " +
+        std::to_string(after_message_id) +
+        " "
         "ORDER BY message_id ASC "
         "LIMIT " +
         std::to_string(limit);
@@ -1503,6 +1520,126 @@ ListPrivateMessagesResult MessageRepository::ListPendingMessages(
         query_result
     );
 }
+
+
+CountPendingMessagesResult
+MessageRepository::CountPendingMessages(
+    std::uint64_t to_user_id
+) {
+    CountPendingMessagesResult result;
+
+    if (to_user_id == 0) {
+        result.status =
+            MessageQueryStatus::
+                kInvalidArgument;
+
+        result.message =
+            "message repository count pending "
+            "failed: invalid user id";
+
+        return result;
+    }
+
+    if (pool_ == nullptr) {
+        result.status =
+            MessageQueryStatus::
+                kStorageError;
+
+        result.message =
+            "message repository count pending "
+            "failed: pool is null";
+
+        return result;
+    }
+
+    auto connection =
+        pool_->Acquire();
+
+    if (!connection) {
+        result.status =
+            MessageQueryStatus::
+                kStorageError;
+
+        result.message =
+            "message repository count pending "
+            "failed: acquire connection failed";
+
+        return result;
+    }
+
+    const std::string sql =
+        "SELECT COUNT(*) "
+        "FROM im_private_messages "
+        "WHERE to_user_id = " +
+        std::to_string(to_user_id) +
+        " "
+        "AND delivery_status = 0";
+
+    MySqlQueryResult query_result;
+
+    if (
+        !connection->Query(
+            sql,
+            &query_result
+        )
+    ) {
+        result.status =
+            MessageQueryStatus::
+                kStorageError;
+
+        result.message =
+            connection->LastError();
+
+        if (result.message.empty()) {
+            result.message =
+                "message repository count pending "
+                "failed: query failed";
+        }
+
+        return result;
+    }
+
+    if (
+        query_result.RowCount() != 1 ||
+        query_result.rows.front().size() != 1
+    ) {
+        result.status =
+            MessageQueryStatus::
+                kInvalidRecord;
+
+        result.message =
+            "message repository count pending "
+            "failed: invalid count result";
+
+        return result;
+    }
+
+    try {
+        result.count =
+            ToUInt64(
+                query_result.rows.front().front()
+            );
+    } catch (const std::exception&) {
+        result.status =
+            MessageQueryStatus::
+                kInvalidRecord;
+
+        result.message =
+            "message repository count pending "
+            "failed: invalid count value";
+
+        return result;
+    }
+
+    result.status =
+        MessageQueryStatus::kSucceeded;
+
+    result.message =
+        "pending message count queried";
+
+    return result;
+}
+
 
 ListPrivateMessagesResult MessageRepository::ListDialogMessages(
     std::uint64_t user_id,
@@ -1908,7 +2045,7 @@ MessageRepository::MarkReadByDialog(
     return result;
 }
 
-UpdatePrivateMessagesResult MessageRepository::MarkDelivered(
+UpdatePrivateMessagesResult MessageRepository::MarkReceiverConfirmed(
     std::uint64_t message_id
 ) {
     if (message_id == 0) {
@@ -1926,14 +2063,14 @@ UpdatePrivateMessagesResult MessageRepository::MarkDelivered(
         return result;
     }
 
-    return MarkDeliveredBatch(
+    return MarkReceiverConfirmedBatch(
         std::vector<std::uint64_t>{
             message_id
         }
     );
 }
 
-UpdatePrivateMessagesResult MessageRepository::MarkDeliveredBatch(
+UpdatePrivateMessagesResult MessageRepository::MarkReceiverConfirmedBatch(
     const std::vector<std::uint64_t>&
         message_ids
 ) {
@@ -2031,10 +2168,10 @@ UpdatePrivateMessagesResult MessageRepository::MarkDeliveredBatch(
         connection->AffectedRows();
 
     result.message =
-        "private messages marked delivered";
+        "private messages marked receiver confirmed";
 
     LOG_INFO(
-        "private messages marked delivered"
+        "private messages marked receiver confirmed"
         << ", requested_count="
         << message_ids.size()
         << ", affected_rows="
@@ -2044,6 +2181,26 @@ UpdatePrivateMessagesResult MessageRepository::MarkDeliveredBatch(
     return result;
 }
 
+
+UpdatePrivateMessagesResult
+MessageRepository::MarkDelivered(
+    std::uint64_t message_id
+) {
+    return MarkReceiverConfirmed(
+        message_id
+    );
+}
+
+
+UpdatePrivateMessagesResult
+MessageRepository::MarkDeliveredBatch(
+    const std::vector<std::uint64_t>&
+        message_ids
+) {
+    return MarkReceiverConfirmedBatch(
+        message_ids
+    );
+}
 
 ListConversationsResult MessageRepository::
     BuildConversationsFromResult(

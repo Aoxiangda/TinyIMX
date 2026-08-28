@@ -17,9 +17,48 @@ enum class PrivateMessageType : std::uint32_t {
 };
 
 enum class DeliveryStatus : std::uint32_t {
+    /*
+     * 已持久化，
+     * 但Receiver应用协议层尚未确认。
+     *
+     * 包括：
+     *
+     * - offline
+     * - delivery submitted
+     * - waiting ACK
+     * - retry waiting
+     */
     kPending = 0,
+
+
+    /*
+     * Receiver已经通过：
+     *
+     *     kChatDeliveryAck
+     *
+     * 对server message_id完成应用层确认。
+     */
+    kReceiverConfirmed = 1,
+
+
+    /*
+     * Legacy alias。
+     *
+     * 旧Demo/Repository调用暂时兼容，
+     * 新M12核心代码不再使用这个名字表达
+     * socket send成功。
+     */
     kDelivered = 1,
+
+
+    /*
+     * Receiver进一步执行Read语义。
+     *
+     * 状态不能回退到1或0。
+     */
     kRead = 2,
+
+
     kFailed = 3
 };
 
@@ -77,6 +116,21 @@ struct ListPrivateMessagesResult {
     };
 
     std::vector<PrivateMessageRecord> records;
+    std::string message;
+
+    bool Succeeded() const noexcept {
+        return status ==
+               MessageQueryStatus::kSucceeded;
+    }
+};
+
+
+struct CountPendingMessagesResult {
+    MessageQueryStatus status{
+        MessageQueryStatus::kStorageError
+    };
+
+    std::uint64_t count{0};
     std::string message;
 
     bool Succeeded() const noexcept {
@@ -324,6 +378,39 @@ public:
         std::size_t limit
     );
 
+    /*
+     * 按稳定server message_id做Keyset Pagination。
+     *
+     * 语义：
+     *     after_message_id == 0
+     *         从第一条Pending开始。
+     *
+     *     after_message_id > 0
+     *         只返回message_id严格大于cursor的Pending。
+     *
+     * 注意：
+     * Cursor只代表扫描位置，
+     * 不代表Delivery State已经推进。
+     */
+    ListPrivateMessagesResult
+    ListPendingMessagesAfter(
+        std::uint64_t to_user_id,
+        std::uint64_t after_message_id,
+        std::size_t limit
+    );
+
+    /*
+     * 只统计Persistent Pending总数。
+     *
+     * 这个接口只用于数量/可观测语义，
+     * 不加载消息正文，
+     * 也不参与Replay。
+     */
+    CountPendingMessagesResult
+    CountPendingMessages(
+        std::uint64_t to_user_id
+    );
+
     ListPrivateMessagesResult
     ListDialogMessages(
         std::uint64_t user_id,
@@ -336,6 +423,43 @@ public:
     ListConversations(
         std::uint64_t user_id,
         std::size_t limit
+    );
+
+    /*
+    * 将持久化消息状态从：
+    *
+    *     Pending(0)
+    *
+    * 单调推进到：
+    *
+    *     ReceiverConfirmed(1)
+    *
+    * 只有Receiver application ACK
+    * 可以调用这个接口。
+    */
+    UpdatePrivateMessagesResult
+    MarkReceiverConfirmed(
+        std::uint64_t message_id
+    );
+
+
+    /*
+    * Batch版本。
+    *
+    * 保持：
+    *
+    *     WHERE delivery_status = 0
+    *
+    * 因而不会：
+    *
+    * Read(2) -> ReceiverConfirmed(1)
+    *
+    * 状态不会回退。
+    */
+    UpdatePrivateMessagesResult
+    MarkReceiverConfirmedBatch(
+        const std::vector<std::uint64_t>&
+            message_ids
     );
 
     UpdatePrivateMessagesResult MarkDelivered(

@@ -403,6 +403,101 @@ void PrintPacket(const std::string& tag,
 }
 
 
+bool AckPreTestReceiverDelivery(
+    int fd,
+    const tinyimx::ProtocolCodec& codec,
+    const tinyimx::Packet& packet
+) {
+    /*
+     * Login期间除了LoginResponse，
+     * 还可能收到历史Pending消息的Offline Replay。
+     *
+     * 非chat_delivery无需处理。
+     */
+    if (
+        packet.type !=
+        tinyimx::MessageType::kChatDelivery
+    ) {
+        return true;
+    }
+
+    if (packet.seq == 0) {
+        std::cerr
+            << "pre-test backlog delivery seq "
+               "must not be zero\n";
+        return false;
+    }
+
+    tinyimx::ServerChatDelivery delivery;
+
+    std::string error_message;
+
+    if (
+        !tinyimx::DeserializeServerChatDelivery(
+            packet.body,
+            &delivery,
+            &error_message
+        )
+    ) {
+        std::cerr
+            << "deserialize pre-test backlog "
+               "delivery failed"
+            << ", error="
+            << error_message
+            << ", body="
+            << packet.body
+            << '\n';
+
+        return false;
+    }
+
+    if (delivery.message_id == 0) {
+        std::cerr
+            << "pre-test backlog message_id=0\n";
+        return false;
+    }
+
+    /*
+     * ACK必须携带：
+     *
+     * stable server message_id
+     * +
+     * 当前Receiver Delivery Attempt seq
+     */
+    if (
+        !SendPacket(
+            fd,
+            codec,
+            MakeReceiverChatDeliveryAck(
+                delivery.message_id,
+                packet.seq
+            )
+        )
+    ) {
+        std::cerr
+            << "send pre-test backlog "
+               "receiver ack failed"
+            << ", message_id="
+            << delivery.message_id
+            << ", delivery_seq="
+            << packet.seq
+            << '\n';
+
+        return false;
+    }
+
+    std::cout
+        << "[SENT] pre-test backlog receiver ACK"
+        << ", message_id="
+        << delivery.message_id
+        << ", delivery_seq="
+        << packet.seq
+        << '\n';
+
+    return true;
+}
+
+
 bool ValidateReceiverDelivery(
     const tinyimx::Packet& packet,
     const std::string& expected_text,
@@ -669,12 +764,20 @@ bool DrainPacketsUntilQuiet(
                     "[user_b pre-test drain]",
                     packet
                 );
-            }
 
+                if (
+                    !AckPreTestReceiverDelivery(
+                        fd,
+                        codec,
+                        packet
+                    )
+                ) {
+                    return false;
+                }
+            }
 
             continue;
         }
-
 
         if (
             decode_result.status !=
@@ -1041,6 +1144,23 @@ int main(
             "[user_b pre-test drain]",
             user_b_login_packets[index]
         );
+
+        if (
+            !AckPreTestReceiverDelivery(
+                user_b_fd,
+                codec,
+                user_b_login_packets[index]
+            )
+        ) {
+            std::cerr
+                << "failed to ack receiver "
+                "login backlog\n";
+
+            ::close(user_a_fd);
+            ::close(user_b_fd);
+
+            return 1;
+        }
     }
 
 
@@ -1199,6 +1319,63 @@ int main(
     /*
      * user10001收到Gateway A最终ACK。
      */
+
+     /*
+
+    * =====================================================
+    * F6-c:
+    * Receiver已经真实收到第一次Delivery。
+    *
+    * 当前立即ACK，
+    * 让共享MySQL在Gateway A Peer Retry发生前
+    * 尽量完成：
+    *
+    * Pending -> ReceiverConfirmed
+    * =====================================================
+    */
+    if (
+        !SendPacket(
+            user_b_fd,
+            codec,
+            MakeReceiverChatDeliveryAck(
+                receiver_server_message_id,
+                receiver_delivery_seq
+            )
+        )
+    ) {
+        std::cerr
+            << "send peer-response-loss "
+            "receiver ack failed\n";
+
+        ::close(user_a_fd);
+        ::close(user_b_fd);
+
+        return 1;
+    }
+
+    std::cout
+        << "[SENT] receiver ACK before "
+        "peer retry"
+        << ", message_id="
+        << receiver_server_message_id
+        << ", delivery_seq="
+        << receiver_delivery_seq
+        << '\n';
+
+
+    /*
+    * kChatDeliveryAck是one-way。
+    *
+    * 给Gateway B一个短窗口，
+    * 使ReceiverConfirmed先落入共享MySQL。
+    *
+    * 注意：
+    * 这里不是等待Peer Retry，
+    * Peer Retry仍由Gateway A自己的Timeout驱动。
+    */
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(300)
+    );
     std::vector<tinyimx::Packet>
         user_a_ack_packets;
 
@@ -1228,10 +1405,27 @@ int main(
         !ValidateChatAck(
             user_a_ack_packets.front(),
             client_message_id,
+
+            /*
+            * Client只发送了一次。
+            *
+            * Peer内部Retry不能污染Client语义。
+            */
             false,
-            false,
-            "remote_delivery_awaiting_receiver_ack",
-            0,
+
+            /*
+            * Receiver已经ACK，
+            * 所以最终业务ACK必须ReceiverConfirmed。
+            */
+            true,
+
+            "remote_receiver_confirmed",
+
+            /*
+            * Receiver已经提前告诉我们稳定的M。
+            */
+            receiver_server_message_id,
+
             &server_message_id
         )
     ) {
@@ -1245,19 +1439,17 @@ int main(
             server_message_id
     ) {
         std::cout
-            << "[PASS] cross gateway "
-            "receiver delivery and "
-            "sender ack share stable "
-            "message_id"
+            << "[PASS] peer response loss recovery "
+            "kept stable server message_id"
             << ", message_id="
             << server_message_id
-            << ", delivery_seq="
+            << ", receiver_delivery_seq="
             << receiver_delivery_seq
             << '\n';
     } else {
         std::cerr
-            << "[FAIL] cross gateway "
-            "receiver message_id mismatch"
+            << "[FAIL] peer response loss changed "
+            "stable server message_id"
             << ", receiver_message_id="
             << receiver_server_message_id
             << ", sender_ack_message_id="
@@ -1268,136 +1460,6 @@ int main(
     }
 
 
-    /*
-     * 4. Receiver -> Gateway B application ACK.
-     *
-     * Before this ACK, shared MySQL must remain Pending.
-     * Only this ACK may advance:
-     *
-     * Pending -> ReceiverConfirmed
-     */
-    if (
-        !SendPacket(
-            user_b_fd,
-            codec,
-            MakeReceiverChatDeliveryAck(
-                receiver_server_message_id,
-                receiver_delivery_seq
-            )
-        )
-    ) {
-        std::cerr << "send cross gateway receiver ack failed\n";
-        ::close(user_a_fd);
-        ::close(user_b_fd);
-        return 1;
-    }
-
-    std::cout
-        << "[SENT] cross gateway receiver delivery ack"
-        << ", message_id=" << receiver_server_message_id
-        << ", delivery_seq=" << receiver_delivery_seq
-        << '\n';
-
-    /*
-     * kChatDeliveryAck is one-way. Give Gateway B enough time
-     * to commit ReceiverConfirmed to the shared MySQL before
-     * Sender performs the idempotent retry.
-     */
-    std::this_thread::sleep_for(
-        std::chrono::milliseconds(300)
-    );
-
-
-        /*
-    * =====================================================
-    * 5. Client Retry
-    *
-    * seq变化：
-    * 3 -> 4
-    *
-    * client_message_id保持完全不变。
-    * =====================================================
-    */
-    if (
-        !SendPacket(
-            user_a_fd,
-            codec,
-            MakeChatMessage(
-                10002,
-                4,
-                message_text,
-                client_message_id
-            )
-        )
-    ) {
-        return 1;
-    }
-
-
-
-    std::vector<tinyimx::Packet>
-        retry_ack_packets;
-
-
-    if (
-        !WaitForPackets(
-            user_a_fd,
-            codec,
-            &user_a_input_buffer,
-            1,
-            &retry_ack_packets
-        )
-    ) {
-        return 1;
-    }
-
-
-    PrintPacket(
-        "[user_a@gateway-a retry]",
-        retry_ack_packets.front()
-    );
-
-
-    std::uint64_t
-        retry_message_id = 0;
-
-
-    if (
-        !ValidateChatAck(
-            retry_ack_packets.front(),
-            client_message_id,
-            true,
-            true,
-            "remote_receiver_confirmed",
-            server_message_id,
-            &retry_message_id
-        )
-    ) {
-        ok = false;
-    }
-
-    if (
-        server_message_id ==
-            retry_message_id &&
-        server_message_id != 0
-    ) {
-        std::cout
-            << "[PASS] stable server message_id"
-            << ", message_id="
-            << server_message_id
-            << '\n';
-    } else {
-        std::cerr
-            << "[FAIL] unstable server message_id"
-            << ", first="
-            << server_message_id
-            << ", retry="
-            << retry_message_id
-            << '\n';
-
-        ok = false;
-    }
-
 
     if (
         ExpectNoPacketWithin(
@@ -1406,12 +1468,12 @@ int main(
         )
     ) {
         std::cout
-            << "[PASS] receiver duplicate "
-            "delivery suppressed\n";
+            << "[PASS] peer retry did not "
+            "duplicate receiver delivery\n";
     } else {
         std::cerr
-            << "[FAIL] receiver received "
-            "duplicate chat message\n";
+            << "[FAIL] peer retry produced "
+            "duplicate receiver delivery\n";
 
         ok = false;
     }

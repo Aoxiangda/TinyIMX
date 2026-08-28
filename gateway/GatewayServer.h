@@ -6,12 +6,16 @@
 #include "common/protocol/ProtocolCodec.h"
 #include "gateway/SessionManager.h"
 #include "gateway/OfflineMessageStore.h"
-#include "gateway/GatewayPeerDeliveryDeduplicator.h"
+#include "gateway/MessageDeliveryDeduplicator.h"
+#include "gateway/ReceiverDeliveryTracker.h"
 #include "services/repository/FriendRepository.h"
 
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <string>
+#include <chrono>
 
 namespace tinyimx {
 
@@ -55,6 +59,47 @@ struct GatewayServerOptions {
     };
 
     int online_status_ttl_seconds{120};
+
+    /*
+    * Receiver Application ACK等待时间。
+    *
+    * Gateway发送：
+    *
+    *     kChatDelivery M/D
+    *
+    * 超过该时间仍未确认，则尝试：
+    *
+    *     same M / fresh D
+    *
+    * 当前先使用1500ms。
+    *
+    * 后续性能阶段根据真实RTT/P99调整，
+    * 不能把它当最终经验参数。
+    */
+    std::chrono::milliseconds
+        receiver_ack_timeout{
+            1500
+        };
+
+
+    /*
+    * Receiver Delivery总Attempt上限。
+    *
+    * 包含第一次发送。
+    *
+    * = 3意味着：
+    *
+    * D1
+    * D2
+    * D3
+    *
+    * 不产生D4。
+    */
+    std::uint32_t
+        receiver_delivery_max_attempts{
+            3
+        };
+
 };
 
 
@@ -139,6 +184,30 @@ private:
     void HandleChatMessage(const TcpConnectionPtr& connection,
                            const Packet& packet);
 
+    /*
+    * Receiver Client -> Gateway
+    *
+    * 处理Gateway此前发送的：
+    *
+    *     kChatDelivery
+    *
+    * 对应的应用协议层确认：
+    *
+    *     kChatDeliveryAck
+    *
+    * Packet.seq:
+    *     Receiver Delivery Attempt身份。
+    *
+    * body.message_id:
+    *     稳定Server Message身份。
+    *
+    * Receiver身份绝不信任body，
+    * 必须来自SessionManager。
+    */
+    void HandleReceiverChatDeliveryAck(const TcpConnectionPtr& connection,
+                                       const Packet& packet);
+
+
     void HandleGatewayForwardChatRequest(const TcpConnectionPtr& connection, const Packet& packet);
 
     void HandleReadRequest(const TcpConnectionPtr& connection,
@@ -182,6 +251,200 @@ private:
 
     Packet MakeErrorPacket(std::uint32_t seq,
                            const std::string& message) const;
+
+    /*
+    * 为Gateway -> Receiver的一次网络投递Attempt
+    * 分配新的Packet.seq。
+    *
+    * 注意：
+    *
+    * 它不是：
+    *
+    * - Sender Request seq
+    * - Gateway Peer RPC seq
+    * - server message_id
+    *
+    * 0保留为无效seq，因此生成器必须跳过0。
+    */
+    std::uint32_t
+        NextReceiverDeliverySeq() noexcept;
+
+        enum class ReceiverDeliverySubmitStatus {
+        /*
+        * Delivery Attempt已经登记，
+        * 并已经提交给TcpConnection发送路径。
+        */
+        kSubmitted = 0,
+
+        /*
+        * Tracker已经确认该message。
+        *
+        * 不允许重新打开WaitingAck。
+        */
+        kAlreadyConfirmed,
+
+        /*
+        * 当前connection在提交前已经不可用。
+        *
+        * 此状态不会登记Attempt。
+        */
+
+        kConnectionUnavailable,
+        /*
+        * Timeout callback针对的Attempt
+        * 已经不是current Attempt。
+        */
+        kStaleAttempt,
+
+        /*
+        * 已达到receiver_delivery_max_attempts。
+        */
+        kAttemptLimitReached,
+        /*
+        * kChatDelivery构造失败。
+        */
+        kBuildFailed,
+
+        /*
+        * ProtocolCodec编码失败。
+        *
+        * 此时还没有登记Attempt。
+        */
+        kEncodeFailed,
+
+        /*
+        * Tracker拒绝本次Attempt。
+        *
+        * 例如：
+        * receiver identity冲突，
+        * delivery_seq重复，
+        * 参数非法。
+        */
+        kTrackerRejected
+    };
+
+
+
+    /*
+    * 构造Gateway -> Receiver的正式投递Packet。
+    *
+    * Packet.seq：
+    *     一次Receiver Delivery Attempt身份。
+    *
+    * body.message_id：
+    *     稳定Server Business Message身份。
+    *
+    * 同一个message_id未来Retry时：
+    *
+    * message_id保持不变，
+    * Packet.seq重新生成。
+    */
+    bool BuildReceiverChatDeliveryPacket(
+        std::uint64_t message_id,
+        UserId from_user_id,
+        UserId to_user_id,
+        const std::string& text,
+        Packet* packet,
+        std::string* error_message = nullptr
+    );
+
+
+    /*
+    * Gateway -> Receiver正式发送入口。
+    *
+    * 统一完成：
+    *
+    * Build
+    *   ↓
+    * Encode
+    *   ↓
+    * RegisterAttempt
+    *   ↓
+    * TcpConnection::Send
+    *
+    * 这样三个业务入口不会分别复制
+    * ACK Tracking逻辑。
+    */
+    ReceiverDeliverySubmitStatus
+        SubmitReceiverChatDelivery(
+            const TcpConnectionPtr& connection,
+            std::uint64_t message_id,
+            UserId from_user_id,
+            UserId to_user_id,
+            const std::string& text,
+            Packet* submitted_packet = nullptr,
+            std::string* error_message = nullptr
+        );
+
+
+    /*
+    * 为一次已经真实提交的Receiver Delivery
+    * 安排ACK Timeout。
+    *
+    * Timer挂到该Receiver Connection所属
+    * EventLoop/Sub-Reactor。
+    */
+    bool ScheduleReceiverDeliveryAckTimeout(
+        const TcpConnectionPtr& connection,
+        std::uint64_t message_id,
+        UserId from_user_id,
+        UserId to_user_id,
+        const std::string& text,
+        std::uint32_t delivery_seq
+    );
+
+
+    /*
+    * ACK Timeout真正触发后的状态处理。
+    *
+    * timed_out_delivery_seq非常重要：
+    *
+    * callback必须知道：
+    *
+    * “我是D1的Timer”
+    *
+    * 而不是仅仅知道：
+    *
+    * “我是M的Timer”。
+    */
+    void HandleReceiverDeliveryAckTimeout(
+        std::uint64_t message_id,
+        UserId from_user_id,
+        UserId to_user_id,
+        const std::string& text,
+        std::uint32_t timed_out_delivery_seq
+    );
+
+
+    /*
+    * Timeout场景专用Retry提交入口。
+    *
+    * 与普通Submit最大的区别：
+    *
+    * 普通：
+    * RegisterAttempt()
+    *
+    * Retry：
+    * RegisterRetryAttempt(
+    *     expected_old_seq,
+    *     fresh_new_seq
+    * )
+    *
+    * 从而原子防止并发/迟到Timeout
+    * 制造多个Retry。
+    */
+    ReceiverDeliverySubmitStatus
+    SubmitReceiverChatDeliveryRetry(
+        const TcpConnectionPtr& connection,
+        std::uint64_t message_id,
+        UserId from_user_id,
+        UserId to_user_id,
+        const std::string& text,
+        std::uint32_t timed_out_delivery_seq,
+        Packet* submitted_packet = nullptr,
+        std::string* error_message = nullptr
+    );
+
 
     void PushOfflineMessages(UserId user_id,
                          const TcpConnectionPtr& connection);
@@ -228,6 +491,21 @@ private:
     ProtocolCodec codec_;
     TcpServer server_;
 
+
+    /*
+    * Gateway进程内的Receiver Delivery Attempt seq生成器。
+    *
+    * 它只负责短期Network Attempt Correlation。
+    *
+    * 不承担稳定业务身份。
+    *
+    * Gateway进程重启后允许重新从1开始：
+    * 真正跨Retry/跨重启稳定的身份是message_id。
+    */
+    std::atomic<std::uint32_t>
+        next_receiver_delivery_seq_{1};
+
+
     SessionManager session_manager_;
     OfflineMessageStore offline_message_store_;
 
@@ -239,7 +517,26 @@ private:
     *   kProcessing
     *   kDelivered
     */
-    GatewayPeerDeliveryDeduplicator gateway_peer_delivery_deduplicator_;
+    /*
+    * Gateway进程内统一消息投递执行权控制器。
+    *
+    * Local Delivery与Peer Delivery
+    * 后续共同使用同一个server message_id语义：
+    *
+    * NotSeen
+    *    ↓
+    * Processing
+    *    ↓
+    * Delivered
+    *
+    * 目的：
+    *
+    * 同一个server message_id在当前Gateway中
+    * 只能有一个执行者真正产生Receiver-visible
+    * SendPacket副作用。
+    */
+    MessageDeliveryDeduplicator message_delivery_deduplicator_;
+    ReceiverDeliveryTracker receiver_delivery_tracker_;
     MessageRepository* message_repository_{nullptr};
     UserRepository* user_repository_{nullptr};
     FriendRepository* friend_repository_{nullptr};

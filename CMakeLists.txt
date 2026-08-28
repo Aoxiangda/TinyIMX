@@ -349,7 +349,8 @@ add_library(tinyimx_gateway
     gateway/GatewayRouteResolver.cpp
     gateway/GatewayPeerTransport.cpp
     gateway/GatewayPeerTransportManager.cpp
-    gateway/GatewayPeerDeliveryDeduplicator.cpp
+    gateway/MessageDeliveryDeduplicator.cpp
+    gateway/ReceiverDeliveryTracker.cpp
 )
 
 target_include_directories(tinyimx_gateway PUBLIC
@@ -395,14 +396,41 @@ target_link_libraries(gateway_offline_client_demo PRIVATE
 )
 
 add_executable(
+    gateway_pending_replay_pagination_demo
+    examples/gateway_pending_replay_pagination_demo.cpp
+)
+
+target_link_libraries(
+    gateway_pending_replay_pagination_demo
+    PRIVATE
+    tinyimx_protocol
+)
+
+
+add_executable(
+    gateway_receiver_reconnect_dedup_demo
+    examples/gateway_receiver_reconnect_dedup_demo.cpp
+)
+
+target_link_libraries(
+    gateway_receiver_reconnect_dedup_demo
+    PRIVATE
+        tinyimx_protocol
+)
+
+
+
+add_executable(
     gateway_peer_duplicate_client_demo
     examples/gateway_peer_duplicate_client_demo.cpp
 )
+
 
 target_link_libraries(
     gateway_peer_duplicate_client_demo
     PRIVATE
     tinyimx_protocol
+    tinyimx_repository
 )
 
 
@@ -423,7 +451,8 @@ add_executable(gateway_tests
     tests/gateway/offline_message_store_test.cpp
     tests/gateway/session_manager_test.cpp
     tests/gateway/gateway_peer_transport_test.cpp
-    tests/gateway/gateway_peer_delivery_deduplicator_test.cpp
+    tests/gateway/message_delivery_deduplicator_test.cpp
+    tests/gateway/receiver_delivery_tracker_test.cpp
 )
 
 target_link_libraries(gateway_tests PRIVATE
@@ -994,6 +1023,77 @@ target_link_libraries(
 
 
 add_executable(
+    gateway_same_gateway_client_demo
+    examples/gateway_same_gateway_client_demo.cpp
+)
+
+target_link_libraries(
+    gateway_same_gateway_client_demo
+    PRIVATE
+    tinyimx_protocol
+)
+
+
+add_executable(
+    gateway_client_retry_demo
+    examples/gateway_client_retry_demo.cpp
+)
+
+target_link_libraries(
+    gateway_client_retry_demo
+    PRIVATE
+    tinyimx_protocol
+)
+
+add_executable(
+    gateway_client_ack_loss_demo
+    examples/gateway_client_ack_loss_demo.cpp
+)
+
+target_link_libraries(
+    gateway_client_ack_loss_demo
+    PRIVATE
+    tinyimx_protocol
+)
+
+
+add_executable(
+    gateway_client_retry_exhaustion_demo
+    examples/gateway_client_retry_exhaustion_demo.cpp
+)
+
+target_link_libraries(
+    gateway_client_retry_exhaustion_demo
+    PRIVATE
+    tinyimx_protocol
+)
+
+
+add_executable(
+    gateway_offline_idempotency_client_demo
+    examples/gateway_offline_idempotency_client_demo.cpp
+)
+
+target_link_libraries(
+    gateway_offline_idempotency_client_demo
+    PRIVATE
+    tinyimx_protocol
+)
+
+
+add_executable(
+    gateway_offline_recovery_client_demo
+    examples/gateway_offline_recovery_client_demo.cpp
+)
+
+target_link_libraries(
+    gateway_offline_recovery_client_demo
+    PRIVATE
+    tinyimx_protocol
+)
+
+
+add_executable(
     gateway_cross_gateway_client_demo
     examples/gateway_cross_gateway_client_demo.cpp
 )
@@ -1002,4 +1102,37 @@ target_link_libraries(
     gateway_cross_gateway_client_demo
     PRIVATE
     tinyimx_protocol
+)
+
+add_executable(
+    gateway_cross_gateway_reconnect_dedup_demo
+    examples/gateway_cross_gateway_reconnect_dedup_demo.cpp
+)
+
+target_link_libraries(
+    gateway_cross_gateway_reconnect_dedup_demo
+    PRIVATE
+        tinyimx_protocol
+)
+
+add_executable(
+    gateway_cross_gateway_gateway_b_crash_recovery_demo
+    examples/gateway_cross_gateway_gateway_b_crash_recovery_demo.cpp
+)
+
+target_link_libraries(
+    gateway_cross_gateway_gateway_b_crash_recovery_demo
+    PRIVATE
+        tinyimx_protocol
+)
+
+add_executable(
+    gateway_cross_gateway_peer_response_loss_demo
+    examples/gateway_cross_gateway_peer_response_loss_demo.cpp
+)
+
+target_link_libraries(
+    gateway_cross_gateway_peer_response_loss_demo
+    PRIVATE
+        tinyimx_protocol
 )

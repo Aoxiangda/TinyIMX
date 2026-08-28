@@ -1,4 +1,5 @@
 #include "common/net/Buffer.h"
+#include "common/protocol/ClientChatProtocol.h"
 #include "common/protocol/ProtocolCodec.h"
 
 #include <arpa/inet.h>
@@ -12,10 +13,33 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <chrono>
+#include <thread>
 
 namespace {
 
 using Json = nlohmann::json;
+
+std::string MakeClientMessageId(
+    const std::string& prefix
+) {
+    const auto now =
+        std::chrono::system_clock::now()
+            .time_since_epoch();
+
+    const auto nanoseconds =
+        std::chrono::duration_cast<
+            std::chrono::nanoseconds
+        >(now).count();
+
+
+    return
+        prefix +
+        std::to_string(
+            nanoseconds
+        );
+}
+
 
 bool SetSocketTimeout(int fd, int seconds) {
     timeval timeout {};
@@ -144,22 +168,6 @@ bool SendAll(int fd, const std::string& data) {
     return true;
 }
 
-/*
-    tinyimx::Packet MakeLoginRequest(std::uint64_t user_id,
-                                  std::uint32_t seq) {
-        tinyimx::Packet packet;
-        packet.type = tinyimx::MessageType::kLoginRequest;
-        packet.seq = seq;
-        packet.body =
-            Json{
-                {"user_id", user_id},
-                {"token", "demo-token"}
-            }.dump();
-
-        return packet;
-    }
-
-*/
 
 tinyimx::Packet MakeLoginRequest(const std::string& username,
                                   const std::string& password,
@@ -175,41 +183,109 @@ tinyimx::Packet MakeLoginRequest(const std::string& username,
 
     return packet;
 }
-/*
-    tinyimx::Packet MakeChatMessage(std::uint64_t from,
-                                    std::uint64_t to,
-                                    std::uint32_t seq,
-                                    const std::string& text) {
-        tinyimx::Packet packet;
-        packet.type = tinyimx::MessageType::kChatMessage;
-        packet.seq = seq;
-        packet.body =
-            std::string(R"({"from":)") +
-            std::to_string(from) +
-            R"(,"to":)" +
-            std::to_string(to) +
-            R"(,"text":")" +
-            text +
-            R"("})";
 
-        return packet;
+tinyimx::Packet MakeChatMessage(
+    std::uint64_t to,
+    std::uint32_t seq,
+    const std::string& text,
+    const std::string& client_message_id
+) {
+    tinyimx::ClientChatRequest request;
+
+    request.client_message_id =
+        client_message_id;
+
+    request.to_user_id =
+        to;
+
+    request.text =
+        text;
+
+
+    std::string body;
+    std::string error_message;
+
+
+    if (
+        !tinyimx::
+            SerializeClientChatRequest(
+                request,
+                &body,
+                &error_message
+            )
+    ) {
+        std::cerr
+            << "serialize client chat "
+               "request failed"
+            << ", error="
+            << error_message
+            << '\n';
+
+        return {};
     }
-*/
 
-tinyimx::Packet MakeChatMessage(std::uint64_t to,
-                                 std::uint32_t seq,
-                                 const std::string& text) {
+
     tinyimx::Packet packet;
-    packet.type = tinyimx::MessageType::kChatMessage;
-    packet.seq = seq;
+
+    packet.type =
+        tinyimx::MessageType::
+            kChatMessage;
+
+    packet.seq =
+        seq;
+
     packet.body =
-        Json{
-            {"to", to},
-            {"text", text}
-        }.dump();
+        body;
+
 
     return packet;
 }
+
+tinyimx::Packet MakeReceiverChatDeliveryAck(
+    std::uint64_t message_id,
+    std::uint32_t delivery_seq
+) {
+    tinyimx::ReceiverChatDeliveryAck ack;
+
+    ack.message_id =
+        message_id;
+
+    std::string body;
+    std::string error_message;
+
+    if (
+        !tinyimx::SerializeReceiverChatDeliveryAck(
+            ack,
+            &body,
+            &error_message
+        )
+    ) {
+        std::cerr
+            << "serialize receiver delivery ACK failed"
+            << ", error="
+            << error_message
+            << '\n';
+
+        return {};
+    }
+
+    tinyimx::Packet packet;
+
+    packet.type =
+        tinyimx::MessageType::kChatDeliveryAck;
+
+    /*
+     * Receiver ACK引用真实Delivery Attempt D。
+     */
+    packet.seq =
+        delivery_seq;
+
+    packet.body =
+        body;
+
+    return packet;
+}
+
 
 tinyimx::Packet MakeReadRequest(std::uint64_t peer_user_id,
                                  std::uint32_t seq) {
@@ -238,48 +314,90 @@ bool SendPacket(int fd,
     return SendAll(fd, output.RetrieveAllAsString());
 }
 
-bool WaitForPackets(int fd,
-                    const tinyimx::ProtocolCodec& codec,
-                    std::size_t expected_count,
-                    std::vector<tinyimx::Packet>* packets) {
-    if (packets == nullptr) {
+bool WaitForPackets(
+    int fd,
+    const tinyimx::ProtocolCodec& codec,
+    tinyimx::Buffer* input_buffer,
+    std::size_t expected_count,
+    std::vector<tinyimx::Packet>* packets
+) {
+    if (
+        input_buffer == nullptr ||
+        packets == nullptr
+    ) {
         return false;
     }
 
-    tinyimx::Buffer input_buffer;
-
     while (packets->size() < expected_count) {
-        char temp[4096];
+        /*
+         * 先尝试解码上一次recv留下来的完整Packet。
+         *
+         * Buffer生命周期与TCP Connection一致，
+         * 因此半包不会因为一次Wait函数返回而丢失。
+         */
+        const tinyimx::DecodeResult buffered_result =
+            codec.Decode(input_buffer);
 
-        const ssize_t n = ::recv(fd, temp, sizeof(temp), 0);
-
-        if (n > 0) {
-            input_buffer.Append(temp, static_cast<std::size_t>(n));
-
-            const tinyimx::DecodeResult result =
-                codec.Decode(&input_buffer);
-
-            if (result.status ==
-                tinyimx::DecodeStatus::kNeedMoreData) {
-                continue;
-            }
-
-            if (result.status != tinyimx::DecodeStatus::kOk) {
-                std::cerr << "decode failed: "
-                          << tinyimx::DecodeStatusToString(result.status)
-                          << ", error=" << result.error_message << '\n';
-                return false;
-            }
-
-            for (const auto& packet : result.packets) {
+        if (
+            buffered_result.status ==
+            tinyimx::DecodeStatus::kOk
+        ) {
+            for (
+                const auto& packet :
+                    buffered_result.packets
+            ) {
                 packets->push_back(packet);
+            }
+
+            if (
+                packets->size() >=
+                expected_count
+            ) {
+                break;
             }
 
             continue;
         }
 
+        if (
+            buffered_result.status !=
+            tinyimx::DecodeStatus::kNeedMoreData
+        ) {
+            std::cerr
+                << "decode failed: "
+                << tinyimx::DecodeStatusToString(
+                       buffered_result.status
+                   )
+                << ", error="
+                << buffered_result.error_message
+                << '\n';
+
+            return false;
+        }
+
+        char temp[4096];
+
+        const ssize_t n =
+            ::recv(
+                fd,
+                temp,
+                sizeof(temp),
+                0
+            );
+
+        if (n > 0) {
+            input_buffer->Append(
+                temp,
+                static_cast<std::size_t>(n)
+            );
+
+            continue;
+        }
+
         if (n == 0) {
-            std::cerr << "server closed connection\n";
+            std::cerr
+                << "server closed connection\n";
+
             return false;
         }
 
@@ -287,13 +405,193 @@ bool WaitForPackets(int fd,
             continue;
         }
 
-        std::cerr << "recv failed: "
-                  << std::strerror(errno) << '\n';
+        std::cerr
+            << "recv failed: "
+            << std::strerror(errno)
+            << '\n';
+
         return false;
     }
 
     return true;
 }
+
+
+bool ValidateReceiverDelivery(
+    const tinyimx::Packet& packet,
+    const std::string& expected_text,
+    std::uint64_t* message_id,
+    std::uint32_t* delivery_seq
+) {
+    if (
+        packet.type !=
+        tinyimx::MessageType::
+            kChatDelivery
+    ) {
+        std::cerr
+            << "expected receiver "
+               "chat_delivery"
+            << ", actual="
+            << tinyimx::
+                MessageTypeToString(
+                    packet.type
+                )
+            << '\n';
+
+        return false;
+    }
+
+
+    if (packet.seq == 0) {
+        std::cerr
+            << "receiver delivery seq "
+               "must not be zero\n";
+
+        return false;
+    }
+
+
+    tinyimx::ServerChatDelivery
+        delivery;
+
+    std::string error_message;
+
+
+    if (
+        !tinyimx::
+            DeserializeServerChatDelivery(
+                packet.body,
+                &delivery,
+                &error_message
+            )
+    ) {
+        std::cerr
+            << "deserialize receiver "
+               "delivery failed"
+            << ", error="
+            << error_message
+            << '\n';
+
+        return false;
+    }
+
+
+    if (
+        delivery.from_user_id != 10001 ||
+        delivery.to_user_id != 10002 ||
+        delivery.text != expected_text ||
+        delivery.message_id == 0
+    ) {
+        std::cerr
+            << "receiver delivery "
+               "business fields mismatch"
+            << ", body="
+            << packet.body
+            << '\n';
+
+        return false;
+    }
+
+
+    if (message_id != nullptr) {
+        *message_id =
+            delivery.message_id;
+    }
+
+
+    if (delivery_seq != nullptr) {
+        *delivery_seq =
+            packet.seq;
+    }
+
+
+    return true;
+}
+
+bool ValidateSenderChatAck(
+    const tinyimx::Packet& packet,
+    const std::string&
+        expected_client_message_id,
+    bool expected_delivered,
+    bool expected_stored_offline,
+    const std::string& expected_reason,
+    std::uint64_t* message_id
+) {
+    if (
+        packet.type !=
+        tinyimx::MessageType::kChatAck
+    ) {
+        std::cerr
+            << "expected chat_ack"
+            << ", actual="
+            << tinyimx::
+                MessageTypeToString(
+                    packet.type
+                )
+            << '\n';
+
+        return false;
+    }
+
+
+    tinyimx::ClientChatAck ack;
+
+    std::string error_message;
+
+
+    if (
+        !tinyimx::
+            DeserializeClientChatAck(
+                packet.body,
+                &ack,
+                &error_message
+            )
+    ) {
+        std::cerr
+            << "deserialize chat ack failed"
+            << ", error="
+            << error_message
+            << '\n';
+
+        return false;
+    }
+
+
+    if (
+        !ack.success ||
+        ack.client_message_id !=
+            expected_client_message_id ||
+        ack.message_id == 0 ||
+        ack.from_user_id != 10001 ||
+        ack.to_user_id != 10002 ||
+        ack.delivered !=
+            expected_delivered ||
+        ack.stored_offline !=
+            expected_stored_offline ||
+        !ack.stored_persistent ||
+        ack.reused ||
+        ack.reason !=
+            expected_reason
+    ) {
+        std::cerr
+            << "chat ack semantic mismatch"
+            << ", body="
+            << packet.body
+            << '\n';
+
+        return false;
+    }
+
+
+    if (message_id != nullptr) {
+        *message_id =
+            ack.message_id;
+    }
+
+
+    return true;
+}
+
 
 void PrintPacket(const std::string& tag,
                  const tinyimx::Packet& packet) {
@@ -327,6 +625,14 @@ int main(int argc, char* argv[]) {
 
     tinyimx::ProtocolCodec codec;
 
+    /*
+     * 每条TCP byte stream拥有独立、长生命周期Buffer。
+     *
+     * TCP半包不能因为一次WaitForPackets返回而丢失。
+     */
+    tinyimx::Buffer user_a_input_buffer;
+    tinyimx::Buffer user_b_input_buffer;
+
     const int user_b_fd = ConnectToServer(host, port);
     if (user_b_fd < 0) {
         std::cerr << "connect user B failed\n";
@@ -350,7 +656,12 @@ int main(int argc, char* argv[]) {
     }
 
     std::vector<tinyimx::Packet> user_b_packets;
-    if (!WaitForPackets(user_b_fd, codec, 1, &user_b_packets)) {
+    if (!WaitForPackets(
+            user_b_fd,
+            codec,
+            &user_b_input_buffer,
+            1,
+            &user_b_packets)) {
         return 1;
     }
 
@@ -364,52 +675,242 @@ int main(int argc, char* argv[]) {
     }
 
     std::vector<tinyimx::Packet> user_a_packets;
-    if (!WaitForPackets(user_a_fd, codec, 1, &user_a_packets)) {
+    if (!WaitForPackets(
+            user_a_fd,
+            codec,
+            &user_a_input_buffer,
+            1,
+            &user_a_packets)) {
         return 1;
     }
 
     PrintPacket("[user_a]", user_a_packets[0]);
 
-    if (!SendPacket(
+    const std::string
+        client_message_id =
+            MakeClientMessageId(
+                "m12-legacy-session-"
+            );
+
+
+    const std::string
+        message_text =
+            "hello from user 10001";
+
+
+    std::cout
+        << "client_message_id="
+        << client_message_id
+        << '\n';
+
+
+    if (
+        !SendPacket(
             user_a_fd,
             codec,
             MakeChatMessage(
                 10002,
                 3,
-                "hello from user 10001"))) {
+                message_text,
+                client_message_id
+            )
+        )
+    ) {
         return 1;
     }
 
     std::vector<tinyimx::Packet> user_b_chat_packets;
-    if (!WaitForPackets(user_b_fd, codec, 1, &user_b_chat_packets)) {
+    if (!WaitForPackets(
+            user_b_fd,
+            codec,
+            &user_b_input_buffer,
+            1,
+            &user_b_chat_packets)) {
         return 1;
     }
 
     PrintPacket("[user_b]", user_b_chat_packets[0]);
 
     std::vector<tinyimx::Packet> user_a_ack_packets;
-    if (!WaitForPackets(user_a_fd, codec, 1, &user_a_ack_packets)) {
+    if (!WaitForPackets(
+            user_a_fd,
+            codec,
+            &user_a_input_buffer,
+            1,
+            &user_a_ack_packets)) {
         return 1;
     }
 
 
     PrintPacket("[user_a]", user_a_ack_packets[0]);
 
-    if (!SendPacket(
+    bool ok = true;
+
+    std::uint64_t
+        receiver_message_id = 0;
+
+    std::uint32_t
+        receiver_delivery_seq = 0;
+
+    std::uint64_t
+        sender_ack_message_id = 0;
+
+
+    /*
+     * 先验证Receiver真正观察到的M / D。
+     */
+    if (
+        !ValidateReceiverDelivery(
+            user_b_chat_packets[0],
+            message_text,
+            &receiver_message_id,
+            &receiver_delivery_seq
+        )
+    ) {
+        ok = false;
+    }
+
+
+    /*
+     * Sender第一次ChatAck发生在Receiver application ACK之前。
+     *
+     * 所以：
+     *
+     * delivered=false
+     * reason=local_delivery_awaiting_receiver_ack
+     */
+    if (
+        !ValidateSenderChatAck(
+            user_a_ack_packets[0],
+            client_message_id,
+            false,
+            false,
+            "local_delivery_awaiting_receiver_ack",
+            &sender_ack_message_id
+        )
+    ) {
+        ok = false;
+    }
+
+
+    if (
+        receiver_message_id != 0 &&
+        receiver_message_id ==
+            sender_ack_message_id
+    ) {
+        std::cout
+            << "[PASS] session receiver "
+            "delivery and sender ack "
+            "share stable message_id"
+            << ", message_id="
+            << receiver_message_id
+            << ", delivery_seq="
+            << receiver_delivery_seq
+            << '\n';
+    } else {
+        std::cerr
+            << "[FAIL] session message_id "
+            "mismatch"
+            << ", receiver="
+            << receiver_message_id
+            << ", sender_ack="
+            << sender_ack_message_id
+            << '\n';
+
+        ok = false;
+    }
+
+
+    /*
+     * 只有Receiver application ACK可以推进：
+     *
+     * Pending -> ReceiverConfirmed
+     */
+    if (
+        ok &&
+        !SendPacket(
             user_b_fd,
             codec,
-            MakeReadRequest(10001, 4))) {
-        return 1;
+            MakeReceiverChatDeliveryAck(
+                receiver_message_id,
+                receiver_delivery_seq
+            )
+        )
+    ) {
+        std::cerr
+            << "[FAIL] session receiver delivery ACK failed\n";
+
+        ok = false;
     }
 
-    std::vector<tinyimx::Packet> user_b_read_packets;
-    if (!WaitForPackets(user_b_fd, codec, 1, &user_b_read_packets)) {
-        return 1;
+
+    if (ok) {
+        std::cout
+            << "[SENT] session receiver delivery ACK"
+            << ", message_id="
+            << receiver_message_id
+            << ", delivery_seq="
+            << receiver_delivery_seq
+            << '\n';
+
+        /*
+         * Receiver ACK本身没有ACK-of-ACK。
+         *
+         * 给Gateway一个短窗口完成durable ReceiverConfirmed，
+         * 然后再做Read。
+         */
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(300)
+        );
     }
 
-    PrintPacket("[user_b]", user_b_read_packets[0]);
 
-    bool ok = true;
+    if (
+        ok &&
+        !SendPacket(
+            user_b_fd,
+            codec,
+            MakeReadRequest(
+                10001,
+                4
+            )
+        )
+    ) {
+        std::cerr
+            << "[FAIL] send read request failed\n";
+
+        ok = false;
+    }
+
+
+    std::vector<tinyimx::Packet>
+        user_b_read_packets;
+
+
+    if (
+        ok &&
+        !WaitForPackets(
+            user_b_fd,
+            codec,
+            &user_b_input_buffer,
+            1,
+            &user_b_read_packets
+        )
+    ) {
+        ok = false;
+    }
+
+
+    if (
+        ok &&
+        !user_b_read_packets.empty()
+    ) {
+        PrintPacket(
+            "[user_b]",
+            user_b_read_packets[0]
+        );
+    }
+
 
     ok = ok &&
          user_b_packets[0].type ==
@@ -420,18 +921,12 @@ int main(int argc, char* argv[]) {
              tinyimx::MessageType::kLoginResponse;
 
     ok = ok &&
-         user_b_chat_packets[0].type ==
-             tinyimx::MessageType::kChatMessage;
-
-    ok = ok &&
-        user_a_ack_packets[0].type ==
-            tinyimx::MessageType::kChatAck;
-
-    ok = ok &&
+        !user_b_read_packets.empty() &&
         user_b_read_packets[0].type ==
             tinyimx::MessageType::kReadResponse;
 
     ok = ok &&
+        !user_b_read_packets.empty() &&
         ValidateReadResponseBody(
             user_b_read_packets[0].body,
             10002,
@@ -445,6 +940,9 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    std::cout
+        << "[PASS] session happy path "
+           "Pending -> ReceiverConfirmed -> Read\n";
     std::cout << "gateway session client validation passed\n";
     std::cout << "=================================================\n";
 
