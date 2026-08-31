@@ -13,15 +13,39 @@ namespace tinyimx {
 
 using UserId = std::uint64_t;
 
+using SessionEpoch = std::uint64_t;
+
+struct SessionSnapshot {
+    UserId user_id{0};
+
+    SessionEpoch epoch{0};
+
+    TcpConnectionPtr connection;
+
+    bool Valid() const noexcept {
+        return
+            user_id != 0 &&
+            epoch != 0 &&
+            static_cast<bool>(
+                connection
+            );
+    }
+};
+
+
 struct SessionBindResult {
     bool success{false};
     bool replaced{false};
+
     TcpConnectionPtr old_connection;
+
+    SessionEpoch epoch{0};
 };
 
 struct SessionUnbindResult {
     bool unbound{false};
     UserId user_id{0};
+    SessionEpoch epoch{0};
 };
 
 class SessionManager {
@@ -63,6 +87,23 @@ public:
     FindUserByConnection(
         const TcpConnectionPtr& connection
     ) const;
+    std::optional<SessionSnapshot>
+    FindSession(
+        UserId user_id
+    ) const;
+
+
+    std::optional<SessionSnapshot>
+    FindSessionByConnection(
+        const TcpConnectionPtr& connection
+    ) const;
+
+    bool IsCurrent(
+        UserId user_id,
+        SessionEpoch epoch,
+        const TcpConnectionPtr& connection
+    ) const;
+
 
     bool IsOnline(
         UserId user_id
@@ -78,15 +119,45 @@ private:
 private:
     mutable std::mutex mutex_;
 
-    std::unordered_map<
-        UserId,
-        std::weak_ptr<TcpConnection>
-    > user_connections_;
+    struct SessionRecord {
+    std::weak_ptr<TcpConnection>
+        connection;
 
-    std::unordered_map<
-        std::string,
-        UserId
-    > connection_users_;
+    SessionEpoch epoch{0};
+
+    std::string connection_key;
+};
+
+
+struct ConnectionSessionRecord {
+    UserId user_id{0};
+
+    SessionEpoch epoch{0};
+};
+
+
+SessionEpoch AllocateEpochLocked();
+
+
+std::unordered_map<
+    UserId,
+    SessionRecord
+> user_sessions_;
+
+
+std::unordered_map<
+    std::string,
+    ConnectionSessionRecord
+> connection_sessions_;
+
+
+/*
+ * 所有读写都在mutex_内，
+ * 因此不需要atomic。
+ *
+ * epoch=0保留为invalid。
+ */
+SessionEpoch next_epoch_{1};
 };
 
 }  // namespace tinyimx

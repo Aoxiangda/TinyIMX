@@ -468,6 +468,347 @@ void RegisterSessionManagerTests(
             );
         }
     );
+
+        runner.Add(
+        "SessionManager.SessionEpochFencesReplacement",
+        []() {
+            constexpr UserId kUserId =
+                10004;
+
+            EventLoop loop;
+
+            TINYIMX_EXPECT_TRUE(
+                loop.IsValid()
+            );
+
+            const TcpConnectionPtr
+                connection_a =
+                    MakeTestConnection(
+                        &loop,
+                        "session-epoch-a",
+                        21006,
+                        22006
+                    );
+
+            const TcpConnectionPtr
+                connection_b =
+                    MakeTestConnection(
+                        &loop,
+                        "session-epoch-b",
+                        21007,
+                        22007
+                    );
+
+            TINYIMX_EXPECT_TRUE(
+                connection_a != nullptr
+            );
+
+            TINYIMX_EXPECT_TRUE(
+                connection_b != nullptr
+            );
+
+            SessionManager manager;
+
+            /*
+             * 第一代Session：
+             *
+             * user10004
+             *   ->
+             * connection_a
+             *   ->
+             * epoch1
+             */
+            const SessionBindResult
+                first_bind =
+                    manager.BindOrReplace(
+                        kUserId,
+                        connection_a
+                    );
+
+            TINYIMX_EXPECT_TRUE(
+                first_bind.success
+            );
+
+            TINYIMX_EXPECT_TRUE(
+                first_bind.epoch != 0
+            );
+
+            TINYIMX_EXPECT_TRUE(
+                manager.IsCurrent(
+                    kUserId,
+                    first_bind.epoch,
+                    connection_a
+                )
+            );
+
+            /*
+             * 再确认：
+             *
+             * connection_a反查到的Snapshot
+             * 与Bind产生的epoch一致。
+             */
+            const auto first_snapshot =
+                manager.FindSessionByConnection(
+                    connection_a
+                );
+
+            TINYIMX_EXPECT_TRUE(
+                first_snapshot.has_value()
+            );
+
+            TINYIMX_EXPECT_EQ(
+                first_snapshot->user_id,
+                kUserId
+            );
+
+            TINYIMX_EXPECT_EQ(
+                first_snapshot->epoch,
+                first_bind.epoch
+            );
+
+            /*
+             * 第二代Session：
+             *
+             * 同一个User，
+             * 换成connection_b。
+             */
+            const SessionBindResult
+                second_bind =
+                    manager.BindOrReplace(
+                        kUserId,
+                        connection_b
+                    );
+
+            TINYIMX_EXPECT_TRUE(
+                second_bind.success
+            );
+
+            TINYIMX_EXPECT_TRUE(
+                second_bind.epoch != 0
+            );
+
+            /*
+             * 新Session必须产生新generation。
+             */
+            TINYIMX_EXPECT_TRUE(
+                second_bind.epoch !=
+                first_bind.epoch
+            );
+
+            TINYIMX_EXPECT_TRUE(
+                second_bind.replaced
+            );
+
+            TINYIMX_EXPECT_TRUE(
+                second_bind.old_connection ==
+                connection_a
+            );
+
+            /*
+             * 核心Invariant：
+             *
+             * 旧 connection + 旧 epoch
+             * 已经不是current。
+             */
+            TINYIMX_EXPECT_TRUE(
+                !manager.IsCurrent(
+                    kUserId,
+                    first_bind.epoch,
+                    connection_a
+                )
+            );
+
+            /*
+             * 新 connection + 新 epoch
+             * 才是current。
+             */
+            TINYIMX_EXPECT_TRUE(
+                manager.IsCurrent(
+                    kUserId,
+                    second_bind.epoch,
+                    connection_b
+                )
+            );
+
+            /*
+             * 旧connection的reverse mapping
+             * 也必须被清理。
+             */
+            TINYIMX_EXPECT_TRUE(
+                !manager.
+                    FindSessionByConnection(
+                        connection_a
+                    ).has_value()
+            );
+
+            const auto second_snapshot =
+                manager.FindSessionByConnection(
+                    connection_b
+                );
+
+            TINYIMX_EXPECT_TRUE(
+                second_snapshot.has_value()
+            );
+
+            TINYIMX_EXPECT_EQ(
+                second_snapshot->user_id,
+                kUserId
+            );
+
+            TINYIMX_EXPECT_EQ(
+                second_snapshot->epoch,
+                second_bind.epoch
+            );
+
+            TINYIMX_EXPECT_EQ(
+                manager.OnlineCount(),
+                static_cast<std::size_t>(1)
+            );
+        }
+    );
+
+        runner.Add(
+        "SessionManager.RebindSameConnectionAdvancesEpoch",
+        []() {
+            constexpr UserId kUserId =
+                10005;
+
+            EventLoop loop;
+
+            TINYIMX_EXPECT_TRUE(
+                loop.IsValid()
+            );
+
+            const TcpConnectionPtr
+                connection =
+                    MakeTestConnection(
+                        &loop,
+                        "session-rebind-same",
+                        21008,
+                        22008
+                    );
+
+            TINYIMX_EXPECT_TRUE(
+                connection != nullptr
+            );
+
+            SessionManager manager;
+
+            /*
+             * 第一次Bind：
+             *
+             * connection
+             * epoch1
+             */
+            const SessionBindResult
+                first_bind =
+                    manager.BindOrReplace(
+                        kUserId,
+                        connection
+                    );
+
+            TINYIMX_EXPECT_TRUE(
+                first_bind.success
+            );
+
+            TINYIMX_EXPECT_TRUE(
+                first_bind.epoch != 0
+            );
+
+            TINYIMX_EXPECT_TRUE(
+                manager.IsCurrent(
+                    kUserId,
+                    first_bind.epoch,
+                    connection
+                )
+            );
+
+            /*
+             * 同一个TCP connection再次Bind。
+             *
+             * 注意：
+             * pointer完全没有变化。
+             */
+            const SessionBindResult
+                second_bind =
+                    manager.BindOrReplace(
+                        kUserId,
+                        connection
+                    );
+
+            TINYIMX_EXPECT_TRUE(
+                second_bind.success
+            );
+
+            TINYIMX_EXPECT_TRUE(
+                second_bind.epoch != 0
+            );
+
+            /*
+             * 核心：
+             *
+             * Connection相同，
+             * 但Session generation必须变化。
+             */
+            TINYIMX_EXPECT_TRUE(
+                second_bind.epoch !=
+                first_bind.epoch
+            );
+
+            /*
+             * 旧epoch已经失效。
+             *
+             * 这就是仅检查connection pointer
+             * 无法提供的能力。
+             */
+            TINYIMX_EXPECT_TRUE(
+                !manager.IsCurrent(
+                    kUserId,
+                    first_bind.epoch,
+                    connection
+                )
+            );
+
+            /*
+             * 新epoch才是current。
+             */
+            TINYIMX_EXPECT_TRUE(
+                manager.IsCurrent(
+                    kUserId,
+                    second_bind.epoch,
+                    connection
+                )
+            );
+
+            const auto snapshot =
+                manager.FindSessionByConnection(
+                    connection
+                );
+
+            TINYIMX_EXPECT_TRUE(
+                snapshot.has_value()
+            );
+
+            TINYIMX_EXPECT_EQ(
+                snapshot->user_id,
+                kUserId
+            );
+
+            TINYIMX_EXPECT_EQ(
+                snapshot->epoch,
+                second_bind.epoch
+            );
+
+            /*
+             * 同一connection重新Bind
+             * 仍然只有一个Online Session。
+             */
+            TINYIMX_EXPECT_EQ(
+                manager.OnlineCount(),
+                static_cast<std::size_t>(1)
+            );
+        }
+    );
 }
 
 }  // namespace tinyimx::test

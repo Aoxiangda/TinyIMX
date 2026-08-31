@@ -2,6 +2,7 @@
 #include "common/logging/Logger.h"
 #include "common/logging/LogMacros.h"
 #include "common/net/EventLoop.h"
+#include "gateway/business/BusinessExecutor.h"
 #include "common/net/InetAddress.h"
 #include "gateway/GatewayServer.h"
 #include "common/db/MySqlConnectionPool.h"
@@ -25,6 +26,7 @@
 #include <memory>
 #include <atomic>
 #include <cstdlib>
+#include <thread>
 
 namespace {
 
@@ -95,6 +97,105 @@ int main(int argc, char* argv[]) {
         options.close_on_decode_error = true;
         options.io_thread_count =static_cast<std::size_t>(config.Server().io_thread_count);
 
+        /*
+        * ============================================================
+        * M13 slow-business fault injection
+        * ============================================================
+        *
+        * 示例：
+        *
+        * TINYIMX_FAULT_HISTORY_BUSINESS_DELAY_MS=500
+        * ./build/linux-debug/gateway_demo ...
+        */
+        const char*
+            history_business_delay_env =
+                std::getenv(
+                    "TINYIMX_FAULT_HISTORY_"
+                    "BUSINESS_DELAY_MS"
+                );
+
+
+        if (
+            history_business_delay_env !=
+            nullptr
+        ) {
+            const std::string delay_text{
+                history_business_delay_env
+            };
+
+            try {
+                std::size_t parsed_length = 0;
+
+                const long long delay_ms =
+                    std::stoll(
+                        delay_text,
+                        &parsed_length
+                    );
+
+
+                /*
+                * 必须完整解析。
+                *
+                * "500abc"
+                *
+                * 不能偷偷当500接受。
+                */
+                if (
+                    parsed_length !=
+                        delay_text.size() ||
+                    delay_ms < 0 ||
+                    delay_ms > 60000
+                ) {
+                    LOG_ERROR(
+                        "invalid history business "
+                        "delay fault injection"
+                        << ", value="
+                        << delay_text
+                        << ", allowed_range_ms="
+                        << "0..60000"
+                    );
+
+                    tinyimx::Logger::
+                        Instance().
+                        Shutdown();
+
+                    return 1;
+                }
+
+
+                options.
+                    history_business_delay_for_test =
+                        std::chrono::milliseconds(
+                            delay_ms
+                        );
+
+
+                if (delay_ms > 0) {
+                    LOG_WARN(
+                        "M13 history business delay "
+                        "fault injection enabled"
+                        << ", delay_ms="
+                        << delay_ms
+                    );
+                }
+            }
+            catch (...) {
+                LOG_ERROR(
+                    "invalid history business "
+                    "delay fault injection"
+                    << ", value="
+                    << delay_text
+                );
+
+                tinyimx::Logger::
+                    Instance().
+                    Shutdown();
+
+                return 1;
+            }
+        }
+
+
         std::unique_ptr<tinyimx::MySqlConnectionPool> mysql_pool;
         std::unique_ptr<tinyimx::MessageRepository> message_repository;
         std::unique_ptr<tinyimx::UserRepository> user_repository;
@@ -110,7 +211,7 @@ int main(int argc, char* argv[]) {
         std::unique_ptr<tinyimx::GatewayRouteResolver> gateway_route_resolver;
         std::unique_ptr<tinyimx::EventLoopThread> gateway_peer_loop_thread;
         std::shared_ptr<tinyimx::GatewayPeerTransportManager> gateway_peer_transport_manager;
-
+        std::unique_ptr<tinyimx::BusinessExecutor> business_executor;
         if (config.MySql().enable) {
             mysql_pool = std::make_unique<tinyimx::MySqlConnectionPool>();
 
@@ -168,10 +269,119 @@ int main(int argc, char* argv[]) {
             LOG_INFO("gateway redis online status cache enabled");
         }
 
+
+        /*
+        * ============================================================
+        * M13 Business Execution Runtime
+        * ============================================================
+        *
+        * M13-C1正式解除Business Runtime与通用ThreadPool配置耦合。
+        *
+        * 旧配置没有business_runtime段时，Config层仍会兼容继承：
+        * thread_pool.worker_threads -> worker_threads
+        * thread_pool.queue_capacity -> max_pending_tasks
+        *
+        * 新部署可独立调优Runtime容量、stripe、deadline和drain预算。
+        */
+        const auto& business_config =
+            config.BusinessRuntime();
+
+
+        tinyimx::BusinessExecutorOptions
+            business_options;
+
+
+        business_options.worker_threads =
+            business_config.worker_threads;
+
+
+        business_options.max_pending_tasks =
+            business_config.max_pending_tasks;
+
+
+        business_options.stripe_count =
+            business_config.stripe_count;
+
+
+        business_options.per_stripe_queue_capacity =
+            business_config.per_stripe_queue_capacity;
+
+
+        business_options.default_deadline =
+            std::chrono::milliseconds(
+                business_config.default_deadline_ms
+            );
+
+
+        business_options.shutdown_timeout =
+            std::chrono::milliseconds(
+                business_config.shutdown_timeout_ms
+            );
+
+
+        business_executor =
+            std::make_unique<
+                tinyimx::BusinessExecutor
+            >(
+                business_options
+            );
+
+
+        if (!business_executor->Start()) {
+            LOG_ERROR(
+                "gateway business runtime start failed"
+            );
+
+
+            business_executor.reset();
+
+
+            if (mysql_pool) {
+                mysql_pool->Shutdown();
+            }
+
+
+            if (redis_pool) {
+                redis_pool->Shutdown();
+            }
+
+
+            tinyimx::Logger::
+                Instance().
+                Shutdown();
+
+
+            return 1;
+        }
+
+
+        LOG_INFO(
+            "gateway business runtime started"
+            << ", workers="
+            << business_options.worker_threads
+            << ", max_pending="
+            << business_options.max_pending_tasks
+            << ", stripes="
+            << business_options.stripe_count
+            << ", per_stripe_capacity="
+            << business_options.
+                per_stripe_queue_capacity
+            << ", default_deadline_ms="
+            << business_options.
+                default_deadline.count()
+            << ", shutdown_timeout_ms="
+            << business_options.
+                shutdown_timeout.count()
+        );
+
         tinyimx::GatewayServer gateway(
             &loop,
             listen_address,
             options
+        );
+
+        gateway.SetBusinessExecutor(
+            business_executor.get()
         );
 
         if (user_repository) {
@@ -411,99 +621,110 @@ int main(int argc, char* argv[]) {
         }
 
 
-        gateway.SetGatewayPeerVerifyCallback(
-            [discovery = gateway_discovery.get()](
-                const std::string& source_gateway_id,
-                const std::string& source_lease_token,
-                std::string* error_message) {
-                if (error_message != nullptr) {
-                    error_message->clear();
-                }
-
-                if (
-                    discovery == nullptr ||
-                    source_gateway_id.empty() ||
-                    source_lease_token.empty()
-                ) {
+        /*
+         * ============================================================
+         * Optional Multi-Gateway Runtime
+         * ============================================================
+         *
+         * gateway_registry.enable=false is a valid standalone mode.
+         *
+         * Registry / Discovery / PeerTransport / RouteResolver form one
+         * capability group.  They must either be initialized from a live
+         * GatewayDiscovery instance or remain completely disabled.
+         *
+         * Never dereference gateway_discovery when registry is disabled.
+         */
+        if (gateway_discovery) {
+            gateway.SetGatewayPeerVerifyCallback(
+                [discovery = gateway_discovery.get()](
+                    const std::string& source_gateway_id,
+                    const std::string& source_lease_token,
+                    std::string* error_message) {
                     if (error_message != nullptr) {
-                        *error_message =
-                            "invalid gateway peer identity";
+                        error_message->clear();
                     }
 
-                    return false;
-                }
+                    if (
+                        source_gateway_id.empty() ||
+                        source_lease_token.empty()
+                    ) {
+                        if (error_message != nullptr) {
+                            *error_message =
+                                "invalid gateway peer identity";
+                        }
 
-                const auto record =
-                    discovery->FindById(
-                        source_gateway_id
-                    );
-
-                if (!record.has_value()) {
-                    if (error_message != nullptr) {
-                        *error_message =
-                            "source gateway is not active";
+                        return false;
                     }
 
-                    return false;
-                }
+                    const auto record =
+                        discovery->FindById(
+                            source_gateway_id
+                        );
 
-                if (
-                    record->lease_token !=
-                    source_lease_token
-                ) {
-                    if (error_message != nullptr) {
-                        *error_message =
-                            "gateway lease token mismatch";
+                    if (!record.has_value()) {
+                        if (error_message != nullptr) {
+                            *error_message =
+                                "source gateway is not active";
+                        }
+
+                        return false;
                     }
 
-                    return false;
-                }
+                    if (
+                        record->lease_token !=
+                        source_lease_token
+                    ) {
+                        if (error_message != nullptr) {
+                            *error_message =
+                                "gateway lease token mismatch";
+                        }
 
-                return true;
+                        return false;
+                    }
+
+                    return true;
+                }
+            );
+
+            const auto local_gateway_record =
+                gateway_discovery->FindById(
+                    config.App().instance_id
+                );
+
+            if (
+                !local_gateway_record.has_value() ||
+                local_gateway_record->lease_token.empty()
+            ) {
+                LOG_ERROR(
+                    "gateway local registry "
+                    "record unavailable"
+                );
+
+                return 1;
             }
-        );
 
-        const auto local_gateway_record =
-            gateway_discovery->FindById(
-                config.App().instance_id
-            );
+            gateway_peer_loop_thread =
+                std::make_unique<
+                    tinyimx::EventLoopThread
+                >();
 
-        if (
-            !local_gateway_record.
-                has_value() ||
-            local_gateway_record->
-                lease_token.empty()
-        ) {
-            LOG_ERROR(
-                "gateway local registry "
-                "record unavailable"
-            );
+            tinyimx::EventLoop*
+                gateway_peer_loop =
+                    gateway_peer_loop_thread->
+                        StartLoop();
 
-            return 1;
-        }
+            if (gateway_peer_loop == nullptr) {
+                LOG_ERROR(
+                    "gateway peer event loop "
+                    "start failed"
+                );
 
-        gateway_peer_loop_thread =
-            std::make_unique<
-                tinyimx::EventLoopThread
-            >();
+                return 1;
+            }
 
-        tinyimx::EventLoop*
-            gateway_peer_loop =
-                gateway_peer_loop_thread->
-                    StartLoop();
-
-        if (gateway_peer_loop == nullptr) {
-            LOG_ERROR(
-                "gateway peer event loop "
-                "start failed"
-            );
-
-            return 1;
-        }
-
-        tinyimx::
-            GatewayPeerTransportManagerOptions
-                peer_manager_options;
+            tinyimx::
+                GatewayPeerTransportManagerOptions
+                    peer_manager_options;
 
             peer_manager_options.local_gateway_id =
                 config.App().instance_id;
@@ -527,13 +748,11 @@ int main(int argc, char* argv[]) {
             peer_manager_options.
                 max_request_retries = 1;
 
-
             peer_manager_options.
                 request_retry_initial_delay =
                     std::chrono::milliseconds(
                         100
                     );
-
 
             peer_manager_options.
                 request_retry_max_delay =
@@ -550,7 +769,6 @@ int main(int argc, char* argv[]) {
                     peer_manager_options
                 );
 
-
             gateway_peer_transport_manager->
                 SetGatewayResolverCallback(
                     [
@@ -564,10 +782,7 @@ int main(int argc, char* argv[]) {
                             tinyimx::
                                 GatewayInstanceRecord
                         > {
-                        if (
-                            discovery == nullptr ||
-                            gateway_id.empty()
-                        ) {
+                        if (gateway_id.empty()) {
                             return std::nullopt;
                         }
 
@@ -592,18 +807,34 @@ int main(int argc, char* argv[]) {
             gateway.SetGatewayPeerTransportManager(
                 gateway_peer_transport_manager.get()
             );
-        if (online_status_cache) {
-            gateway_route_resolver =
-                std::make_unique<
-                    tinyimx::GatewayRouteResolver
-                >(
-                    config.App().instance_id,
-                    online_status_cache.get(),
-                    gateway_discovery.get()
-                );
 
-            gateway.SetGatewayRouteResolver(
-                gateway_route_resolver.get()
+            if (online_status_cache) {
+                gateway_route_resolver =
+                    std::make_unique<
+                        tinyimx::GatewayRouteResolver
+                    >(
+                        config.App().instance_id,
+                        online_status_cache.get(),
+                        gateway_discovery.get()
+                    );
+
+                gateway.SetGatewayRouteResolver(
+                    gateway_route_resolver.get()
+                );
+            }
+        } else {
+            /*
+             * Standalone / fault-test mode:
+             *
+             * Redis presence can remain enabled, but cross-Gateway routing
+             * and peer transport are deliberately unavailable because no
+             * registry snapshot exists.
+             */
+            LOG_INFO(
+                "gateway registry disabled"
+                << ", peer_verifier=0"
+                << ", peer_transport=0"
+                << ", route_resolver=0"
             );
         }
 
@@ -660,6 +891,110 @@ int main(int argc, char* argv[]) {
         if (gateway_registry_lease) {
             gateway_registry_lease->Stop();
         }
+
+
+        /*
+        * ============================================================
+        * M13 Business Runtime graceful drain
+        * ============================================================
+        *
+        * 此时base EventLoop已经退出，但Sub-Reactor、Repository、
+        * MySQL / Redis依旧存活。
+        *
+        * 必须先停止Business Runtime接收新任务并完成：
+        *
+        * queued work
+        * running work
+        * pending completions
+        *
+        * 然后才能Stop Gateway并销毁业务依赖。
+        */
+        if (business_executor) {
+            const auto before_stats =
+                business_executor->GetStats();
+
+
+            LOG_INFO(
+                "gateway business runtime draining"
+                << ", pending="
+                << before_stats.
+                    current_pending_tasks
+                << ", active="
+                << before_stats.
+                    current_active_tasks
+                << ", pending_completions="
+                << before_stats.
+                    pending_completions
+                << ", accepted="
+                << before_stats.
+                    accepted_total
+            );
+
+
+            const bool within_budget =
+                business_executor->
+                    ShutdownGraceful();
+
+
+            const auto after_stats =
+                business_executor->GetStats();
+
+
+            LOG_INFO(
+                "gateway business runtime drained"
+                << ", within_budget="
+                << within_budget
+                << ", submitted="
+                << after_stats.submitted_total
+                << ", accepted="
+                << after_stats.accepted_total
+                << ", completed="
+                << after_stats.completed_total
+                << ", rejected_overload="
+                << after_stats.
+                    rejected_overload_total
+                << ", rejected_hot_key="
+                << after_stats.
+                    rejected_hot_key_total
+                << ", rejected_deadline="
+                << after_stats.
+                    rejected_deadline_total
+                << ", rejected_shutdown="
+                << after_stats.
+                    rejected_shutdown_total
+                << ", worker_exceptions="
+                << after_stats.
+                    worker_exception_total
+                << ", completion_dropped="
+                << after_stats.
+                    completion_dropped_total
+                << ", completion_exceptions="
+                << after_stats.
+                    completion_exception_total
+                << ", current_pending="
+                << after_stats.
+                    current_pending_tasks
+                << ", current_active="
+                << after_stats.
+                    current_active_tasks
+                << ", pending_completions="
+                << after_stats.
+                    pending_completions
+                << ", peak_pending="
+                << after_stats.
+                    peak_pending_tasks
+                << ", peak_active="
+                << after_stats.
+                    peak_active_tasks
+                << ", avg_queue_wait_ms="
+                << after_stats.
+                    average_queue_wait_ms
+                << ", avg_execution_ms="
+                << after_stats.
+                    average_execution_ms
+            );
+        }
+
 
         gateway.Stop();
 

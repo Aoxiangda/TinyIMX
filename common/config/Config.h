@@ -30,6 +30,7 @@ public:
     const ServerConfig& Server() const;
     const LoggerConfig& Logger() const;
     const ThreadPoolConfig& ThreadPool() const;
+    const BusinessRuntimeConfig& BusinessRuntime() const;
     const ProtocolConfig& Protocol() const;
     const RpcConfig& Rpc() const;
     const MySqlConfig& MySql() const;
@@ -86,6 +87,7 @@ private:
     ServerConfig server_;
     LoggerConfig logger_;
     ThreadPoolConfig thread_pool_;
+    BusinessRuntimeConfig business_runtime_;
     ProtocolConfig protocol_;
     RpcConfig rpc_;
     MySqlConfig mysql_;

@@ -2,6 +2,7 @@
 
 #include "common/logging/LogMacros.h"
 #include "common/net/EventLoop.h"
+#include "gateway/business/BusinessExecutor.h"
 #include "services/repository/MessageRepository.h"
 #include "services/repository/UserRepository.h"
 #include "services/repository/FriendRequestRepository.h"
@@ -15,7 +16,8 @@
 #include <utility>
 #include <nlohmann/json.hpp>
 #include <optional>
-
+#include <cstdint>
+#include <thread>
 namespace {
 
 using Json = nlohmann::json;
@@ -221,6 +223,389 @@ bool ParseCanonicalChatBody(
 
 
     return true;
+}
+
+
+
+
+/*
+ * ================================================================
+ * M13-B2 Mutation / Reliable Path Dispatch Context
+ * ================================================================
+ *
+ * B2 deliberately keeps the already-accepted M12 business state
+ * machines intact and moves their execution domain instead of
+ * rewriting them.  A session-bound mutation captures the authenticated
+ * identity at admission time.  kMustRun work can therefore continue
+ * after disconnect/replacement without re-binding the operation to a
+ * newer session.
+ *
+ * The context is thread_local because each BusinessExecutor worker
+ * executes one task callback at a time.  It is only visible while the
+ * dispatched handler is executing on that worker.
+ */
+struct BusinessDispatchContext {
+    bool active{false};
+    tinyimx::UserId user_id{0};
+    tinyimx::SessionEpoch session_epoch{0};
+    tinyimx::TcpConnectionPtr connection;
+};
+
+thread_local BusinessDispatchContext
+    g_business_dispatch_context;
+
+class ScopedBusinessDispatchContext final {
+public:
+    ScopedBusinessDispatchContext(
+        const tinyimx::TcpConnectionPtr& connection,
+        tinyimx::UserId user_id,
+        tinyimx::SessionEpoch session_epoch
+    )
+        : previous_(g_business_dispatch_context) {
+        g_business_dispatch_context.active = true;
+        g_business_dispatch_context.user_id = user_id;
+        g_business_dispatch_context.session_epoch = session_epoch;
+        g_business_dispatch_context.connection = connection;
+    }
+
+    ~ScopedBusinessDispatchContext() {
+        g_business_dispatch_context = previous_;
+    }
+
+    ScopedBusinessDispatchContext(
+        const ScopedBusinessDispatchContext&
+    ) = delete;
+
+    ScopedBusinessDispatchContext& operator=(
+        const ScopedBusinessDispatchContext&
+    ) = delete;
+
+private:
+    BusinessDispatchContext previous_;
+};
+
+bool InBusinessDispatch() noexcept {
+    return g_business_dispatch_context.active;
+}
+
+std::optional<tinyimx::UserId>
+ResolveBusinessUser(
+    tinyimx::SessionManager& session_manager,
+    const tinyimx::TcpConnectionPtr& connection
+) {
+    if (
+        g_business_dispatch_context.active &&
+        g_business_dispatch_context.user_id != 0 &&
+        g_business_dispatch_context.connection == connection
+    ) {
+        return g_business_dispatch_context.user_id;
+    }
+
+    return session_manager.FindUserByConnection(
+        connection
+    );
+}
+
+void UpdateBusinessDispatchSession(
+    const tinyimx::TcpConnectionPtr& connection,
+    tinyimx::UserId user_id,
+    tinyimx::SessionEpoch session_epoch
+) noexcept {
+    if (
+        g_business_dispatch_context.active &&
+        g_business_dispatch_context.connection == connection
+    ) {
+        g_business_dispatch_context.user_id = user_id;
+        g_business_dispatch_context.session_epoch = session_epoch;
+    }
+}
+
+bool BusinessResponseSessionIsCurrent(
+    tinyimx::SessionManager& session_manager,
+    const tinyimx::TcpConnectionPtr& connection
+) {
+    if (
+        !g_business_dispatch_context.active ||
+        g_business_dispatch_context.user_id == 0 ||
+        g_business_dispatch_context.connection != connection
+    ) {
+        return true;
+    }
+
+    return session_manager.IsCurrent(
+        g_business_dispatch_context.user_id,
+        g_business_dispatch_context.session_epoch,
+        connection
+    );
+}
+
+std::uint64_t MixBusinessOrderingKey(
+    std::uint64_t value
+) noexcept {
+    value += 0x9e3779b97f4a7c15ULL;
+    value =
+        (value ^ (value >> 30U)) *
+        0xbf58476d1ce4e5b9ULL;
+    value =
+        (value ^ (value >> 27U)) *
+        0x94d049bb133111ebULL;
+    return value ^ (value >> 31U);
+}
+
+tinyimx::BusinessOrderingKey
+MakeUserPairOrderingKey(
+    tinyimx::UserId lhs,
+    tinyimx::UserId rhs
+) noexcept {
+    if (lhs > rhs) {
+        std::swap(lhs, rhs);
+    }
+
+    const std::uint64_t first =
+        MixBusinessOrderingKey(lhs);
+    const std::uint64_t second =
+        MixBusinessOrderingKey(rhs);
+
+    return MixBusinessOrderingKey(
+        first ^
+        (second + 0x9e3779b97f4a7c15ULL +
+         (first << 6U) + (first >> 2U))
+    );
+}
+
+tinyimx::BusinessOrderingKey
+MakeStringOrderingKey(
+    const std::string& value
+) noexcept {
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (const unsigned char ch : value) {
+        hash ^= static_cast<std::uint64_t>(ch);
+        hash *= 1099511628211ULL;
+    }
+    return MixBusinessOrderingKey(hash);
+}
+
+tinyimx::BusinessOrderingKey
+MakeConnectionOrderingKey(
+    const tinyimx::TcpConnectionPtr& connection
+) noexcept {
+    return MixBusinessOrderingKey(
+        static_cast<std::uint64_t>(
+            reinterpret_cast<std::uintptr_t>(
+                connection.get()
+            )
+        )
+    );
+}
+
+/*
+ * Pre-authentication tasks (login auth) do not have a SessionEpoch yet.
+ * Their cancellation fence is therefore the physical connection only.
+ */
+tinyimx::BusinessSubmitStatus
+SubmitConnectionBusinessTask(
+    tinyimx::BusinessExecutor* executor,
+    const tinyimx::TcpConnectionPtr& connection,
+    std::uint32_t request_seq,
+    tinyimx::BusinessTimePoint received_at,
+    std::string operation,
+    std::optional<tinyimx::BusinessOrderingKey> ordering_key,
+    tinyimx::BusinessExecutor::Work work
+) {
+    if (executor == nullptr || !connection || !work) {
+        return tinyimx::BusinessSubmitStatus::kInvalidArgument;
+    }
+
+    tinyimx::EventLoop* const io_loop =
+        connection->GetLoop();
+    if (io_loop == nullptr) {
+        return tinyimx::BusinessSubmitStatus::kInvalidArgument;
+    }
+
+    tinyimx::BusinessExecutor::TaskSpec task;
+    task.request.operation = std::move(operation);
+    task.request.request_seq = request_seq;
+    task.request.received_at = received_at;
+    task.request.ordering_key = ordering_key;
+    task.cancellation_policy =
+        tinyimx::BusinessCancellationPolicy::kCancelable;
+
+    task.still_valid = [connection]() {
+        return connection && connection->IsConnected();
+    };
+    task.completion_still_valid = task.still_valid;
+    task.dispatcher = [io_loop](
+        tinyimx::BusinessExecutor::Completion completion
+    ) {
+        io_loop->QueueInLoop(std::move(completion));
+    };
+    task.work = std::move(work);
+
+    return executor->Submit(std::move(task));
+}
+
+
+
+
+/*
+ * Connection-bound reliable work without an authenticated client
+ * Session (for Gateway-to-Gateway requests).  Once admitted it must run;
+ * the peer may disconnect and retry, while durable idempotency keeps the
+ * operation safe.
+ */
+tinyimx::BusinessSubmitStatus
+SubmitMustRunConnectionBusinessTask(
+    tinyimx::BusinessExecutor* executor,
+    const tinyimx::TcpConnectionPtr& connection,
+    std::uint32_t request_seq,
+    tinyimx::BusinessTimePoint received_at,
+    std::string operation,
+    std::optional<tinyimx::BusinessOrderingKey> ordering_key,
+    tinyimx::BusinessExecutor::Work work
+) {
+    if (executor == nullptr || !connection || !work) {
+        return tinyimx::BusinessSubmitStatus::kInvalidArgument;
+    }
+
+    tinyimx::BusinessExecutor::TaskSpec task;
+    task.request.operation = std::move(operation);
+    task.request.request_seq = request_seq;
+    task.request.received_at = received_at;
+    task.request.ordering_key = ordering_key;
+    task.cancellation_policy =
+        tinyimx::BusinessCancellationPolicy::kMustRun;
+    task.work = std::move(work);
+
+    return executor->Submit(std::move(task));
+}
+
+
+/*
+ * ================================================================
+ * M13-B1 Gateway -> Business Runtime Session Adapter
+ * ================================================================
+ *
+ * 统一封装所有“已登录Session绑定型”Business Task的公共语义：
+ *
+ * - Session user_id / epoch
+ * - Before-work cancellation fence
+ * - Completion fence
+ * - original EventLoop dispatcher
+ * - optional ordering key
+ *
+ * Handler只负责声明业务策略与实际Work，避免每个Handler重复实现
+ * Session lifecycle和EventLoop切换。
+ */
+tinyimx::BusinessSubmitStatus
+SubmitSessionBusinessTask(
+    tinyimx::BusinessExecutor* executor,
+    tinyimx::SessionManager* session_manager,
+    const tinyimx::TcpConnectionPtr& connection,
+    const tinyimx::SessionSnapshot& session,
+    std::uint32_t request_seq,
+    tinyimx::BusinessTimePoint received_at,
+    std::string operation,
+    tinyimx::BusinessCancellationPolicy policy,
+    std::optional<tinyimx::BusinessOrderingKey> ordering_key,
+    tinyimx::BusinessExecutor::Work work
+) {
+    if (
+        executor == nullptr ||
+        session_manager == nullptr ||
+        !connection ||
+        !session.Valid() ||
+        session.connection != connection ||
+        !work
+    ) {
+        return
+            tinyimx::BusinessSubmitStatus::
+                kInvalidArgument;
+    }
+
+    tinyimx::EventLoop* const io_loop =
+        connection->GetLoop();
+
+    if (io_loop == nullptr) {
+        return
+            tinyimx::BusinessSubmitStatus::
+                kInvalidArgument;
+    }
+
+    tinyimx::BusinessExecutor::TaskSpec task;
+
+    task.request.operation =
+        std::move(operation);
+
+    task.request.user_id =
+        session.user_id;
+
+    task.request.request_seq =
+        request_seq;
+
+    task.request.session_epoch =
+        session.epoch;
+
+    task.request.received_at =
+        received_at;
+
+    task.request.ordering_key =
+        ordering_key;
+
+    task.cancellation_policy =
+        policy;
+
+    const tinyimx::UserId user_id =
+        session.user_id;
+
+    const tinyimx::SessionEpoch epoch =
+        session.epoch;
+
+    task.still_valid =
+        [
+            session_manager,
+            user_id,
+            epoch,
+            connection
+        ]() {
+            return
+                session_manager->IsCurrent(
+                    user_id,
+                    epoch,
+                    connection
+                );
+        };
+
+    task.completion_still_valid =
+        [
+            session_manager,
+            user_id,
+            epoch,
+            connection
+        ]() {
+            return
+                session_manager->IsCurrent(
+                    user_id,
+                    epoch,
+                    connection
+                );
+        };
+
+    task.dispatcher =
+        [io_loop](
+            tinyimx::BusinessExecutor::Completion completion
+        ) {
+            io_loop->QueueInLoop(
+                std::move(completion)
+            );
+        };
+
+    task.work =
+        std::move(work);
+
+    return
+        executor->Submit(
+            std::move(task)
+        );
 }
 
 
@@ -599,6 +984,24 @@ bool GatewayServer::HasUserRepository() const {
     return user_repository_ != nullptr;
 }
 
+
+void GatewayServer::SetBusinessExecutor(
+    BusinessExecutor* business_executor
+) {
+    business_executor_ =
+        business_executor;
+
+    LOG_INFO(
+        "gateway business executor attached"
+        << ", enabled="
+        << (
+            business_executor_ !=
+            nullptr
+        )
+    );
+}
+
+
 void GatewayServer::SetMessageRepository(
     MessageRepository* message_repository
 ) {
@@ -611,6 +1014,11 @@ void GatewayServer::SetMessageRepository(
 
 bool GatewayServer::HasMessageRepository() const {
     return message_repository_ != nullptr;
+}
+
+
+bool GatewayServer::HasBusinessExecutor() const {
+    return business_executor_ != nullptr;
 }
 
 
@@ -643,6 +1051,29 @@ bool GatewayServer::HasFriendRequestRepository() const {
 
 bool GatewayServer::SendPacket(const TcpConnectionPtr& connection,
                                const Packet& packet) {
+    /*
+     * M13-B2 completion/session fence for responses emitted from a
+     * Business worker.  It only applies when the send target is the
+     * original request connection captured by the dispatch context.
+     * Receiver-delivery connections are different and are not filtered.
+     */
+    if (!BusinessResponseSessionIsCurrent(
+            session_manager_,
+            connection)) {
+        LOG_INFO(
+            "gateway dropped stale business response"
+            << ", user_id="
+            << g_business_dispatch_context.user_id
+            << ", session_epoch="
+            << g_business_dispatch_context.session_epoch
+            << ", packet_type="
+            << MessageTypeToString(packet.type)
+            << ", packet_seq="
+            << packet.seq
+        );
+        return false;
+    }
+
     if (!connection || !connection->IsConnected()) {
         LOG_WARN("gateway send packet ignored: invalid connection");
         return false;
@@ -1799,11 +2230,69 @@ void GatewayServer::HandleConnection(
                     connection
                 );
 
-    if (unbind_result.unbound) {
-        SetUserOfflineIfMatch(
-            unbind_result.user_id,
-            connection
-        );
+    if (
+        unbind_result.unbound &&
+        HasBusinessExecutor() &&
+        HasOnlineStatusCache()
+    ) {
+        BusinessExecutor::TaskSpec task;
+
+        task.request.operation =
+            "gateway.presence.offline";
+
+        task.request.user_id =
+            unbind_result.user_id;
+
+        task.request.session_epoch =
+            unbind_result.epoch;
+
+        /*
+         * Session已经解绑，cleanup正是因为ownership结束才需要执行。
+         * 因此不能再使用IsCurrent cancellation fence。
+         */
+        task.cancellation_policy =
+            BusinessCancellationPolicy::
+                kMustRun;
+
+        task.work =
+            [
+                this,
+                user_id =
+                    unbind_result.user_id,
+                connection
+            ](
+                const BusinessExecutor::
+                    ExecutionContext&
+            ) -> BusinessExecutor::Completion {
+                SetUserOfflineIfMatch(
+                    user_id,
+                    connection
+                );
+
+                return {};
+            };
+
+        const BusinessSubmitStatus status =
+            business_executor_->Submit(
+                std::move(task)
+            );
+
+        if (
+            status !=
+            BusinessSubmitStatus::kAccepted
+        ) {
+            LOG_WARN(
+                "gateway async offline cleanup not admitted"
+                << ", user_id="
+                << unbind_result.user_id
+                << ", connection="
+                << connection->Name()
+                << ", status="
+                << BusinessSubmitStatusToString(
+                    status
+                )
+            );
+        }
     }
 
     LOG_INFO(
@@ -1975,6 +2464,70 @@ HandleReceiverChatDeliveryAck(
     const TcpConnectionPtr& connection,
     const Packet& packet
 ) {
+
+
+    if (!InBusinessDispatch()) {
+        ReceiverChatDeliveryAck dispatch_ack;
+        std::string dispatch_error;
+        const bool dispatch_parsed =
+            packet.seq != 0 &&
+            DeserializeReceiverChatDeliveryAck(
+                packet.body,
+                &dispatch_ack,
+                &dispatch_error
+            );
+
+        const auto dispatch_session =
+            session_manager_.FindSessionByConnection(connection);
+
+        if (
+            dispatch_parsed &&
+            dispatch_session.has_value() &&
+            HasBusinessExecutor()
+        ) {
+            const BusinessSubmitStatus submit_status =
+                SubmitSessionBusinessTask(
+                    business_executor_,
+                    &session_manager_,
+                    connection,
+                    *dispatch_session,
+                    packet.seq,
+                    BusinessClock::now(),
+                    "gateway.receiver_ack",
+                    BusinessCancellationPolicy::kMustRun,
+                    static_cast<BusinessOrderingKey>(
+                        dispatch_ack.message_id
+                    ),
+                    [this, connection, packet,
+                     dispatch_user_id = dispatch_session->user_id,
+                     dispatch_epoch = dispatch_session->epoch](
+                        const BusinessExecutor::ExecutionContext&
+                    ) -> BusinessExecutor::Completion {
+                        ScopedBusinessDispatchContext dispatch_scope(
+                            connection,
+                            dispatch_user_id,
+                            dispatch_epoch
+                        );
+                        HandleReceiverChatDeliveryAck(
+                            connection,
+                            packet
+                        );
+                        return {};
+                    }
+                );
+
+            if (submit_status != BusinessSubmitStatus::kAccepted) {
+                LOG_WARN(
+                    "gateway receiver ack business task rejected"
+                    << ", message_id=" << dispatch_ack.message_id
+                    << ", status="
+                    << BusinessSubmitStatusToString(submit_status)
+                );
+            }
+            return;
+        }
+    }
+
     if (!connection) {
         return;
     }
@@ -2048,10 +2601,10 @@ HandleReceiverChatDeliveryAck(
      */
     const auto
         receiver_user_id =
-            session_manager_.
-                FindUserByConnection(
-                    connection
-                );
+            ResolveBusinessUser(
+                session_manager_,
+                connection
+            );
 
 
     if (!receiver_user_id.has_value()) {
@@ -2535,6 +3088,86 @@ void GatewayServer::HandleLoginRequest(
     const TcpConnectionPtr& connection,
     const Packet& packet
 ) {
+
+    if (!InBusinessDispatch()) {
+        if (!HasBusinessExecutor()) {
+            Json response_body;
+            response_body["success"] = false;
+            response_body["message"] = "business runtime unavailable";
+            response_body["reason"] = "business_runtime_unavailable";
+            response_body["online_count"] = session_manager_.OnlineCount();
+            response_body["offline_count"] = 0;
+            response_body["total_unread"] = 0;
+            Packet response;
+            response.type = MessageType::kLoginResponse;
+            response.seq = packet.seq;
+            response.body = response_body.dump();
+            SendPacket(connection, response);
+            return;
+        }
+
+        std::string dispatch_username;
+        try {
+            const Json dispatch_body = Json::parse(packet.body);
+            if (
+                dispatch_body.is_object() &&
+                dispatch_body.contains("username") &&
+                dispatch_body.at("username").is_string()
+            ) {
+                dispatch_username =
+                    dispatch_body.at("username").get<std::string>();
+            }
+        } catch (...) {
+            dispatch_username.clear();
+        }
+
+        const BusinessOrderingKey login_ordering_key =
+            dispatch_username.empty()
+                ? MakeConnectionOrderingKey(connection)
+                : MakeStringOrderingKey(dispatch_username);
+
+        const BusinessSubmitStatus submit_status =
+            SubmitConnectionBusinessTask(
+                business_executor_,
+                connection,
+                packet.seq,
+                BusinessClock::now(),
+                "gateway.login",
+                login_ordering_key,
+                [this, connection, packet](
+                    const BusinessExecutor::ExecutionContext& context
+                ) -> BusinessExecutor::Completion {
+                    if (context.CancellationRequested()) {
+                        return {};
+                    }
+                    ScopedBusinessDispatchContext dispatch_scope(
+                        connection, 0, 0
+                    );
+                    HandleLoginRequest(connection, packet);
+                    return {};
+                }
+            );
+
+        if (submit_status == BusinessSubmitStatus::kAccepted) {
+            return;
+        }
+
+        Json response_body;
+        response_body["success"] = false;
+        response_body["message"] = "login business task rejected";
+        response_body["reason"] =
+            BusinessSubmitStatusToString(submit_status);
+        response_body["online_count"] = session_manager_.OnlineCount();
+        response_body["offline_count"] = 0;
+        response_body["total_unread"] = 0;
+        Packet response;
+        response.type = MessageType::kLoginResponse;
+        response.seq = packet.seq;
+        response.body = response_body.dump();
+        SendPacket(connection, response);
+        return;
+    }
+
     Json body;
     std::string error_message;
 
@@ -2671,6 +3304,14 @@ void GatewayServer::HandleLoginRequest(
         return;
     }
 
+    if (!connection || !connection->IsConnected()) {
+        LOG_INFO(
+            "gateway dropped login activation: connection no longer active"
+            << ", username=" << username
+        );
+        return;
+    }
+
     const UserId user_id = login_result.user->user_id;
     const std::string verified_username = login_result.user->username;
 
@@ -2702,6 +3343,24 @@ void GatewayServer::HandleLoginRequest(
         bind_result.old_connection &&
         bind_result.old_connection != connection) {
         NotifyLoginReplaced(user_id, bind_result.old_connection);
+    }
+
+    UpdateBusinessDispatchSession(
+        connection,
+        user_id,
+        bind_result.epoch
+    );
+
+    if (!session_manager_.IsCurrent(
+            user_id,
+            bind_result.epoch,
+            connection)) {
+        LOG_INFO(
+            "gateway dropped stale login activation"
+            << ", user_id=" << user_id
+            << ", epoch=" << bind_result.epoch
+        );
+        return;
     }
 
     SetUserOnline(user_id, connection);
@@ -2764,6 +3423,81 @@ void GatewayServer::HandleChatMessage(
     const TcpConnectionPtr& connection,
     const Packet& packet
 ) {
+
+    if (!InBusinessDispatch()) {
+        ClientChatRequest dispatch_request;
+        std::string dispatch_error;
+        const bool dispatch_parsed =
+            DeserializeClientChatRequest(
+                packet.body,
+                &dispatch_request,
+                &dispatch_error
+            );
+
+        const auto dispatch_session =
+            session_manager_.FindSessionByConnection(connection);
+
+        if (
+            dispatch_parsed &&
+            dispatch_session.has_value() &&
+            HasBusinessExecutor()
+        ) {
+            const BusinessSubmitStatus submit_status =
+                SubmitSessionBusinessTask(
+                    business_executor_,
+                    &session_manager_,
+                    connection,
+                    *dispatch_session,
+                    packet.seq,
+                    BusinessClock::now(),
+                    "gateway.chat",
+                    BusinessCancellationPolicy::kMustRun,
+                    MakeUserPairOrderingKey(
+                        dispatch_session->user_id,
+                        dispatch_request.to_user_id
+                    ),
+                    [this, connection, packet,
+                     dispatch_user_id = dispatch_session->user_id,
+                     dispatch_epoch = dispatch_session->epoch](
+                        const BusinessExecutor::ExecutionContext&
+                    ) -> BusinessExecutor::Completion {
+                        ScopedBusinessDispatchContext dispatch_scope(
+                            connection,
+                            dispatch_user_id,
+                            dispatch_epoch
+                        );
+                        HandleChatMessage(connection, packet);
+                        return {};
+                    }
+                );
+
+            if (submit_status == BusinessSubmitStatus::kAccepted) {
+                return;
+            }
+
+            ClientChatAck ack;
+            ack.success = false;
+            ack.delivered = false;
+            ack.client_message_id =
+                dispatch_request.client_message_id;
+            ack.from_user_id = dispatch_session->user_id;
+            ack.to_user_id = dispatch_request.to_user_id;
+            ack.reason = BusinessSubmitStatusToString(submit_status);
+
+            std::string ack_body;
+            std::string serialize_error;
+            if (SerializeClientChatAck(
+                    ack, &ack_body, &serialize_error)) {
+                Packet response;
+                response.type = MessageType::kChatAck;
+                response.seq = packet.seq;
+                response.body = std::move(ack_body);
+                SendPacket(connection, response);
+            }
+            return;
+        }
+    }
+
     auto send_client_chat_ack =
     [
         this,
@@ -2867,8 +3601,8 @@ void GatewayServer::HandleChatMessage(
         return;
     }
     const std::optional<UserId> logged_user_id =
-        session_manager_.
-            FindUserByConnection(
+        ResolveBusinessUser(
+                session_manager_,
                 connection
             );
 
@@ -3435,6 +4169,9 @@ void GatewayServer::HandleChatMessage(
                     ? connection->GetLoop()
                     : nullptr;
 
+            const SessionEpoch sender_session_epoch =
+                g_business_dispatch_context.session_epoch;
+
 
             const bool submitted =
                 gateway_peer_transport_manager_->
@@ -3450,6 +4187,7 @@ void GatewayServer::HandleChatMessage(
                             connection,
                             sender_loop,
                             from_user_id,
+                            sender_session_epoch,
                             to_user_id,
                             remote_gateway,
                             server_message_id,
@@ -3474,6 +4212,7 @@ void GatewayServer::HandleChatMessage(
                                     this,
                                     connection,
                                     from_user_id,
+                                    sender_session_epoch,
                                     to_user_id,
                                     remote_gateway,
                                     server_message_id,
@@ -3784,18 +4523,63 @@ void GatewayServer::HandleChatMessage(
 
 
                             /*
-                            * RPC回调发生在Peer Reactor。
-                            *
-                            * MySQL MarkDelivered以及
-                            * 客户端ACK重新投回原来的
-                            * Client Sub-Reactor。
-                            */
-                            if (sender_loop != nullptr) {
-                                sender_loop->RunInLoop(
-                                    std::move(
-                                        complete
-                                    )
-                                );
+                             * M13-B2:
+                             * Peer callback本身运行在Peer Reactor。
+                             * complete内部可能读取MySQL durable truth，
+                             * 因此不能再把它投回Client Sub-Reactor执行。
+                             *
+                             * SendPacket最终会通过TcpConnection::Send
+                             * 安全handoff到connection所属EventLoop。
+                             */
+                            if (HasBusinessExecutor()) {
+                                BusinessExecutor::TaskSpec completion_task;
+                                completion_task.request.operation =
+                                    "gateway.chat.remote_complete";
+                                completion_task.request.user_id =
+                                    from_user_id;
+                                completion_task.request.ordering_key =
+                                    static_cast<BusinessOrderingKey>(
+                                        server_message_id
+                                    );
+                                completion_task.cancellation_policy =
+                                    BusinessCancellationPolicy::kMustRun;
+                                completion_task.work =
+                                    [
+                                        complete = std::move(complete),
+                                        connection,
+                                        from_user_id,
+                                        sender_session_epoch
+                                    ](
+                                        const BusinessExecutor::ExecutionContext&
+                                    ) mutable -> BusinessExecutor::Completion {
+                                        ScopedBusinessDispatchContext dispatch_scope(
+                                            connection,
+                                            from_user_id,
+                                            sender_session_epoch
+                                        );
+                                        complete();
+                                        return {};
+                                    };
+
+                                const BusinessSubmitStatus completion_status =
+                                    business_executor_->Submit(
+                                        std::move(completion_task)
+                                    );
+
+                                if (
+                                    completion_status !=
+                                    BusinessSubmitStatus::kAccepted
+                                ) {
+                                    LOG_WARN(
+                                        "gateway remote chat completion task rejected"
+                                        << ", message_id="
+                                        << server_message_id
+                                        << ", status="
+                                        << BusinessSubmitStatusToString(
+                                            completion_status
+                                        )
+                                    );
+                                }
                             } else {
                                 complete();
                             }
@@ -5008,6 +5792,61 @@ HandleGatewayForwardChatRequest(
     const TcpConnectionPtr& connection,
     const Packet& packet
 ) {
+    if (!InBusinessDispatch()) {
+        GatewayForwardChatRequest dispatch_request;
+        std::string dispatch_error;
+        const bool dispatch_parsed =
+            DeserializeGatewayForwardChatRequest(
+                packet.body,
+                &dispatch_request,
+                &dispatch_error
+            );
+
+        if (
+            dispatch_parsed &&
+            HasBusinessExecutor()
+        ) {
+            const BusinessSubmitStatus submit_status =
+                SubmitMustRunConnectionBusinessTask(
+                    business_executor_,
+                    connection,
+                    packet.seq,
+                    BusinessClock::now(),
+                    "gateway.peer_forward_chat",
+                    static_cast<BusinessOrderingKey>(
+                        dispatch_request.message_id
+                    ),
+                    [this, connection, packet](
+                        const BusinessExecutor::ExecutionContext&
+                    ) -> BusinessExecutor::Completion {
+                        ScopedBusinessDispatchContext dispatch_scope(
+                            connection,
+                            0,
+                            0
+                        );
+                        HandleGatewayForwardChatRequest(
+                            connection,
+                            packet
+                        );
+                        return {};
+                    }
+                );
+
+            if (submit_status == BusinessSubmitStatus::kAccepted) {
+                return;
+            }
+
+            LOG_WARN(
+                "gateway peer forward business task rejected"
+                << ", message_id="
+                << dispatch_request.message_id
+                << ", status="
+                << BusinessSubmitStatusToString(submit_status)
+            );
+            return;
+        }
+    }
+
     GatewayForwardChatResponse response;
 
     response.status =
@@ -6116,11 +6955,75 @@ void GatewayServer::HandleReadRequest(
     const TcpConnectionPtr& connection,
     const Packet& packet
 ) {
+
+    if (!InBusinessDispatch()) {
+        Json dispatch_body;
+        UserId dispatch_peer_user_id = 0;
+        bool dispatch_probe_ok = false;
+        try {
+            dispatch_body = Json::parse(packet.body);
+            if (dispatch_body.is_object()) {
+                dispatch_probe_ok = GetUserIdField(
+                    dispatch_body, "peer_user_id",
+                    &dispatch_peer_user_id, nullptr);
+            }
+        } catch (...) {
+            dispatch_probe_ok = false;
+        }
+
+        const auto dispatch_session =
+            session_manager_.FindSessionByConnection(connection);
+
+        if (dispatch_session.has_value() && HasBusinessExecutor()) {
+            const BusinessSubmitStatus submit_status =
+                SubmitSessionBusinessTask(
+                    business_executor_,
+                    &session_manager_,
+                    connection,
+                    *dispatch_session,
+                    packet.seq,
+                    BusinessClock::now(),
+                    "gateway.read",
+                    BusinessCancellationPolicy::kMustRun,
+                    MakeUserPairOrderingKey(dispatch_session->user_id, dispatch_peer_user_id),
+                    [this, connection, packet,
+                     dispatch_user_id = dispatch_session->user_id,
+                     dispatch_epoch = dispatch_session->epoch](
+                        const BusinessExecutor::ExecutionContext&
+                    ) -> BusinessExecutor::Completion {
+                        ScopedBusinessDispatchContext dispatch_scope(
+                            connection,
+                            dispatch_user_id,
+                            dispatch_epoch
+                        );
+                        HandleReadRequest(connection, packet);
+                        return {};
+                    }
+                );
+
+            if (submit_status == BusinessSubmitStatus::kAccepted) {
+                return;
+            }
+
+            Json rejection_body;
+            rejection_body["success"] = false;
+            rejection_body["message"] = "business runtime rejected request";
+            rejection_body["reason"] =
+                BusinessSubmitStatusToString(submit_status);
+            Packet rejection;
+            rejection.type = MessageType::kReadResponse;
+            rejection.seq = packet.seq;
+            rejection.body = rejection_body.dump();
+            SendPacket(connection, rejection);
+            return;
+        }
+    }
+
     Json response_body;
     response_body["success"] = false;
 
     const auto login_user_id =
-        session_manager_.FindUserByConnection(connection);
+        ResolveBusinessUser(session_manager_, connection);
 
     if (!login_user_id.has_value()) {
         response_body["message"] = "not logged in";
@@ -6324,165 +7227,145 @@ void GatewayServer::HandleHistoryRequest(
     response_body["messages"] = Json::array();
     response_body["has_more"] = false;
 
-    auto send_response = [this, &connection, &packet](
-        const Json& body
-    ) {
-        Packet response;
-        response.type = MessageType::kHistoryResponse;
-        response.seq = packet.seq;
-        response.body = body.dump();
+    const std::uint32_t request_seq =
+        packet.seq;
 
-        SendPacket(connection, response);
-    };
+    const BusinessTimePoint request_received_at =
+        BusinessClock::now();
+
+
+    auto send_response =
+        [
+            this,
+            connection,
+            request_seq
+        ](
+            const Json& body
+        ) {
+            Packet response;
+
+            response.type =
+                MessageType::
+                    kHistoryResponse;
+
+            response.seq =
+                request_seq;
+
+            response.body =
+                body.dump();
+
+
+            SendPacket(
+                connection,
+                response
+            );
+        };
+
 
     Json request_body;
     std::string error_message;
 
-    if (!ParseJsonBody(packet, &request_body, &error_message)) {
-        response_body["message"] = "invalid history json";
-        response_body["reason"] = "invalid_json";
-        send_response(response_body);
+
+    if (
+        !ParseJsonBody(
+            packet,
+            &request_body,
+            &error_message
+        )
+    ) {
+        response_body["message"] =
+            "invalid history json";
+
+        response_body["reason"] =
+            "invalid_json";
+
+        send_response(
+            response_body
+        );
+
         return;
     }
 
-    const auto login_user_id =
-        session_manager_.FindUserByConnection(connection);
 
-    if (!login_user_id.has_value()) {
-        response_body["message"] = "history request rejected: not logged in";
-        response_body["reason"] = "not_logged_in";
-        send_response(response_body);
+    /*
+     * 在跨入异步Runtime以前冻结Session ownership。
+     *
+     * 不能只保存user_id，也不能等Worker开始后再查Session，
+     * 否则排队期间发生re-login时，旧请求可能错误继承新Session。
+     */
+    const auto session_snapshot =
+        session_manager_.
+            FindSessionByConnection(
+                connection
+            );
 
-        LOG_WARN("gateway rejected history request: not logged in"
-                 << ", peer=" << connection->PeerAddress().ToString());
+
+    if (!session_snapshot.has_value()) {
+        response_body["message"] =
+            "history request rejected: not logged in";
+
+        response_body["reason"] =
+            "not_logged_in";
+
+        send_response(
+            response_body
+        );
+
+
+        LOG_WARN(
+            "gateway rejected history request: "
+            "not logged in"
+            << ", peer="
+            << connection->
+                PeerAddress().
+                ToString()
+        );
 
         return;
     }
 
-    const UserId self_user_id = login_user_id.value();
+
+    const UserId self_user_id =
+        session_snapshot->user_id;
+
+    const SessionEpoch session_epoch =
+        session_snapshot->epoch;
+
 
     UserId peer_user_id = 0;
 
-    if (!GetUserIdField(
+
+    if (
+        !GetUserIdField(
             request_body,
             "peer_user_id",
             &peer_user_id,
-            &error_message)) {
-        response_body["message"] = error_message;
-        response_body["reason"] = "invalid_peer_user_id";
-        response_body["user_id"] = self_user_id;
-        send_response(response_body);
-        return;
-    }
+            &error_message
+        )
+    ) {
+        response_body["message"] =
+            error_message;
 
-    if (peer_user_id == self_user_id) {
-        response_body["message"] = "peer user equals self";
-        response_body["reason"] = "invalid_peer_user_id";
-        response_body["user_id"] = self_user_id;
-        response_body["peer_user_id"] = peer_user_id;
-        send_response(response_body);
-        return;
-    }
+        response_body["reason"] =
+            "invalid_peer_user_id";
 
-    std::uint64_t before_message_id = 0;
+        response_body["user_id"] =
+            self_user_id;
 
-    if (request_body.contains("before_message_id")) {
-        if (!request_body.at("before_message_id").is_number_unsigned()) {
-            response_body["message"] = "invalid before_message_id";
-            response_body["reason"] = "invalid_before_message_id";
-            response_body["user_id"] = self_user_id;
-            response_body["peer_user_id"] = peer_user_id;
-            send_response(response_body);
-            return;
-        }
-
-        before_message_id =
-            request_body.at("before_message_id").get<std::uint64_t>();
-    }
-
-    std::size_t limit = 20;
-
-    if (request_body.contains("limit")) {
-        if (!request_body.at("limit").is_number_unsigned()) {
-            response_body["message"] = "invalid limit";
-            response_body["reason"] = "invalid_limit";
-            response_body["user_id"] = self_user_id;
-            response_body["peer_user_id"] = peer_user_id;
-            send_response(response_body);
-            return;
-        }
-
-        limit = request_body.at("limit").get<std::size_t>();
-    }
-
-    if (limit == 0) {
-        limit = 20;
-    }
-
-    if (limit > 50) {
-        limit = 50;
-    }
-
-    if (!HasMessageRepository()) {
-        response_body["message"] = "message repository unavailable";
-        response_body["reason"] = "message_service_unavailable";
-        response_body["user_id"] = self_user_id;
-        response_body["peer_user_id"] = peer_user_id;
-        send_response(response_body);
-        return;
-    }
-
-    if (!HasFriendRepository()) {
-        response_body["message"] = "relation repository unavailable";
-        response_body["reason"] = "relation_service_unavailable";
-        response_body["user_id"] = self_user_id;
-        response_body["peer_user_id"] = peer_user_id;
-        send_response(response_body);
-        return;
-    }
-
-    const ChatPermissionResult permission_result =
-        friend_repository_->CheckPrivateChatPermission(
-            self_user_id,
-            peer_user_id
+        send_response(
+            response_body
         );
 
-    if (!permission_result.Allowed()) {
-        response_body["message"] = permission_result.message;
-        response_body["reason"] =
-            ChatPermissionStatusToString(permission_result.status);
-        response_body["user_id"] = self_user_id;
-        response_body["peer_user_id"] = peer_user_id;
-        send_response(response_body);
-
-        LOG_WARN("gateway rejected history request: permission denied"
-                 << ", user_id=" << self_user_id
-                 << ", peer_user_id=" << peer_user_id
-                 << ", reason="
-                 << ChatPermissionStatusToString(permission_result.status));
-
         return;
     }
 
-    const std::size_t query_limit = limit + 1;
 
-    auto history_result =
-        message_repository_->
-            ListDialogMessages(
-                self_user_id,
-                peer_user_id,
-                before_message_id,
-                query_limit
-            );
-
-    if (!history_result.Succeeded()) {
+    if (peer_user_id == self_user_id) {
         response_body["message"] =
-            history_result.message;
+            "peer user equals self";
 
         response_body["reason"] =
-            MessageQueryStatusToString(
-                history_result.status
-            );
+            "invalid_peer_user_id";
 
         response_body["user_id"] =
             self_user_id;
@@ -6490,139 +7373,951 @@ void GatewayServer::HandleHistoryRequest(
         response_body["peer_user_id"] =
             peer_user_id;
 
-        send_response(response_body);
-
-        LOG_WARN(
-            "gateway history query failed"
-            << ", user_id="
-            << self_user_id
-            << ", peer_user_id="
-            << peer_user_id
-            << ", status="
-            << MessageQueryStatusToString(
-                history_result.status
-            )
-            << ", message="
-            << history_result.message
+        send_response(
+            response_body
         );
 
         return;
     }
 
-    auto messages =
-        std::move(
-            history_result.records
+
+    std::uint64_t before_message_id = 0;
+
+
+    if (request_body.contains("before_message_id")) {
+        if (
+            !request_body.
+                at("before_message_id").
+                is_number_unsigned()
+        ) {
+            response_body["message"] =
+                "invalid before_message_id";
+
+            response_body["reason"] =
+                "invalid_before_message_id";
+
+            response_body["user_id"] =
+                self_user_id;
+
+            response_body["peer_user_id"] =
+                peer_user_id;
+
+            send_response(
+                response_body
+            );
+
+            return;
+        }
+
+
+        before_message_id =
+            request_body.
+                at("before_message_id").
+                get<std::uint64_t>();
+    }
+
+
+    std::size_t limit = 20;
+
+
+    if (request_body.contains("limit")) {
+        if (
+            !request_body.
+                at("limit").
+                is_number_unsigned()
+        ) {
+            response_body["message"] =
+                "invalid limit";
+
+            response_body["reason"] =
+                "invalid_limit";
+
+            response_body["user_id"] =
+                self_user_id;
+
+            response_body["peer_user_id"] =
+                peer_user_id;
+
+            send_response(
+                response_body
+            );
+
+            return;
+        }
+
+
+        limit =
+            request_body.
+                at("limit").
+                get<std::size_t>();
+    }
+
+
+    if (limit == 0) {
+        limit = 20;
+    }
+
+
+    if (limit > 50) {
+        limit = 50;
+    }
+
+
+    if (!HasMessageRepository()) {
+        response_body["message"] =
+            "message repository unavailable";
+
+        response_body["reason"] =
+            "message_service_unavailable";
+
+        response_body["user_id"] =
+            self_user_id;
+
+        response_body["peer_user_id"] =
+            peer_user_id;
+
+        send_response(
+            response_body
         );
-    bool has_more = false;
+
+        return;
+    }
+
+
+    if (!HasFriendRepository()) {
+        response_body["message"] =
+            "relation repository unavailable";
+
+        response_body["reason"] =
+            "relation_service_unavailable";
+
+        response_body["user_id"] =
+            self_user_id;
+
+        response_body["peer_user_id"] =
+            peer_user_id;
+
+        send_response(
+            response_body
+        );
+
+        return;
+    }
+
 
     /*
-        if (messages.size() > limit) {
-            has_more = true;
-            messages.resize(limit);
-        }
-    */
+     * M13要求History只能走BusinessExecutor。
+     *
+     * Runtime不可用时绝不能回退到Reactor同步访问Repository，
+     * 否则会重新制造Head-of-Line Blocking。
+     */
+    if (!HasBusinessExecutor()) {
+        response_body["message"] =
+            "business runtime unavailable";
 
-    if (messages.size() > limit) {
-        has_more = true;
-        messages.erase(messages.begin());
+        response_body["reason"] =
+            "business_runtime_unavailable";
+
+        response_body["user_id"] =
+            self_user_id;
+
+        response_body["peer_user_id"] =
+            peer_user_id;
+
+        send_response(
+            response_body
+        );
+
+        return;
     }
 
-    Json message_array = Json::array();
 
-    for (const auto& message : messages) {
-        Json item;
-        item["message_id"] = message.message_id;
-        item["from"] = message.from_user_id;
-        item["to"] = message.to_user_id;
-        item["message_type"] = message.message_type;
-        item["content"] = message.content;
-        item["delivery_status"] = message.delivery_status;
-        item["created_at"] = message.created_at;
-        item["delivered_at"] = message.delivered_at;
-        item["read_at"] = message.read_at;
+    EventLoop* const io_loop =
+        connection->GetLoop();
 
-        message_array.push_back(item);
+
+    if (io_loop == nullptr) {
+        response_body["message"] =
+            "connection event loop unavailable";
+
+        response_body["reason"] =
+            "event_loop_unavailable";
+
+        response_body["user_id"] =
+            self_user_id;
+
+        response_body["peer_user_id"] =
+            peer_user_id;
+
+        send_response(
+            response_body
+        );
+
+        return;
     }
 
-    response_body["success"] = true;
-    response_body["message"] = "history accepted";
-    response_body["user_id"] = self_user_id;
-    response_body["peer_user_id"] = peer_user_id;
-    response_body["before_message_id"] = before_message_id;
-    response_body["limit"] = limit;
-    response_body["has_more"] = has_more;
-    response_body["messages"] = message_array;
 
-    send_response(response_body);
+    const std::size_t query_limit =
+        limit + 1;
 
-    LOG_INFO("gateway history request handled"
-             << ", user_id=" << self_user_id
-             << ", peer_user_id=" << peer_user_id
-             << ", before_message_id=" << before_message_id
-             << ", limit=" << limit
-             << ", returned=" << messages.size()
-             << ", has_more=" << has_more);
+
+    BusinessExecutor::TaskSpec task;
+
+
+    task.request.operation =
+        "gateway.history";
+
+    task.request.user_id =
+        self_user_id;
+
+    task.request.request_seq =
+        request_seq;
+
+    task.request.session_epoch =
+        session_epoch;
+
+    task.request.received_at =
+        request_received_at;
+
+    /*
+     * History是read-only query。
+     * 当前不需要same-key serialization。
+     */
+    task.request.ordering_key =
+        std::nullopt;
+
+
+    task.cancellation_policy =
+        BusinessCancellationPolicy::
+            kCancelable;
+
+
+    /*
+     * Before-work fence：
+     *
+     * 排队期间发生disconnect / re-login时，
+     * Worker不要再占DB资源。
+     */
+    task.still_valid =
+        [
+            this,
+            self_user_id,
+            session_epoch,
+            connection
+        ]() {
+            return
+                session_manager_.IsCurrent(
+                    self_user_id,
+                    session_epoch,
+                    connection
+                );
+        };
+
+
+    /*
+     * Completion fence：
+     *
+     * Work即使已经完成，旧Session也不能继续收到结果。
+     * BusinessExecutor内部会在dispatcher前和callback执行前
+     * 做双重检查。
+     */
+    task.completion_still_valid =
+        [
+            this,
+            self_user_id,
+            session_epoch,
+            connection
+        ]() {
+            return
+                session_manager_.IsCurrent(
+                    self_user_id,
+                    session_epoch,
+                    connection
+                );
+        };
+
+
+    /*
+     * Dispatcher只负责Execution Domain切换：
+     * Business Worker -> original I/O EventLoop。
+     */
+    task.dispatcher =
+        [
+            io_loop
+        ](
+            BusinessExecutor::Completion completion
+        ) {
+            io_loop->QueueInLoop(
+                std::move(completion)
+            );
+        };
+
+
+    task.work =
+        [
+            this,
+            connection,
+            request_seq,
+            self_user_id,
+            peer_user_id,
+            before_message_id,
+            limit,
+            query_limit
+        ](
+            const BusinessExecutor::ExecutionContext& context
+        ) -> BusinessExecutor::Completion {
+
+            /*
+             * Worker只生产结果，不直接操作EventLoop。
+             *
+             * 返回的Completion最终由Runtime送回原I/O线程。
+             */
+            auto make_completion =
+                [
+                    this,
+                    connection,
+                    request_seq,
+                    self_user_id,
+                    peer_user_id,
+                    before_message_id,
+                    limit
+                ](
+                    Json body,
+                    std::size_t returned_count,
+                    bool has_more
+                ) -> BusinessExecutor::Completion {
+
+                    return
+                        [
+                            this,
+                            connection,
+                            request_seq,
+                            self_user_id,
+                            peer_user_id,
+                            before_message_id,
+                            limit,
+                            returned_count,
+                            has_more,
+                            body = std::move(body)
+                        ]() mutable {
+
+                            /*
+                             * Session ownership由Completion Fence保证。
+                             * 这里仅保留transport-level defensive check。
+                             */
+                            if (
+                                !connection ||
+                                !connection->IsConnected()
+                            ) {
+                                LOG_INFO(
+                                    "gateway dropped history "
+                                    "completion: transport unavailable"
+                                    << ", user_id="
+                                    << self_user_id
+                                    << ", peer_user_id="
+                                    << peer_user_id
+                                    << ", request_seq="
+                                    << request_seq
+                                );
+
+                                return;
+                            }
+
+
+                            Packet response;
+
+                            response.type =
+                                MessageType::
+                                    kHistoryResponse;
+
+                            response.seq =
+                                request_seq;
+
+                            response.body =
+                                body.dump();
+
+
+                            SendPacket(
+                                connection,
+                                response
+                            );
+
+
+                            LOG_INFO(
+                                "gateway history completion sent"
+                                << ", user_id="
+                                << self_user_id
+                                << ", peer_user_id="
+                                << peer_user_id
+                                << ", before_message_id="
+                                << before_message_id
+                                << ", limit="
+                                << limit
+                                << ", returned="
+                                << returned_count
+                                << ", has_more="
+                                << has_more
+                                << ", success="
+                                << body.value(
+                                    "success",
+                                    false
+                                )
+                            );
+                        };
+                };
+
+
+            Json async_response_body;
+
+            async_response_body["success"] =
+                false;
+
+            async_response_body["messages"] =
+                Json::array();
+
+            async_response_body["has_more"] =
+                false;
+
+            async_response_body["user_id"] =
+                self_user_id;
+
+            async_response_body["peer_user_id"] =
+                peer_user_id;
+
+
+            try {
+                LOG_INFO(
+                    "gateway history business task started"
+                    << ", user_id="
+                    << self_user_id
+                    << ", peer_user_id="
+                    << peer_user_id
+                    << ", request_seq="
+                    << request_seq
+                );
+
+
+                /*
+                 * M13 deterministic slow-business fault injection。
+                 *
+                 * 这里已经在Business Worker中，sleep不会阻塞Sub-Reactor。
+                 */
+                const auto history_business_delay =
+                    options_.
+                        history_business_delay_for_test;
+
+
+                if (
+                    history_business_delay >
+                    std::chrono::milliseconds::zero()
+                ) {
+                    LOG_WARN(
+                        "M13 history business worker delay injected"
+                        << ", user_id="
+                        << self_user_id
+                        << ", peer_user_id="
+                        << peer_user_id
+                        << ", request_seq="
+                        << request_seq
+                        << ", delay_ms="
+                        << history_business_delay.count()
+                    );
+
+
+                    std::this_thread::sleep_for(
+                        history_business_delay
+                    );
+
+
+                    LOG_INFO(
+                        "M13 history business worker delay finished"
+                        << ", user_id="
+                        << self_user_id
+                        << ", peer_user_id="
+                        << peer_user_id
+                        << ", request_seq="
+                        << request_seq
+                    );
+                }
+
+
+                /*
+                 * Cooperative cancellation #1：
+                 *
+                 * Worker开始后Session仍可能在fault delay或其他CPU工作期间失效。
+                 */
+                if (
+                    context.CancellationRequested()
+                ) {
+                    LOG_INFO(
+                        "gateway history business cancelled "
+                        "before permission query"
+                        << ", user_id="
+                        << self_user_id
+                        << ", peer_user_id="
+                        << peer_user_id
+                        << ", request_seq="
+                        << request_seq
+                    );
+
+                    return {};
+                }
+
+
+                /*
+                 * Blocking DB #1：好友/私聊权限检查。
+                 */
+                const ChatPermissionResult permission_result =
+                    friend_repository_->
+                        CheckPrivateChatPermission(
+                            self_user_id,
+                            peer_user_id
+                        );
+
+
+                if (!permission_result.Allowed()) {
+                    async_response_body["message"] =
+                        permission_result.message;
+
+                    async_response_body["reason"] =
+                        ChatPermissionStatusToString(
+                            permission_result.status
+                        );
+
+
+                    LOG_WARN(
+                        "gateway rejected async history request: "
+                        "permission denied"
+                        << ", user_id="
+                        << self_user_id
+                        << ", peer_user_id="
+                        << peer_user_id
+                        << ", reason="
+                        << ChatPermissionStatusToString(
+                            permission_result.status
+                        )
+                    );
+
+
+                    return
+                        make_completion(
+                            std::move(async_response_body),
+                            0,
+                            false
+                        );
+                }
+
+
+                /*
+                 * Cooperative cancellation #2：
+                 *
+                 * DB #1返回后再次检查，避免stale请求继续占用DB #2。
+                 */
+                if (
+                    context.CancellationRequested()
+                ) {
+                    LOG_INFO(
+                        "gateway history business cancelled "
+                        "before message query"
+                        << ", user_id="
+                        << self_user_id
+                        << ", peer_user_id="
+                        << peer_user_id
+                        << ", request_seq="
+                        << request_seq
+                    );
+
+                    return {};
+                }
+
+
+                /*
+                 * Blocking DB #2：真正查询聊天历史。
+                 */
+                auto history_result =
+                    message_repository_->
+                        ListDialogMessages(
+                            self_user_id,
+                            peer_user_id,
+                            before_message_id,
+                            query_limit
+                        );
+
+
+                if (!history_result.Succeeded()) {
+                    async_response_body["message"] =
+                        history_result.message;
+
+                    async_response_body["reason"] =
+                        MessageQueryStatusToString(
+                            history_result.status
+                        );
+
+
+                    LOG_WARN(
+                        "gateway history query failed"
+                        << ", user_id="
+                        << self_user_id
+                        << ", peer_user_id="
+                        << peer_user_id
+                        << ", status="
+                        << MessageQueryStatusToString(
+                            history_result.status
+                        )
+                        << ", message="
+                        << history_result.message
+                    );
+
+
+                    return
+                        make_completion(
+                            std::move(async_response_body),
+                            0,
+                            false
+                        );
+                }
+
+
+                auto messages =
+                    std::move(
+                        history_result.records
+                    );
+
+
+                bool has_more = false;
+
+
+                /*
+                 * 保持M12既有分页语义。
+                 * A3只迁移执行Runtime，不改变History API行为。
+                 */
+                if (messages.size() > limit) {
+                    has_more = true;
+
+                    messages.erase(
+                        messages.begin()
+                    );
+                }
+
+
+                Json message_array =
+                    Json::array();
+
+
+                for (const auto& message : messages) {
+                    Json item;
+
+                    item["message_id"] =
+                        message.message_id;
+
+                    item["from"] =
+                        message.from_user_id;
+
+                    item["to"] =
+                        message.to_user_id;
+
+                    item["message_type"] =
+                        message.message_type;
+
+                    item["content"] =
+                        message.content;
+
+                    item["delivery_status"] =
+                        message.delivery_status;
+
+                    item["created_at"] =
+                        message.created_at;
+
+                    item["delivered_at"] =
+                        message.delivered_at;
+
+                    item["read_at"] =
+                        message.read_at;
+
+
+                    message_array.push_back(
+                        std::move(item)
+                    );
+                }
+
+
+                const std::size_t returned_count =
+                    messages.size();
+
+
+                async_response_body["success"] =
+                    true;
+
+                async_response_body["message"] =
+                    "history accepted";
+
+                async_response_body["before_message_id"] =
+                    before_message_id;
+
+                async_response_body["limit"] =
+                    limit;
+
+                async_response_body["has_more"] =
+                    has_more;
+
+                async_response_body["messages"] =
+                    std::move(message_array);
+
+
+                return
+                    make_completion(
+                        std::move(async_response_body),
+                        returned_count,
+                        has_more
+                    );
+            }
+            catch (const std::exception& exception) {
+                LOG_ERROR(
+                    "gateway history business execution failed"
+                    << ", user_id="
+                    << self_user_id
+                    << ", peer_user_id="
+                    << peer_user_id
+                    << ", request_seq="
+                    << request_seq
+                    << ", error="
+                    << exception.what()
+                );
+
+
+                async_response_body["message"] =
+                    "history business execution failed";
+
+                async_response_body["reason"] =
+                    "business_execution_error";
+
+
+                return
+                    make_completion(
+                        std::move(async_response_body),
+                        0,
+                        false
+                    );
+            }
+            catch (...) {
+                LOG_ERROR(
+                    "gateway history business execution failed"
+                    << ", user_id="
+                    << self_user_id
+                    << ", peer_user_id="
+                    << peer_user_id
+                    << ", request_seq="
+                    << request_seq
+                    << ", error=unknown_exception"
+                );
+
+
+                async_response_body["message"] =
+                    "history business execution failed";
+
+                async_response_body["reason"] =
+                    "business_execution_error";
+
+
+                return
+                    make_completion(
+                        std::move(async_response_body),
+                        0,
+                        false
+                    );
+            }
+        };
+
+
+    const BusinessSubmitStatus submit_status =
+        business_executor_->Submit(
+            std::move(task)
+        );
+
+
+    if (
+        submit_status ==
+        BusinessSubmitStatus::kAccepted
+    ) {
+        /*
+         * Reactor到这里立即返回，绝不等待Worker。
+         */
+        return;
+    }
+
+
+    response_body["user_id"] =
+        self_user_id;
+
+    response_body["peer_user_id"] =
+        peer_user_id;
+
+
+    switch (submit_status) {
+        case BusinessSubmitStatus::kOverloaded:
+        case BusinessSubmitStatus::kHotKeyOverloaded:
+            response_body["message"] =
+                "server business runtime overloaded";
+
+            response_body["reason"] =
+                "business_runtime_overloaded";
+            break;
+
+
+        case BusinessSubmitStatus::kDeadlineExpired:
+            response_body["message"] =
+                "history request deadline expired";
+
+            response_body["reason"] =
+                "business_deadline_expired";
+            break;
+
+
+        case BusinessSubmitStatus::kShuttingDown:
+            response_body["message"] =
+                "business runtime shutting down";
+
+            response_body["reason"] =
+                "business_runtime_shutting_down";
+            break;
+
+
+        case BusinessSubmitStatus::kInvalidArgument:
+            response_body["message"] =
+                "invalid business runtime task";
+
+            response_body["reason"] =
+                "business_runtime_invalid_task";
+            break;
+
+
+        case BusinessSubmitStatus::kAccepted:
+            return;
+    }
+
+
+    LOG_WARN(
+        "gateway history business task rejected"
+        << ", user_id="
+        << self_user_id
+        << ", peer_user_id="
+        << peer_user_id
+        << ", request_seq="
+        << request_seq
+        << ", status="
+        << BusinessSubmitStatusToString(
+            submit_status
+        )
+    );
+
+
+    send_response(
+        response_body
+    );
 }
+
 
 void GatewayServer::HandleConversationListRequest(
     const TcpConnectionPtr& connection,
     const Packet& packet
 ) {
+    const BusinessTimePoint request_received_at =
+        BusinessClock::now();
+
+    const std::uint32_t request_seq =
+        packet.seq;
+
     Json response_body;
     response_body["success"] = false;
     response_body["conversations"] = Json::array();
     response_body["has_more"] = false;
 
-    auto send_response = [this, &connection, &packet](
-        const Json& body
-    ) {
-        Packet response;
-        response.type = MessageType::kConversationListResponse;
-        response.seq = packet.seq;
-        response.body = body.dump();
+    auto send_response =
+        [
+            this,
+            connection,
+            request_seq
+        ](
+            const Json& body
+        ) {
+            Packet response;
+            response.type =
+                MessageType::
+                    kConversationListResponse;
+            response.seq =
+                request_seq;
+            response.body =
+                body.dump();
 
-        SendPacket(connection, response);
-    };
+            SendPacket(
+                connection,
+                response
+            );
+        };
 
     Json request_body;
     std::string error_message;
 
-    if (!ParseJsonBody(packet, &request_body, &error_message)) {
-        response_body["message"] = "invalid conversation list json";
-        response_body["reason"] = "invalid_json";
+    if (
+        !ParseJsonBody(
+            packet,
+            &request_body,
+            &error_message
+        )
+    ) {
+        response_body["message"] =
+            "invalid conversation list json";
+        response_body["reason"] =
+            "invalid_json";
         send_response(response_body);
         return;
     }
 
-    const auto login_user_id =
-        session_manager_.FindUserByConnection(connection);
+    const auto session_snapshot =
+        session_manager_.
+            FindSessionByConnection(
+                connection
+            );
 
-    if (!login_user_id.has_value()) {
+    if (!session_snapshot.has_value()) {
         response_body["message"] =
             "conversation list request rejected: not logged in";
-        response_body["reason"] = "not_logged_in";
+        response_body["reason"] =
+            "not_logged_in";
         send_response(response_body);
 
-        LOG_WARN("gateway rejected conversation list request: not logged in"
-                 << ", peer=" << connection->PeerAddress().ToString());
+        LOG_WARN(
+            "gateway rejected conversation list request: not logged in"
+            << ", peer="
+            << connection->PeerAddress().ToString()
+        );
 
         return;
     }
 
-    const UserId self_user_id = login_user_id.value();
+    const UserId self_user_id =
+        session_snapshot->user_id;
 
     std::size_t limit = 20;
 
     if (request_body.contains("limit")) {
-        if (!request_body.at("limit").is_number_unsigned()) {
-            response_body["message"] = "invalid limit";
-            response_body["reason"] = "invalid_limit";
-            response_body["user_id"] = self_user_id;
+        if (
+            !request_body.at("limit").
+                is_number_unsigned()
+        ) {
+            response_body["message"] =
+                "invalid limit";
+            response_body["reason"] =
+                "invalid_limit";
+            response_body["user_id"] =
+                self_user_id;
             send_response(response_body);
             return;
         }
 
-        limit = request_body.at("limit").get<std::size_t>();
+        limit =
+            request_body.at("limit").
+                get<std::size_t>();
     }
 
     if (limit == 0) {
@@ -6634,174 +8329,439 @@ void GatewayServer::HandleConversationListRequest(
     }
 
     if (!HasMessageRepository()) {
-        response_body["message"] = "message repository unavailable";
-        response_body["reason"] = "message_service_unavailable";
-        response_body["user_id"] = self_user_id;
-        send_response(response_body);
-        return;
-    }
-
-    const std::size_t query_limit = limit + 1;
-
-    auto conversation_result =
-        message_repository_->
-            ListConversations(
-                self_user_id,
-                query_limit
-            );
-
-    if (!conversation_result.Succeeded()) {
         response_body["message"] =
-            conversation_result.message;
-
+            "message repository unavailable";
         response_body["reason"] =
-            MessageQueryStatusToString(
-                conversation_result.status
-            );
-
+            "message_service_unavailable";
         response_body["user_id"] =
             self_user_id;
-
         send_response(response_body);
-
-        LOG_WARN(
-            "gateway conversation list "
-            "query failed"
-            << ", user_id="
-            << self_user_id
-            << ", status="
-            << MessageQueryStatusToString(
-                conversation_result.status
-            )
-            << ", message="
-            << conversation_result.message
-        );
-
         return;
     }
 
-    auto conversations =
-        std::move(
-            conversation_result.records
-        );
-    bool has_more = false;
-
-    if (conversations.size() > limit) {
-        has_more = true;
-
-        // ListConversations 返回的是按 last_message_id DESC 排序。
-        // 多查出来的一条在最后面，是更旧的会话。
-        // 所以这里 resize 可以安全丢掉最后一条。
-        conversations.resize(limit);
+    if (!HasBusinessExecutor()) {
+        response_body["message"] =
+            "business runtime unavailable";
+        response_body["reason"] =
+            "business_runtime_unavailable";
+        response_body["user_id"] =
+            self_user_id;
+        send_response(response_body);
+        return;
     }
 
-    Json conversation_array = Json::array();
+    const std::size_t query_limit =
+        limit + 1;
 
-    for (const auto& conversation : conversations) {
-        Json item;
-
-        item["peer_user_id"] = conversation.peer_user_id;
-
-        item["last_message_id"] = conversation.last_message_id;
-        item["last_client_message_id"] =
-            conversation.last_client_message_id;
-
-        item["last_from"] = conversation.last_from_user_id;
-        item["last_to"] = conversation.last_to_user_id;
-
-        item["last_message_type"] = conversation.last_message_type;
-        item["last_content"] = conversation.last_content;
-        item["last_delivery_status"] =
-            conversation.last_delivery_status;
-
-        item["last_created_at"] = conversation.last_created_at;
-        item["last_delivered_at"] = conversation.last_delivered_at;
-        item["last_read_at"] = conversation.last_read_at;
-
-        item["unread_count"] =
-            GetPrivateUnread(
+    const BusinessSubmitStatus submit_status =
+        SubmitSessionBusinessTask(
+            business_executor_,
+            &session_manager_,
+            connection,
+            *session_snapshot,
+            request_seq,
+            request_received_at,
+            "gateway.conversation_list",
+            BusinessCancellationPolicy::
+                kCancelable,
+            std::nullopt,
+            [
+                this,
+                connection,
+                request_seq,
                 self_user_id,
-                conversation.peer_user_id
-            );
+                limit,
+                query_limit
+            ](
+                const BusinessExecutor::
+                    ExecutionContext& context
+            ) -> BusinessExecutor::Completion {
+                Json async_body;
+                async_body["success"] = false;
+                async_body["conversations"] =
+                    Json::array();
+                async_body["has_more"] = false;
+                async_body["user_id"] =
+                    self_user_id;
 
-        conversation_array.push_back(item);
+                if (
+                    context.CancellationRequested()
+                ) {
+                    return {};
+                }
+
+                auto conversation_result =
+                    message_repository_->
+                        ListConversations(
+                            self_user_id,
+                            query_limit
+                        );
+
+                if (
+                    !conversation_result.
+                        Succeeded()
+                ) {
+                    async_body["message"] =
+                        conversation_result.message;
+                    async_body["reason"] =
+                        MessageQueryStatusToString(
+                            conversation_result.status
+                        );
+
+                    LOG_WARN(
+                        "gateway conversation list query failed"
+                        << ", user_id="
+                        << self_user_id
+                        << ", status="
+                        << MessageQueryStatusToString(
+                            conversation_result.status
+                        )
+                        << ", message="
+                        << conversation_result.message
+                    );
+
+                    return
+                        BusinessExecutor::Completion(
+                            [
+                                this,
+                                connection,
+                                request_seq,
+                                body =
+                                    std::move(async_body)
+                            ]() mutable {
+                                if (
+                                    !connection ||
+                                    !connection->
+                                        IsConnected()
+                                ) {
+                                    return;
+                                }
+
+                                Packet response;
+                                response.type =
+                                    MessageType::
+                                        kConversationListResponse;
+                                response.seq =
+                                    request_seq;
+                                response.body =
+                                    body.dump();
+
+                                SendPacket(
+                                    connection,
+                                    response
+                                );
+                            }
+                        );
+                }
+
+                if (
+                    context.CancellationRequested()
+                ) {
+                    return {};
+                }
+
+                auto conversations =
+                    std::move(
+                        conversation_result.records
+                    );
+
+                bool has_more = false;
+
+                if (
+                    conversations.size() >
+                    limit
+                ) {
+                    has_more = true;
+                    conversations.resize(
+                        limit
+                    );
+                }
+
+                Json conversation_array =
+                    Json::array();
+
+                for (
+                    const auto& conversation :
+                        conversations
+                ) {
+                    if (
+                        context.
+                            CancellationRequested()
+                    ) {
+                        return {};
+                    }
+
+                    Json item;
+
+                    item["peer_user_id"] =
+                        conversation.peer_user_id;
+                    item["last_message_id"] =
+                        conversation.last_message_id;
+                    item["last_client_message_id"] =
+                        conversation.
+                            last_client_message_id;
+                    item["last_from"] =
+                        conversation.last_from_user_id;
+                    item["last_to"] =
+                        conversation.last_to_user_id;
+                    item["last_message_type"] =
+                        conversation.last_message_type;
+                    item["last_content"] =
+                        conversation.last_content;
+                    item["last_delivery_status"] =
+                        conversation.
+                            last_delivery_status;
+                    item["last_created_at"] =
+                        conversation.last_created_at;
+                    item["last_delivered_at"] =
+                        conversation.last_delivered_at;
+                    item["last_read_at"] =
+                        conversation.last_read_at;
+
+                    /*
+                     * 当前仍是逐会话Redis unread查询，
+                     * 但已经离开Sub-Reactor。
+                     * N+1优化留给M13-C benchmark后处理。
+                     */
+                    item["unread_count"] =
+                        GetPrivateUnread(
+                            self_user_id,
+                            conversation.peer_user_id
+                        );
+
+                    conversation_array.push_back(
+                        std::move(item)
+                    );
+                }
+
+                const std::size_t returned_count =
+                    conversations.size();
+
+                async_body["success"] = true;
+                async_body["message"] =
+                    "conversation list accepted";
+                async_body["limit"] = limit;
+                async_body["has_more"] =
+                    has_more;
+                async_body["conversations"] =
+                    std::move(
+                        conversation_array
+                    );
+
+                return
+                    BusinessExecutor::Completion(
+                        [
+                            this,
+                            connection,
+                            request_seq,
+                            self_user_id,
+                            limit,
+                            returned_count,
+                            has_more,
+                            body =
+                                std::move(async_body)
+                        ]() mutable {
+                            if (
+                                !connection ||
+                                !connection->
+                                    IsConnected()
+                            ) {
+                                return;
+                            }
+
+                            Packet response;
+                            response.type =
+                                MessageType::
+                                    kConversationListResponse;
+                            response.seq =
+                                request_seq;
+                            response.body =
+                                body.dump();
+
+                            SendPacket(
+                                connection,
+                                response
+                            );
+
+                            LOG_INFO(
+                                "gateway conversation list completion sent"
+                                << ", user_id="
+                                << self_user_id
+                                << ", limit="
+                                << limit
+                                << ", returned="
+                                << returned_count
+                                << ", has_more="
+                                << has_more
+                            );
+                        }
+                    );
+            }
+        );
+
+    if (
+        submit_status ==
+        BusinessSubmitStatus::kAccepted
+    ) {
+        return;
     }
 
-    response_body["success"] = true;
-    response_body["message"] = "conversation list accepted";
-    response_body["user_id"] = self_user_id;
-    response_body["limit"] = limit;
-    response_body["has_more"] = has_more;
-    response_body["conversations"] = conversation_array;
+    response_body["user_id"] =
+        self_user_id;
+
+    switch (submit_status) {
+        case BusinessSubmitStatus::kOverloaded:
+        case BusinessSubmitStatus::
+            kHotKeyOverloaded:
+            response_body["message"] =
+                "business runtime overloaded";
+            response_body["reason"] =
+                "business_runtime_overloaded";
+            break;
+
+        case BusinessSubmitStatus::
+            kDeadlineExpired:
+            response_body["message"] =
+                "conversation list deadline expired";
+            response_body["reason"] =
+                "business_deadline_expired";
+            break;
+
+        case BusinessSubmitStatus::
+            kShuttingDown:
+            response_body["message"] =
+                "business runtime shutting down";
+            response_body["reason"] =
+                "business_runtime_shutting_down";
+            break;
+
+        case BusinessSubmitStatus::
+            kInvalidArgument:
+            response_body["message"] =
+                "business runtime unavailable";
+            response_body["reason"] =
+                "business_runtime_unavailable";
+            break;
+
+        case BusinessSubmitStatus::kAccepted:
+            return;
+    }
+
+    LOG_WARN(
+        "gateway conversation list task rejected"
+        << ", user_id="
+        << self_user_id
+        << ", request_seq="
+        << request_seq
+        << ", status="
+        << BusinessSubmitStatusToString(
+            submit_status
+        )
+    );
 
     send_response(response_body);
-
-    LOG_INFO("gateway conversation list request handled"
-             << ", user_id=" << self_user_id
-             << ", limit=" << limit
-             << ", returned=" << conversations.size()
-             << ", has_more=" << has_more);
 }
 
 void GatewayServer::HandleFriendListRequest(
     const TcpConnectionPtr& connection,
     const Packet& packet
 ) {
+    const BusinessTimePoint request_received_at =
+        BusinessClock::now();
+
+    const std::uint32_t request_seq =
+        packet.seq;
+
     Json response_body;
     response_body["success"] = false;
     response_body["friends"] = Json::array();
     response_body["has_more"] = false;
 
-    auto send_response = [this, &connection, &packet](
-        const Json& body
-    ) {
-        Packet response;
-        response.type = MessageType::kFriendListResponse;
-        response.seq = packet.seq;
-        response.body = body.dump();
+    auto send_response =
+        [
+            this,
+            connection,
+            request_seq
+        ](
+            const Json& body
+        ) {
+            Packet response;
+            response.type =
+                MessageType::kFriendListResponse;
+            response.seq =
+                request_seq;
+            response.body =
+                body.dump();
 
-        SendPacket(connection, response);
-    };
+            SendPacket(
+                connection,
+                response
+            );
+        };
 
     Json request_body;
     std::string error_message;
 
-    if (!ParseJsonBody(packet, &request_body, &error_message)) {
-        response_body["message"] = "invalid friend list json";
-        response_body["reason"] = "invalid_json";
+    if (
+        !ParseJsonBody(
+            packet,
+            &request_body,
+            &error_message
+        )
+    ) {
+        response_body["message"] =
+            "invalid friend list json";
+        response_body["reason"] =
+            "invalid_json";
         send_response(response_body);
         return;
     }
 
-    const auto login_user_id =
-        session_manager_.FindUserByConnection(connection);
+    const auto session_snapshot =
+        session_manager_.
+            FindSessionByConnection(
+                connection
+            );
 
-    if (!login_user_id.has_value()) {
+    if (!session_snapshot.has_value()) {
         response_body["message"] =
             "friend list request rejected: not logged in";
-        response_body["reason"] = "not_logged_in";
+        response_body["reason"] =
+            "not_logged_in";
         send_response(response_body);
 
-        LOG_WARN("gateway rejected friend list request: not logged in"
-                 << ", peer=" << connection->PeerAddress().ToString());
+        LOG_WARN(
+            "gateway rejected friend list request: not logged in"
+            << ", peer="
+            << connection->PeerAddress().ToString()
+        );
 
         return;
     }
 
-    const UserId self_user_id = login_user_id.value();
+    const UserId self_user_id =
+        session_snapshot->user_id;
 
     std::size_t limit = 20;
 
     if (request_body.contains("limit")) {
-        if (!request_body.at("limit").is_number_unsigned()) {
-            response_body["message"] = "invalid limit";
-            response_body["reason"] = "invalid_limit";
-            response_body["user_id"] = self_user_id;
+        if (
+            !request_body.at("limit").
+                is_number_unsigned()
+        ) {
+            response_body["message"] =
+                "invalid limit";
+            response_body["reason"] =
+                "invalid_limit";
+            response_body["user_id"] =
+                self_user_id;
             send_response(response_body);
             return;
         }
 
-        limit = request_body.at("limit").get<std::size_t>();
+        limit =
+            request_body.at("limit").
+                get<std::size_t>();
     }
 
     if (limit == 0) {
@@ -6813,103 +8773,371 @@ void GatewayServer::HandleFriendListRequest(
     }
 
     if (!HasFriendRepository()) {
-        response_body["message"] = "friend repository unavailable";
-        response_body["reason"] = "friend_service_unavailable";
-        response_body["user_id"] = self_user_id;
-        send_response(response_body);
-        return;
-    }
-
-    const std::size_t query_limit = limit + 1;
-
-    auto list_result =
-        friend_repository_->ListFriends(
-            self_user_id,
-            query_limit
-        );
-
-    if (!list_result.Succeeded()) {
         response_body["message"] =
-            list_result.message;
-
+            "friend repository unavailable";
         response_body["reason"] =
-            ListFriendsStatusToString(
-                list_result.status
-            );
-
+            "friend_service_unavailable";
         response_body["user_id"] =
             self_user_id;
-
         send_response(response_body);
-
-        LOG_WARN(
-            "gateway friend list request failed"
-            << ", user_id="
-            << self_user_id
-            << ", status="
-            << ListFriendsStatusToString(
-                list_result.status
-            )
-            << ", message="
-            << list_result.message
-        );
-
         return;
     }
 
-    auto friends = std::move(list_result.records);
-    bool has_more = false;
-
-    if (friends.size() > limit) {
-        has_more = true;
-
-        // ListFriends 当前按 relation_updated_at DESC 排序。
-        // 多查出来的一条在最后面，代表更旧的好友关系。
-        friends.resize(limit);
+    if (!HasBusinessExecutor()) {
+        response_body["message"] =
+            "business runtime unavailable";
+        response_body["reason"] =
+            "business_runtime_unavailable";
+        response_body["user_id"] =
+            self_user_id;
+        send_response(response_body);
+        return;
     }
 
-    Json friend_array = Json::array();
+    const std::size_t query_limit =
+        limit + 1;
 
-    for (const auto& friend_record : friends) {
-        Json item;
+    const BusinessSubmitStatus submit_status =
+        SubmitSessionBusinessTask(
+            business_executor_,
+            &session_manager_,
+            connection,
+            *session_snapshot,
+            request_seq,
+            request_received_at,
+            "gateway.friend_list",
+            BusinessCancellationPolicy::
+                kCancelable,
+            std::nullopt,
+            [
+                this,
+                connection,
+                request_seq,
+                self_user_id,
+                limit,
+                query_limit
+            ](
+                const BusinessExecutor::
+                    ExecutionContext& context
+            ) -> BusinessExecutor::Completion {
+                Json async_body;
+                async_body["success"] = false;
+                async_body["friends"] =
+                    Json::array();
+                async_body["has_more"] = false;
+                async_body["user_id"] =
+                    self_user_id;
 
-        item["friend_user_id"] = friend_record.friend_user_id;
-        item["username"] = friend_record.username;
-        item["nickname"] = friend_record.nickname;
-        item["avatar_url"] = friend_record.avatar_url;
+                if (
+                    context.CancellationRequested()
+                ) {
+                    return {};
+                }
 
-        item["user_status"] = friend_record.user_status;
-        item["relation_status"] = friend_record.relation_status;
+                auto list_result =
+                    friend_repository_->
+                        ListFriends(
+                            self_user_id,
+                            query_limit
+                        );
 
-        item["relation_created_at"] =
-            friend_record.relation_created_at;
-        item["relation_updated_at"] =
-            friend_record.relation_updated_at;
+                if (!list_result.Succeeded()) {
+                    async_body["message"] =
+                        list_result.message;
+                    async_body["reason"] =
+                        ListFriendsStatusToString(
+                            list_result.status
+                        );
 
-        friend_array.push_back(item);
+                    LOG_WARN(
+                        "gateway friend list request failed"
+                        << ", user_id="
+                        << self_user_id
+                        << ", status="
+                        << ListFriendsStatusToString(
+                            list_result.status
+                        )
+                        << ", message="
+                        << list_result.message
+                    );
+
+                    return
+                        BusinessExecutor::Completion(
+                            [
+                                this,
+                                connection,
+                                request_seq,
+                                body =
+                                    std::move(async_body)
+                            ]() mutable {
+                                if (
+                                    !connection ||
+                                    !connection->
+                                        IsConnected()
+                                ) {
+                                    return;
+                                }
+
+                                Packet response;
+                                response.type =
+                                    MessageType::
+                                        kFriendListResponse;
+                                response.seq =
+                                    request_seq;
+                                response.body =
+                                    body.dump();
+
+                                SendPacket(
+                                    connection,
+                                    response
+                                );
+                            }
+                        );
+                }
+
+                if (
+                    context.CancellationRequested()
+                ) {
+                    return {};
+                }
+
+                auto friends =
+                    std::move(
+                        list_result.records
+                    );
+
+                bool has_more = false;
+
+                if (friends.size() > limit) {
+                    has_more = true;
+                    friends.resize(limit);
+                }
+
+                Json friend_array =
+                    Json::array();
+
+                for (
+                    const auto& friend_record :
+                        friends
+                ) {
+                    Json item;
+
+                    item["friend_user_id"] =
+                        friend_record.friend_user_id;
+                    item["username"] =
+                        friend_record.username;
+                    item["nickname"] =
+                        friend_record.nickname;
+                    item["avatar_url"] =
+                        friend_record.avatar_url;
+                    item["user_status"] =
+                        friend_record.user_status;
+                    item["relation_status"] =
+                        friend_record.relation_status;
+                    item["relation_created_at"] =
+                        friend_record.
+                            relation_created_at;
+                    item["relation_updated_at"] =
+                        friend_record.
+                            relation_updated_at;
+
+                    friend_array.push_back(
+                        std::move(item)
+                    );
+                }
+
+                const std::size_t returned_count =
+                    friends.size();
+
+                async_body["success"] = true;
+                async_body["message"] =
+                    "friend list accepted";
+                async_body["limit"] = limit;
+                async_body["has_more"] =
+                    has_more;
+                async_body["friends"] =
+                    std::move(friend_array);
+
+                return
+                    BusinessExecutor::Completion(
+                        [
+                            this,
+                            connection,
+                            request_seq,
+                            self_user_id,
+                            limit,
+                            returned_count,
+                            has_more,
+                            body =
+                                std::move(async_body)
+                        ]() mutable {
+                            if (
+                                !connection ||
+                                !connection->
+                                    IsConnected()
+                            ) {
+                                return;
+                            }
+
+                            Packet response;
+                            response.type =
+                                MessageType::
+                                    kFriendListResponse;
+                            response.seq =
+                                request_seq;
+                            response.body =
+                                body.dump();
+
+                            SendPacket(
+                                connection,
+                                response
+                            );
+
+                            LOG_INFO(
+                                "gateway friend list completion sent"
+                                << ", user_id="
+                                << self_user_id
+                                << ", limit="
+                                << limit
+                                << ", returned="
+                                << returned_count
+                                << ", has_more="
+                                << has_more
+                            );
+                        }
+                    );
+            }
+        );
+
+    if (
+        submit_status ==
+        BusinessSubmitStatus::kAccepted
+    ) {
+        return;
     }
 
-    response_body["success"] = true;
-    response_body["message"] = "friend list accepted";
-    response_body["user_id"] = self_user_id;
-    response_body["limit"] = limit;
-    response_body["has_more"] = has_more;
-    response_body["friends"] = friend_array;
+    response_body["user_id"] =
+        self_user_id;
+
+    switch (submit_status) {
+        case BusinessSubmitStatus::kOverloaded:
+        case BusinessSubmitStatus::
+            kHotKeyOverloaded:
+            response_body["message"] =
+                "business runtime overloaded";
+            response_body["reason"] =
+                "business_runtime_overloaded";
+            break;
+
+        case BusinessSubmitStatus::
+            kDeadlineExpired:
+            response_body["message"] =
+                "friend list deadline expired";
+            response_body["reason"] =
+                "business_deadline_expired";
+            break;
+
+        case BusinessSubmitStatus::
+            kShuttingDown:
+            response_body["message"] =
+                "business runtime shutting down";
+            response_body["reason"] =
+                "business_runtime_shutting_down";
+            break;
+
+        case BusinessSubmitStatus::
+            kInvalidArgument:
+            response_body["message"] =
+                "business runtime unavailable";
+            response_body["reason"] =
+                "business_runtime_unavailable";
+            break;
+
+        case BusinessSubmitStatus::kAccepted:
+            return;
+    }
+
+    LOG_WARN(
+        "gateway friend list task rejected"
+        << ", user_id="
+        << self_user_id
+        << ", request_seq="
+        << request_seq
+        << ", status="
+        << BusinessSubmitStatusToString(
+            submit_status
+        )
+    );
 
     send_response(response_body);
-
-    LOG_INFO("gateway friend list request handled"
-             << ", user_id=" << self_user_id
-             << ", limit=" << limit
-             << ", returned=" << friends.size()
-             << ", has_more=" << has_more);
 }
-
 
 void GatewayServer::HandleFriendRequestCreateRequest(
     const TcpConnectionPtr& connection,
     const Packet& packet
 ) {
+
+    if (!InBusinessDispatch()) {
+        Json dispatch_body;
+        UserId dispatch_to_user_id = 0;
+        try {
+            dispatch_body = Json::parse(packet.body);
+            if (dispatch_body.is_object()) {
+                GetUserIdField(dispatch_body, "to_user_id",
+                               &dispatch_to_user_id, nullptr);
+            }
+        } catch (...) {
+            dispatch_to_user_id = 0;
+        }
+
+        const auto dispatch_session =
+            session_manager_.FindSessionByConnection(connection);
+
+        if (dispatch_session.has_value() && HasBusinessExecutor()) {
+            const BusinessSubmitStatus submit_status =
+                SubmitSessionBusinessTask(
+                    business_executor_,
+                    &session_manager_,
+                    connection,
+                    *dispatch_session,
+                    packet.seq,
+                    BusinessClock::now(),
+                    "gateway.friend_request.create",
+                    BusinessCancellationPolicy::kMustRun,
+                    MakeUserPairOrderingKey(dispatch_session->user_id, dispatch_to_user_id),
+                    [this, connection, packet,
+                     dispatch_user_id = dispatch_session->user_id,
+                     dispatch_epoch = dispatch_session->epoch](
+                        const BusinessExecutor::ExecutionContext&
+                    ) -> BusinessExecutor::Completion {
+                        ScopedBusinessDispatchContext dispatch_scope(
+                            connection,
+                            dispatch_user_id,
+                            dispatch_epoch
+                        );
+                        HandleFriendRequestCreateRequest(connection, packet);
+                        return {};
+                    }
+                );
+
+            if (submit_status == BusinessSubmitStatus::kAccepted) {
+                return;
+            }
+
+            Json rejection_body;
+            rejection_body["success"] = false;
+            rejection_body["message"] = "business runtime rejected request";
+            rejection_body["reason"] =
+                BusinessSubmitStatusToString(submit_status);
+            Packet rejection;
+            rejection.type = MessageType::kFriendRequestCreateResponse;
+            rejection.seq = packet.seq;
+            rejection.body = rejection_body.dump();
+            SendPacket(connection, rejection);
+            return;
+        }
+    }
+
     Json response_body;
     response_body["success"] = false;
     response_body["changed"] = false;
@@ -6940,7 +9168,7 @@ void GatewayServer::HandleFriendRequestCreateRequest(
     }
 
     const auto login_user_id =
-        session_manager_.FindUserByConnection(connection);
+        ResolveBusinessUser(session_manager_, connection);
 
     if (!login_user_id.has_value()) {
         response_body["message"] =
@@ -7076,6 +9304,12 @@ void GatewayServer::HandleFriendRequestListRequest(
     const TcpConnectionPtr& connection,
     const Packet& packet
 ) {
+    const BusinessTimePoint request_received_at =
+        BusinessClock::now();
+
+    const std::uint32_t request_seq =
+        packet.seq;
+
     Json response_body;
     response_body["success"] = false;
     response_body["requests"] = Json::array();
@@ -7083,37 +9317,59 @@ void GatewayServer::HandleFriendRequestListRequest(
     response_body["next_before_created_at"] = "";
     response_body["next_before_request_id"] = 0;
 
-    auto send_response = [this, &connection, &packet](
-        const Json& body
-    ) {
-        Packet response;
-        response.type =
-            MessageType::kFriendRequestListResponse;
-        response.seq = packet.seq;
-        response.body = body.dump();
+    auto send_response =
+        [
+            this,
+            connection,
+            request_seq
+        ](
+            const Json& body
+        ) {
+            Packet response;
+            response.type =
+                MessageType::
+                    kFriendRequestListResponse;
+            response.seq =
+                request_seq;
+            response.body =
+                body.dump();
 
-        SendPacket(connection, response);
-    };
+            SendPacket(
+                connection,
+                response
+            );
+        };
 
     Json request_body;
     std::string error_message;
 
-    if (!ParseJsonBody(packet, &request_body, &error_message) ||
-        !request_body.is_object()) {
+    if (
+        !ParseJsonBody(
+            packet,
+            &request_body,
+            &error_message
+        ) ||
+        !request_body.is_object()
+    ) {
         response_body["message"] =
             "invalid friend request list json";
-        response_body["reason"] = "invalid_json";
+        response_body["reason"] =
+            "invalid_json";
         send_response(response_body);
         return;
     }
 
-    const auto login_user_id =
-        session_manager_.FindUserByConnection(connection);
+    const auto session_snapshot =
+        session_manager_.
+            FindSessionByConnection(
+                connection
+            );
 
-    if (!login_user_id.has_value()) {
+    if (!session_snapshot.has_value()) {
         response_body["message"] =
             "friend request list rejected: not logged in";
-        response_body["reason"] = "not_logged_in";
+        response_body["reason"] =
+            "not_logged_in";
         send_response(response_body);
 
         LOG_WARN(
@@ -7125,10 +9381,17 @@ void GatewayServer::HandleFriendRequestListRequest(
         return;
     }
 
-    const UserId self_user_id = login_user_id.value();
-    response_body["user_id"] = self_user_id;
+    const UserId self_user_id =
+        session_snapshot->user_id;
 
-    if (request_body.contains("receiver_user_id")) {
+    response_body["user_id"] =
+        self_user_id;
+
+    if (
+        request_body.contains(
+            "receiver_user_id"
+        )
+    ) {
         response_body["message"] =
             "receiver_user_id must not be provided by client";
         response_body["reason"] =
@@ -7136,9 +9399,9 @@ void GatewayServer::HandleFriendRequestListRequest(
         send_response(response_body);
 
         LOG_WARN(
-            "gateway rejected friend request list: "
-            "client supplied receiver_user_id"
-            << ", login_user_id=" << self_user_id
+            "gateway rejected friend request list: client supplied receiver_user_id"
+            << ", login_user_id="
+            << self_user_id
         );
 
         return;
@@ -7147,14 +9410,21 @@ void GatewayServer::HandleFriendRequestListRequest(
     std::size_t limit = 20;
 
     if (request_body.contains("limit")) {
-        if (!request_body.at("limit").is_number_unsigned()) {
-            response_body["message"] = "invalid limit";
-            response_body["reason"] = "invalid_limit";
+        if (
+            !request_body.at("limit").
+                is_number_unsigned()
+        ) {
+            response_body["message"] =
+                "invalid limit";
+            response_body["reason"] =
+                "invalid_limit";
             send_response(response_body);
             return;
         }
 
-        limit = request_body.at("limit").get<std::size_t>();
+        limit =
+            request_body.at("limit").
+                get<std::size_t>();
     }
 
     if (limit == 0) {
@@ -7167,8 +9437,16 @@ void GatewayServer::HandleFriendRequestListRequest(
 
     std::string before_created_at;
 
-    if (request_body.contains("before_created_at")) {
-        if (!request_body.at("before_created_at").is_string()) {
+    if (
+        request_body.contains(
+            "before_created_at"
+        )
+    ) {
+        if (
+            !request_body.at(
+                "before_created_at"
+            ).is_string()
+        ) {
             response_body["message"] =
                 "invalid before_created_at";
             response_body["reason"] =
@@ -7178,15 +9456,23 @@ void GatewayServer::HandleFriendRequestListRequest(
         }
 
         before_created_at =
-            request_body.at("before_created_at")
-                .get<std::string>();
+            request_body.at(
+                "before_created_at"
+            ).get<std::string>();
     }
 
     std::uint64_t before_request_id = 0;
 
-    if (request_body.contains("before_request_id")) {
-        if (!request_body.at("before_request_id")
-                 .is_number_unsigned()) {
+    if (
+        request_body.contains(
+            "before_request_id"
+        )
+    ) {
+        if (
+            !request_body.at(
+                "before_request_id"
+            ).is_number_unsigned()
+        ) {
             response_body["message"] =
                 "invalid before_request_id";
             response_body["reason"] =
@@ -7196,8 +9482,9 @@ void GatewayServer::HandleFriendRequestListRequest(
         }
 
         before_request_id =
-            request_body.at("before_request_id")
-                .get<std::uint64_t>();
+            request_body.at(
+                "before_request_id"
+            ).get<std::uint64_t>();
     }
 
     const bool first_page =
@@ -7210,8 +9497,7 @@ void GatewayServer::HandleFriendRequestListRequest(
 
     if (!first_page && !next_page) {
         response_body["message"] =
-            "before_created_at and before_request_id "
-            "must be provided together";
+            "before_created_at and before_request_id must be provided together";
         response_body["reason"] =
             "invalid_pagination_cursor";
         send_response(response_body);
@@ -7233,103 +9519,392 @@ void GatewayServer::HandleFriendRequestListRequest(
         return;
     }
 
-    const std::size_t query_limit = limit + 1;
-
-    auto list_result =
-        friend_request_repository_->
-            ListPendingIncomingRequests(
-                self_user_id,
-                before_created_at,
-                before_request_id,
-                query_limit
-            );
-
-    if (!list_result.Succeeded()) {
+    if (!HasBusinessExecutor()) {
         response_body["message"] =
-            list_result.message;
-
+            "business runtime unavailable";
         response_body["reason"] =
-            ListPendingIncomingRequestsStatusToString(
-                list_result.status
-            );
-
+            "business_runtime_unavailable";
         send_response(response_body);
         return;
     }
 
-    auto requests = std::move(list_result.records);
+    const std::size_t query_limit =
+        limit + 1;
 
-    bool has_more = false;
+    const BusinessSubmitStatus submit_status =
+        SubmitSessionBusinessTask(
+            business_executor_,
+            &session_manager_,
+            connection,
+            *session_snapshot,
+            request_seq,
+            request_received_at,
+            "gateway.friend_request_list",
+            BusinessCancellationPolicy::
+                kCancelable,
+            std::nullopt,
+            [
+                this,
+                connection,
+                request_seq,
+                self_user_id,
+                before_created_at,
+                before_request_id,
+                limit,
+                query_limit
+            ](
+                const BusinessExecutor::
+                    ExecutionContext& context
+            ) -> BusinessExecutor::Completion {
+                Json async_body;
+                async_body["success"] = false;
+                async_body["requests"] =
+                    Json::array();
+                async_body["has_more"] = false;
+                async_body["next_before_created_at"] =
+                    "";
+                async_body["next_before_request_id"] =
+                    0;
+                async_body["user_id"] =
+                    self_user_id;
+                async_body["limit"] =
+                    limit;
+                async_body["before_created_at"] =
+                    before_created_at;
+                async_body["before_request_id"] =
+                    before_request_id;
 
-    if (requests.size() > limit) {
-        has_more = true;
-        requests.resize(limit);
+                if (
+                    context.CancellationRequested()
+                ) {
+                    return {};
+                }
+
+                auto list_result =
+                    friend_request_repository_->
+                        ListPendingIncomingRequests(
+                            self_user_id,
+                            before_created_at,
+                            before_request_id,
+                            query_limit
+                        );
+
+                if (!list_result.Succeeded()) {
+                    async_body["message"] =
+                        list_result.message;
+                    async_body["reason"] =
+                        ListPendingIncomingRequestsStatusToString(
+                            list_result.status
+                        );
+
+                    return
+                        BusinessExecutor::Completion(
+                            [
+                                this,
+                                connection,
+                                request_seq,
+                                body =
+                                    std::move(async_body)
+                            ]() mutable {
+                                if (
+                                    !connection ||
+                                    !connection->
+                                        IsConnected()
+                                ) {
+                                    return;
+                                }
+
+                                Packet response;
+                                response.type =
+                                    MessageType::
+                                        kFriendRequestListResponse;
+                                response.seq =
+                                    request_seq;
+                                response.body =
+                                    body.dump();
+
+                                SendPacket(
+                                    connection,
+                                    response
+                                );
+                            }
+                        );
+                }
+
+                if (
+                    context.CancellationRequested()
+                ) {
+                    return {};
+                }
+
+                auto requests =
+                    std::move(
+                        list_result.records
+                    );
+
+                bool has_more = false;
+
+                if (requests.size() > limit) {
+                    has_more = true;
+                    requests.resize(limit);
+                }
+
+                Json request_array =
+                    Json::array();
+
+                for (
+                    const auto& record :
+                        requests
+                ) {
+                    Json item;
+
+                    item["request_id"] =
+                        record.request_id;
+                    item["from_user_id"] =
+                        record.from_user_id;
+                    item["to_user_id"] =
+                        record.to_user_id;
+                    item["request_message"] =
+                        record.request_message;
+                    item["request_status"] =
+                        static_cast<std::uint32_t>(
+                            record.request_status
+                        );
+                    item["request_status_name"] =
+                        "pending";
+                    item["created_at"] =
+                        record.created_at;
+                    item["handled_at"] =
+                        record.handled_at;
+                    item["updated_at"] =
+                        record.updated_at;
+                    item["from_username"] =
+                        record.from_username;
+                    item["from_nickname"] =
+                        record.from_nickname;
+                    item["from_avatar_url"] =
+                        record.from_avatar_url;
+                    item["from_user_status"] =
+                        record.from_user_status;
+
+                    request_array.push_back(
+                        std::move(item)
+                    );
+                }
+
+                if (
+                    has_more &&
+                    !requests.empty()
+                ) {
+                    async_body[
+                        "next_before_created_at"
+                    ] =
+                        requests.back().
+                            created_at;
+                    async_body[
+                        "next_before_request_id"
+                    ] =
+                        requests.back().
+                            request_id;
+                }
+
+                const std::size_t returned_count =
+                    requests.size();
+
+                async_body["success"] = true;
+                async_body["message"] =
+                    "friend request list accepted";
+                async_body["reason"] = "ok";
+                async_body["has_more"] =
+                    has_more;
+                async_body["requests"] =
+                    std::move(request_array);
+
+                return
+                    BusinessExecutor::Completion(
+                        [
+                            this,
+                            connection,
+                            request_seq,
+                            self_user_id,
+                            before_created_at,
+                            before_request_id,
+                            limit,
+                            returned_count,
+                            has_more,
+                            body =
+                                std::move(async_body)
+                        ]() mutable {
+                            if (
+                                !connection ||
+                                !connection->
+                                    IsConnected()
+                            ) {
+                                return;
+                            }
+
+                            Packet response;
+                            response.type =
+                                MessageType::
+                                    kFriendRequestListResponse;
+                            response.seq =
+                                request_seq;
+                            response.body =
+                                body.dump();
+
+                            SendPacket(
+                                connection,
+                                response
+                            );
+
+                            LOG_INFO(
+                                "gateway friend request list completion sent"
+                                << ", user_id="
+                                << self_user_id
+                                << ", before_created_at="
+                                << before_created_at
+                                << ", before_request_id="
+                                << before_request_id
+                                << ", limit="
+                                << limit
+                                << ", returned="
+                                << returned_count
+                                << ", has_more="
+                                << has_more
+                            );
+                        }
+                    );
+            }
+        );
+
+    if (
+        submit_status ==
+        BusinessSubmitStatus::kAccepted
+    ) {
+        return;
     }
 
-    Json request_array = Json::array();
+    switch (submit_status) {
+        case BusinessSubmitStatus::kOverloaded:
+        case BusinessSubmitStatus::
+            kHotKeyOverloaded:
+            response_body["message"] =
+                "business runtime overloaded";
+            response_body["reason"] =
+                "business_runtime_overloaded";
+            break;
 
-    for (const auto& record : requests) {
-        Json item;
+        case BusinessSubmitStatus::
+            kDeadlineExpired:
+            response_body["message"] =
+                "friend request list deadline expired";
+            response_body["reason"] =
+                "business_deadline_expired";
+            break;
 
-        item["request_id"] = record.request_id;
-        item["from_user_id"] = record.from_user_id;
-        item["to_user_id"] = record.to_user_id;
-        item["request_message"] =
-            record.request_message;
+        case BusinessSubmitStatus::
+            kShuttingDown:
+            response_body["message"] =
+                "business runtime shutting down";
+            response_body["reason"] =
+                "business_runtime_shutting_down";
+            break;
 
-        item["request_status"] =
-            static_cast<std::uint32_t>(
-                record.request_status
-            );
-        item["request_status_name"] = "pending";
+        case BusinessSubmitStatus::
+            kInvalidArgument:
+            response_body["message"] =
+                "business runtime unavailable";
+            response_body["reason"] =
+                "business_runtime_unavailable";
+            break;
 
-        item["created_at"] = record.created_at;
-        item["handled_at"] = record.handled_at;
-        item["updated_at"] = record.updated_at;
-
-        item["from_username"] =
-            record.from_username;
-        item["from_nickname"] =
-            record.from_nickname;
-        item["from_avatar_url"] =
-            record.from_avatar_url;
-        item["from_user_status"] =
-            record.from_user_status;
-
-        request_array.push_back(item);
+        case BusinessSubmitStatus::kAccepted:
+            return;
     }
 
-    if (has_more && !requests.empty()) {
-        response_body["next_before_created_at"] =
-            requests.back().created_at;
-        response_body["next_before_request_id"] =
-            requests.back().request_id;
-    }
-
-    response_body["success"] = true;
-    response_body["message"] =
-        "friend request list accepted";
-    response_body["reason"] = "ok";
-    response_body["has_more"] = has_more;
-    response_body["requests"] = request_array;
+    LOG_WARN(
+        "gateway friend request list task rejected"
+        << ", user_id="
+        << self_user_id
+        << ", request_seq="
+        << request_seq
+        << ", status="
+        << BusinessSubmitStatusToString(
+            submit_status
+        )
+    );
 
     send_response(response_body);
-
-    LOG_INFO(
-        "gateway friend request list handled"
-        << ", user_id=" << self_user_id
-        << ", before_created_at=" << before_created_at
-        << ", before_request_id=" << before_request_id
-        << ", limit=" << limit
-        << ", returned=" << requests.size()
-        << ", has_more=" << has_more
-    );
 }
 
 void GatewayServer::HandleFriendRequestAcceptRequest(
     const TcpConnectionPtr& connection,
     const Packet& packet
 ) {
+
+    if (!InBusinessDispatch()) {
+        Json dispatch_body;
+        std::uint64_t dispatch_request_id = 0;
+        try {
+            dispatch_body = Json::parse(packet.body);
+            if (dispatch_body.is_object() &&
+                dispatch_body.contains("request_id") &&
+                dispatch_body.at("request_id").is_number_unsigned()) {
+                dispatch_request_id =
+                    dispatch_body.at("request_id").get<std::uint64_t>();
+            }
+        } catch (...) {
+            dispatch_request_id = 0;
+        }
+
+        const auto dispatch_session =
+            session_manager_.FindSessionByConnection(connection);
+
+        if (dispatch_session.has_value() && HasBusinessExecutor()) {
+            const BusinessSubmitStatus submit_status =
+                SubmitSessionBusinessTask(
+                    business_executor_,
+                    &session_manager_,
+                    connection,
+                    *dispatch_session,
+                    packet.seq,
+                    BusinessClock::now(),
+                    "gateway.friend_request.accept",
+                    BusinessCancellationPolicy::kMustRun,
+                    static_cast<BusinessOrderingKey>(dispatch_request_id),
+                    [this, connection, packet,
+                     dispatch_user_id = dispatch_session->user_id,
+                     dispatch_epoch = dispatch_session->epoch](
+                        const BusinessExecutor::ExecutionContext&
+                    ) -> BusinessExecutor::Completion {
+                        ScopedBusinessDispatchContext dispatch_scope(
+                            connection,
+                            dispatch_user_id,
+                            dispatch_epoch
+                        );
+                        HandleFriendRequestAcceptRequest(connection, packet);
+                        return {};
+                    }
+                );
+
+            if (submit_status == BusinessSubmitStatus::kAccepted) {
+                return;
+            }
+
+            Json rejection_body;
+            rejection_body["success"] = false;
+            rejection_body["message"] = "business runtime rejected request";
+            rejection_body["reason"] =
+                BusinessSubmitStatusToString(submit_status);
+            Packet rejection;
+            rejection.type = MessageType::kFriendRequestAcceptResponse;
+            rejection.seq = packet.seq;
+            rejection.body = rejection_body.dump();
+            SendPacket(connection, rejection);
+            return;
+        }
+    }
+
     Json response_body;
 
     response_body["success"] = false;
@@ -7375,8 +9950,8 @@ void GatewayServer::HandleFriendRequestAcceptRequest(
     }
 
     const auto login_user_id =
-        session_manager_.
-            FindUserByConnection(
+        ResolveBusinessUser(
+                session_manager_,
                 connection
             );
 
@@ -7531,6 +10106,70 @@ void GatewayServer::HandleFriendRequestRejectRequest(
     const TcpConnectionPtr& connection,
     const Packet& packet
 ) {
+
+    if (!InBusinessDispatch()) {
+        Json dispatch_body;
+        std::uint64_t dispatch_request_id = 0;
+        try {
+            dispatch_body = Json::parse(packet.body);
+            if (dispatch_body.is_object() &&
+                dispatch_body.contains("request_id") &&
+                dispatch_body.at("request_id").is_number_unsigned()) {
+                dispatch_request_id =
+                    dispatch_body.at("request_id").get<std::uint64_t>();
+            }
+        } catch (...) {
+            dispatch_request_id = 0;
+        }
+
+        const auto dispatch_session =
+            session_manager_.FindSessionByConnection(connection);
+
+        if (dispatch_session.has_value() && HasBusinessExecutor()) {
+            const BusinessSubmitStatus submit_status =
+                SubmitSessionBusinessTask(
+                    business_executor_,
+                    &session_manager_,
+                    connection,
+                    *dispatch_session,
+                    packet.seq,
+                    BusinessClock::now(),
+                    "gateway.friend_request.reject",
+                    BusinessCancellationPolicy::kMustRun,
+                    static_cast<BusinessOrderingKey>(dispatch_request_id),
+                    [this, connection, packet,
+                     dispatch_user_id = dispatch_session->user_id,
+                     dispatch_epoch = dispatch_session->epoch](
+                        const BusinessExecutor::ExecutionContext&
+                    ) -> BusinessExecutor::Completion {
+                        ScopedBusinessDispatchContext dispatch_scope(
+                            connection,
+                            dispatch_user_id,
+                            dispatch_epoch
+                        );
+                        HandleFriendRequestRejectRequest(connection, packet);
+                        return {};
+                    }
+                );
+
+            if (submit_status == BusinessSubmitStatus::kAccepted) {
+                return;
+            }
+
+            Json rejection_body;
+            rejection_body["success"] = false;
+            rejection_body["message"] = "business runtime rejected request";
+            rejection_body["reason"] =
+                BusinessSubmitStatusToString(submit_status);
+            Packet rejection;
+            rejection.type = MessageType::kFriendRequestRejectResponse;
+            rejection.seq = packet.seq;
+            rejection.body = rejection_body.dump();
+            SendPacket(connection, rejection);
+            return;
+        }
+    }
+
     Json response_body;
 
     response_body["success"] = false;
@@ -7563,8 +10202,8 @@ void GatewayServer::HandleFriendRequestRejectRequest(
         }
 
         const auto login_user_id =
-        session_manager_.
-            FindUserByConnection(
+        ResolveBusinessUser(
+                session_manager_,
                 connection
             );
 
@@ -7716,26 +10355,18 @@ void GatewayServer::HandleHeartbeat(
     const TcpConnectionPtr& connection,
     const Packet& packet
 ) {
-    const auto user_id =
-        session_manager_.
-            FindUserByConnection(
-                connection
-            );
-
-    if (user_id.has_value()) {
-        RefreshUserOnlineIfMatch(
-            user_id.value(),
-            connection
-        );
-    }
-
+    /*
+     * Heartbeat transport fast-path：
+     * Pong不再等待Redis presence refresh。
+     */
     Json response_body;
     response_body["pong"] = true;
 
     Packet response;
     response.type =
         MessageType::kHeartbeat;
-    response.seq = packet.seq;
+    response.seq =
+        packet.seq;
     response.body =
         response_body.dump();
 
@@ -7743,7 +10374,84 @@ void GatewayServer::HandleHeartbeat(
         connection,
         response
     );
+
+    /*
+     * Presence refresh是best-effort maintenance。
+     * 一次Runtime admission失败不应反向让heartbeat失败。
+     */
+    if (
+        !HasBusinessExecutor() ||
+        !HasOnlineStatusCache()
+    ) {
+        return;
+    }
+
+    const auto session_snapshot =
+        session_manager_.
+            FindSessionByConnection(
+                connection
+            );
+
+    if (!session_snapshot.has_value()) {
+        return;
+    }
+
+    const UserId user_id =
+        session_snapshot->user_id;
+
+    const BusinessSubmitStatus status =
+        SubmitSessionBusinessTask(
+            business_executor_,
+            &session_manager_,
+            connection,
+            *session_snapshot,
+            packet.seq,
+            BusinessClock::now(),
+            "gateway.presence.refresh",
+            BusinessCancellationPolicy::
+                kCancelable,
+            std::nullopt,
+            [
+                this,
+                user_id,
+                connection
+            ](
+                const BusinessExecutor::
+                    ExecutionContext& context
+            ) -> BusinessExecutor::Completion {
+                if (
+                    context.CancellationRequested()
+                ) {
+                    return {};
+                }
+
+                RefreshUserOnlineIfMatch(
+                    user_id,
+                    connection
+                );
+
+                return {};
+            }
+        );
+
+    if (
+        status !=
+        BusinessSubmitStatus::kAccepted
+    ) {
+        LOG_WARN(
+            "gateway heartbeat presence refresh not admitted"
+            << ", user_id="
+            << user_id
+            << ", request_seq="
+            << packet.seq
+            << ", status="
+            << BusinessSubmitStatusToString(
+                status
+            )
+        );
+    }
 }
+
 void GatewayServer::PushOfflineMessages(
     UserId user_id,
     const TcpConnectionPtr& connection

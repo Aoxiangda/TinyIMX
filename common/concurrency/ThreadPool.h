@@ -32,6 +32,27 @@ public:
 
     bool Start();
 
+    /*
+    * 非阻塞任务提交入口。
+    *
+    * 主要用于：
+    *
+    * Reactor / EventLoop
+    *     ↓
+    * Business Runtime
+    *
+    * 与Submit()不同：
+    *
+    * 1. 不返回future；
+    * 2. 不允许等待Queue空位；
+    * 3. Queue满时立即返回kDiscarded；
+    * 4. Pool停止接收任务时返回kStopped。
+    *
+    * 调用方必须显式处理返回值，
+    * 从而实现Backpressure。
+    */
+    [[nodiscard]] TaskPushResult TrySubmit(Task task);
+
     template <typename F, typename... Args>
     auto Submit(F&& f, Args&&... args)
         -> std::future<std::invoke_result_t<F, Args...>> {

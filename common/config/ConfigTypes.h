@@ -55,6 +55,23 @@ struct ThreadPoolConfig {
     int worker_idle_timeout_ms{5000};
 };
 
+struct BusinessRuntimeConfig {
+    // Fixed worker count for blocking business work.
+    std::size_t worker_threads{4};
+
+    // Global accepted task lifecycle capacity.
+    std::size_t max_pending_tasks{128};
+
+    // Fixed ordering stripe count.
+    std::size_t stripe_count{64};
+
+    // Per-stripe backlog bound for hot-key isolation.
+    std::size_t per_stripe_queue_capacity{32};
+
+    int default_deadline_ms{3000};
+    int shutdown_timeout_ms{30000};
+};
+
 struct ProtocolConfig {
     std::size_t max_body_size{1024 * 1024};
     int heartbeat_interval_sec{30};

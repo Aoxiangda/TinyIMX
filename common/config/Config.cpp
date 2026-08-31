@@ -1,5 +1,6 @@
 #include "common/config/Config.h"
 
+#include <algorithm>
 #include <cctype>
 #include <fstream>
 #include <sstream>
@@ -130,6 +131,10 @@ const ThreadPoolConfig& Config::ThreadPool() const {
     return thread_pool_;
 }
 
+const BusinessRuntimeConfig& Config::BusinessRuntime() const {
+    return business_runtime_;
+}
+
 const ProtocolConfig& Config::Protocol() const {
     return protocol_;
 }
@@ -194,6 +199,7 @@ void Config::Reset() {
     server_ = ServerConfig{};
     logger_ = LoggerConfig{};
     thread_pool_ = ThreadPoolConfig{};
+    business_runtime_ = BusinessRuntimeConfig{};
     protocol_ = ProtocolConfig{};
     rpc_ = RpcConfig{};
     mysql_ = MySqlConfig{};
@@ -258,6 +264,77 @@ bool Config::ApplyJsonConfig(const std::string& json_content) {
             ReadIfExists(section, "worker_idle_timeout_ms",
                             &thread_pool_.worker_idle_timeout_ms);
 
+        }
+
+        /*
+         * M13-C1 backward-compatible migration:
+         * old configs without business_runtime preserve the previous
+         * ThreadPool -> BusinessExecutor bootstrap behavior.
+         */
+        business_runtime_.worker_threads =
+            thread_pool_.worker_threads;
+        business_runtime_.max_pending_tasks =
+            thread_pool_.queue_capacity;
+        business_runtime_.per_stripe_queue_capacity =
+            std::min(
+                business_runtime_.per_stripe_queue_capacity,
+                business_runtime_.max_pending_tasks
+            );
+
+        if (root.contains("business_runtime")) {
+            const auto& section =
+                root.at("business_runtime");
+
+            const bool has_per_stripe_capacity =
+                section.contains(
+                    "per_stripe_queue_capacity"
+                );
+
+            ReadIfExists(
+                section,
+                "worker_threads",
+                &business_runtime_.worker_threads
+            );
+            ReadIfExists(
+                section,
+                "max_pending_tasks",
+                &business_runtime_.max_pending_tasks
+            );
+            ReadIfExists(
+                section,
+                "stripe_count",
+                &business_runtime_.stripe_count
+            );
+            ReadIfExists(
+                section,
+                "per_stripe_queue_capacity",
+                &business_runtime_.per_stripe_queue_capacity
+            );
+            ReadIfExists(
+                section,
+                "default_deadline_ms",
+                &business_runtime_.default_deadline_ms
+            );
+            ReadIfExists(
+                section,
+                "shutdown_timeout_ms",
+                &business_runtime_.shutdown_timeout_ms
+            );
+
+            /*
+             * A partial max_pending override should not accidentally
+             * become invalid only because the inherited/default
+             * per-stripe value is larger. Explicit contradictory values
+             * still fail validation below.
+             */
+            if (
+                !has_per_stripe_capacity &&
+                business_runtime_.per_stripe_queue_capacity >
+                    business_runtime_.max_pending_tasks
+            ) {
+                business_runtime_.per_stripe_queue_capacity =
+                    business_runtime_.max_pending_tasks;
+            }
         }
 
         if (root.contains("protocol")) {
@@ -463,6 +540,55 @@ bool Config::Validate() {
     if (thread_pool_.worker_idle_timeout_ms <= 0) {
         return SetError(
             "thread_pool.worker_idle_timeout_ms must be greater than 0"
+        );
+    }
+
+    if (business_runtime_.worker_threads == 0) {
+        return SetError(
+            "business_runtime.worker_threads must be greater than 0"
+        );
+    }
+
+    if (business_runtime_.max_pending_tasks == 0) {
+        return SetError(
+            "business_runtime.max_pending_tasks must be greater than 0"
+        );
+    }
+
+    if (business_runtime_.stripe_count == 0) {
+        return SetError(
+            "business_runtime.stripe_count must be greater than 0"
+        );
+    }
+
+    if (business_runtime_.per_stripe_queue_capacity == 0) {
+        return SetError(
+            "business_runtime.per_stripe_queue_capacity "
+            "must be greater than 0"
+        );
+    }
+
+    if (
+        business_runtime_.per_stripe_queue_capacity >
+        business_runtime_.max_pending_tasks
+    ) {
+        return SetError(
+            "business_runtime.per_stripe_queue_capacity "
+            "must not exceed max_pending_tasks"
+        );
+    }
+
+    if (business_runtime_.default_deadline_ms <= 0) {
+        return SetError(
+            "business_runtime.default_deadline_ms "
+            "must be greater than 0"
+        );
+    }
+
+    if (business_runtime_.shutdown_timeout_ms <= 0) {
+        return SetError(
+            "business_runtime.shutdown_timeout_ms "
+            "must be greater than 0"
         );
     }
 

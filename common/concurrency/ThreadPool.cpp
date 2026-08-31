@@ -86,6 +86,141 @@ bool ThreadPool::Start() {
     return true;
 }
 
+
+TaskPushResult ThreadPool::TrySubmit(
+    Task task
+) {
+    /*
+     * 空Task没有执行意义。
+     *
+     * 这里把它视作一次Rejected submission，
+     * 而不是让Worker拿到空std::function后再抛异常。
+     */
+    if (!task) {
+        rejected_task_count_.fetch_add(
+            1,
+            std::memory_order_relaxed
+        );
+
+        return TaskPushResult::kDiscarded;
+    }
+
+
+    /*
+     * 先做快速状态检查。
+     *
+     * Running / Paused可以接收任务；
+     * Shutdown以后不再允许提交。
+     */
+    if (!IsAcceptingTasks()) {
+        rejected_task_count_.fetch_add(
+            1,
+            std::memory_order_relaxed
+        );
+
+        return TaskPushResult::kStopped;
+    }
+
+
+    /*
+     * TrySubmit没有packaged_task/future，
+     * 因此执行耗时与成功/失败统计
+     * 需要在这里自行包装。
+     */
+    Task measured_task =
+        [
+            this,
+            task = std::move(task)
+        ]() mutable {
+            const auto start_time =
+                std::chrono::steady_clock::now();
+
+            bool success = true;
+
+            try {
+                task();
+            } catch (const std::exception& e) {
+                success = false;
+
+                LOG_ERROR(
+                    "thread pool detached task failed"
+                    << ", name="
+                    << options_.name
+                    << ", error="
+                    << e.what()
+                );
+            } catch (...) {
+                success = false;
+
+                LOG_ERROR(
+                    "thread pool detached task failed"
+                    << ", name="
+                    << options_.name
+                    << ", error=unknown_exception"
+                );
+            }
+
+            const auto end_time =
+                std::chrono::steady_clock::now();
+
+            RecordTaskFinished(
+                success,
+                std::chrono::duration_cast<
+                    std::chrono::nanoseconds
+                >(
+                    end_time -
+                    start_time
+                )
+            );
+        };
+
+
+    /*
+     * M13最核心的地方：
+     *
+     * 这里故意不使用：
+     *
+     *     options_.queue_full_policy
+     *
+     * 而固定使用kDiscard。
+     *
+     * 因此即使全局ThreadPool配置是kBlock，
+     * Reactor调用TrySubmit也绝不会等待Queue空位。
+     */
+    const TaskPushResult push_result =
+        task_queue_.Push(
+            std::move(measured_task),
+            QueueFullPolicy::kDiscard
+        );
+
+
+    if (
+        push_result !=
+        TaskPushResult::kOk
+    ) {
+        rejected_task_count_.fetch_add(
+            1,
+            std::memory_order_relaxed
+        );
+
+        return push_result;
+    }
+
+
+    submitted_task_count_.fetch_add(
+        1,
+        std::memory_order_relaxed
+    );
+
+    UpdatePeakQueueSize(
+        task_queue_.Size()
+    );
+
+
+    return TaskPushResult::kOk;
+}
+
+
 void ThreadPool::Shutdown(ShutdownMode mode,
                           std::chrono::milliseconds timeout) {
     std::lock_guard<std::mutex> lock(lifecycle_mutex_);

@@ -58,6 +58,26 @@ target_link_libraries(config_demo PRIVATE
 )
 
 
+# M13-C1: Business Runtime configuration compatibility/validation tests.
+add_executable(config_business_runtime_tests
+    tests/config/config_business_runtime_test.cpp
+)
+
+target_link_libraries(config_business_runtime_tests PRIVATE
+    tinyimx_config
+)
+
+target_include_directories(config_business_runtime_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_custom_target(run_config_business_runtime_tests
+    COMMAND $<TARGET_FILE:config_business_runtime_tests>
+    DEPENDS config_business_runtime_tests
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+
 add_executable(logger_demo
     examples/logger_demo.cpp
 )
@@ -344,6 +364,7 @@ target_link_libraries(protocol_echo_client_demo PRIVATE
 # ===========================================
 add_library(tinyimx_gateway
     gateway/GatewayServer.cpp
+    gateway/business/BusinessExecutor.cpp
     gateway/SessionManager.cpp
     gateway/OfflineMessageStore.cpp
     gateway/GatewayRouteResolver.cpp
@@ -469,6 +490,60 @@ add_custom_target(run_gateway_tests
     COMMAND $<TARGET_FILE:gateway_tests>
     DEPENDS gateway_tests
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+
+# M13: Business Execution Runtime unit tests.
+add_executable(business_runtime_tests
+    tests/gateway/business_executor_test.cpp
+)
+
+target_link_libraries(business_runtime_tests PRIVATE
+    tinyimx_gateway
+)
+
+target_include_directories(business_runtime_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_custom_target(run_business_runtime_tests
+    COMMAND $<TARGET_FILE:business_runtime_tests>
+    DEPENDS business_runtime_tests
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+
+# M13-C2: failure-composition and lifecycle acceptance tests.
+add_executable(business_runtime_acceptance_tests
+    tests/gateway/business_runtime_acceptance_test.cpp
+)
+
+target_link_libraries(business_runtime_acceptance_tests PRIVATE
+    tinyimx_gateway
+)
+
+target_include_directories(business_runtime_acceptance_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_custom_target(run_business_runtime_acceptance_tests
+    COMMAND $<TARGET_FILE:business_runtime_acceptance_tests>
+    DEPENDS business_runtime_acceptance_tests
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+
+# M13-C1: isolated Business Runtime capacity/latency benchmark.
+add_executable(business_runtime_benchmark
+    benchmark/business_runtime_benchmark.cpp
+)
+
+target_link_libraries(business_runtime_benchmark PRIVATE
+    tinyimx_gateway
+)
+
+target_include_directories(business_runtime_benchmark PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 find_program(MYSQL_CONFIG_EXECUTABLE mysql_config REQUIRED)
@@ -625,6 +700,7 @@ target_link_libraries(tinyimx_gateway PUBLIC
     tinyimx_protocol
     tinyimx_repository
     tinyimx_cache_service
+    tinyimx_concurrency
     nlohmann_json::nlohmann_json
 )
 
@@ -834,6 +910,35 @@ target_link_libraries(gateway_history_client_demo PRIVATE
 )
 
 
+add_executable(
+    gateway_business_executor_isolation_demo
+    examples/gateway_business_executor_isolation_demo.cpp
+)
+
+target_link_libraries(
+    gateway_business_executor_isolation_demo
+    PRIVATE
+    tinyimx_net
+    tinyimx_protocol
+    nlohmann_json::nlohmann_json
+)
+
+
+# M13-C2: real Gateway overload/load-shedding integration client.
+add_executable(
+    gateway_business_runtime_overload_demo
+    examples/gateway_business_runtime_overload_demo.cpp
+)
+
+target_link_libraries(
+    gateway_business_runtime_overload_demo
+    PRIVATE
+    tinyimx_net
+    tinyimx_protocol
+    nlohmann_json::nlohmann_json
+)
+
+
 add_executable(message_repository_conversation_demo
     examples/message_repository_conversation_demo.cpp
 )
@@ -954,6 +1059,21 @@ target_link_libraries(friend_request_reject_demo PRIVATE
 )
 
 if(BUILD_TESTING)
+    add_test(
+        NAME tinyimx.config.business_runtime
+        COMMAND config_business_runtime_tests
+    )
+
+    add_test(
+        NAME tinyimx.business_runtime
+        COMMAND business_runtime_tests
+    )
+
+    add_test(
+        NAME tinyimx.business_runtime.acceptance
+        COMMAND business_runtime_acceptance_tests
+    )
+
     add_test(
         NAME tinyimx.concurrency
         COMMAND concurrency_tests

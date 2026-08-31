@@ -8,17 +8,13 @@ namespace tinyimx {
 
 class Timer final {
 public:
-    using Clock =
-        std::chrono::steady_clock;
+    using Clock = std::chrono::steady_clock;
 
-    using TimePoint =
-        Clock::time_point;
+    using TimePoint = Clock::time_point;
 
-    using Interval =
-        std::chrono::milliseconds;
+    using Interval = std::chrono::milliseconds;
 
-    using Callback =
-        std::function<void()>;
+    using Callback = std::function<void()>;
 
     Timer(
         Callback callback,
@@ -29,21 +25,13 @@ public:
 
     ~Timer() = default;
 
-    Timer(
-        const Timer&
-    ) = delete;
+    Timer(const Timer&) = delete;
 
-    Timer& operator=(
-        const Timer&
-    ) = delete;
+    Timer& operator=(const Timer&) = delete;
 
-    Timer(
-        Timer&&
-    ) = delete;
+    Timer(Timer&&) = delete;
 
-    Timer& operator=(
-        Timer&&
-    ) = delete;
+    Timer& operator=(Timer&&) = delete;
 
     void Run() const;
 

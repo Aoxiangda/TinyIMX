@@ -32,6 +32,14 @@
     "scale_cooldown_ms": 3000,
     "worker_idle_timeout_ms": 5000
   },
+  "business_runtime": {
+    "worker_threads": 4,
+    "max_pending_tasks": 128,
+    "stripe_count": 64,
+    "per_stripe_queue_capacity": 32,
+    "default_deadline_ms": 3000,
+    "shutdown_timeout_ms": 30000
+  },
   "protocol": {
     "max_body_size": 1048576,
     "heartbeat_interval_sec": 30,

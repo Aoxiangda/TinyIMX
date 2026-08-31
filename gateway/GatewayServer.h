@@ -29,6 +29,7 @@ class GatewayRouteResolver;
 class GatewayPeerTransportManager;
 
 class EventLoop;
+class BusinessExecutor;
 
 struct GatewayForwardChatResponse;
 /*
@@ -100,6 +101,28 @@ struct GatewayServerOptions {
             3
         };
 
+
+    /*
+    * ============================================================
+    * M13 test-only Business Runtime fault injection
+    * ============================================================
+    *
+    * 仅用于验证：
+    *
+    * blocking Business Work
+    *      !=
+    * blocking EventLoop
+    *
+    * 默认0ms，因此正常Gateway行为完全不受影响。
+    *
+    * 正式测试时由gateway_demo读取：
+    *
+    * TINYIMX_FAULT_HISTORY_BUSINESS_DELAY_MS
+    */
+    std::chrono::milliseconds
+        history_business_delay_for_test{
+            0
+        };
 };
 
 
@@ -140,6 +163,20 @@ public:
     std::size_t ConnectionCount() const;
 
     void SetMessageRepository(MessageRepository* message_repository);
+
+    /*
+    * M13 Business Execution Runtime。
+    *
+    * GatewayServer不拥有该BusinessExecutor。
+    *
+    * 生命周期由Bootstrap层负责，
+    * 并且必须保证：
+    *
+    * BusinessExecutor停止并完成Drain以前，
+    * Repository / Cache等业务依赖仍然存活。
+    */
+    void SetBusinessExecutor(BusinessExecutor* business_executor);
+
     void SetUserRepository(UserRepository* user_repository);
     void SetFriendRepository(FriendRepository* repository);
     void SetFriendRequestRepository(
@@ -453,6 +490,7 @@ private:
                                    const TcpConnectionPtr& connection);
 
     bool HasMessageRepository() const;
+    bool HasBusinessExecutor() const;
     bool HasUserRepository() const;
     bool HasFriendRepository() const;
     bool HasFriendRequestRepository() const;
@@ -537,6 +575,16 @@ private:
     */
     MessageDeliveryDeduplicator message_delivery_deduplicator_;
     ReceiverDeliveryTracker receiver_delivery_tracker_;
+
+    /*
+    * M13 Business Runtime。
+    *
+    * Non-owning pointer。
+    *
+    * GatewayServer只使用，不负责delete。
+    * Bootstrap层负责Start / Shutdown / lifetime。
+    */
+    BusinessExecutor* business_executor_{nullptr};
     MessageRepository* message_repository_{nullptr};
     UserRepository* user_repository_{nullptr};
     FriendRepository* friend_repository_{nullptr};
