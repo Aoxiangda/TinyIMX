@@ -63,6 +63,34 @@ struct IncrementUnreadResult {
     }
 };
 
+
+enum class EnsureUnreadProjectionStatus {
+    kApplied = 0,
+    kAlreadyApplied,
+    kIdentityConflict,
+    kInvalidArgument,
+    kInvalidValue,
+    kRedisError
+};
+
+struct EnsureUnreadProjectionResult {
+    EnsureUnreadProjectionStatus status{
+        EnsureUnreadProjectionStatus::kRedisError
+    };
+
+    bool incremented{false};
+    std::string error_message;
+
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return status == EnsureUnreadProjectionStatus::kApplied ||
+               status == EnsureUnreadProjectionStatus::kAlreadyApplied;
+    }
+
+    [[nodiscard]] bool Applied() const noexcept {
+        return status == EnsureUnreadProjectionStatus::kApplied;
+    }
+};
+
 enum class ClearUnreadStatus {
     kCleared = 0,
     kNotFound,
@@ -128,6 +156,15 @@ public:
         std::uint64_t sender_user_id
     );
 
+
+    EnsureUnreadProjectionResult
+    EnsurePrivateUnreadProjection(
+        std::uint64_t message_id,
+        std::uint64_t receiver_user_id,
+        std::uint64_t sender_user_id,
+        bool should_count_as_unread
+    );
+
     GetUnreadCountResult
     GetPrivateUnread(
         std::uint64_t receiver_user_id,
@@ -155,6 +192,11 @@ private:
         std::uint64_t receiver_user_id
     ) const;
 
+
+    std::string BuildProjectionKey(
+        std::uint64_t message_id
+    ) const;
+
     GetUnreadCountResult
     ReadCount(
         const std::string& key,
@@ -175,6 +217,12 @@ GetUnreadCountStatusToString(
 std::string
 IncrementUnreadStatusToString(
     IncrementUnreadStatus status
+);
+
+
+std::string
+EnsureUnreadProjectionStatusToString(
+    EnsureUnreadProjectionStatus status
 );
 
 std::string

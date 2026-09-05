@@ -98,6 +98,75 @@ redis.call(
 return private_count
 )lua";
 
+
+/*
+ * M14-C2 per-message unread projection gate.
+ *
+ * KEYS[1] = private unread counter
+ * KEYS[2] = total unread counter
+ * KEYS[3] = stable message projection marker
+ * ARGV[1] = receiver:sender identity
+ * ARGV[2] = "1" when this durable state contributes unread, else "0"
+ *
+ * return  1 = marker created (and counters incremented when requested)
+ * return  0 = marker already existed with the same identity
+ * return -1/-2 = invalid stored private/total count
+ * return -3/-4 = private/total overflow
+ * return -5 = marker identity conflict
+ */
+constexpr const char*
+    kEnsurePrivateUnreadProjectionScript = R"lua(
+local max_before_increment =
+    '9223372036854775806'
+
+local function validate_count(value)
+    if not value then
+        return 0
+    end
+
+    if value ~= '0' and
+       not string.match(value, '^[1-9][0-9]*$') then
+        return 1
+    end
+
+    if #value > #max_before_increment then
+        return 2
+    end
+
+    if #value == #max_before_increment and
+       value > max_before_increment then
+        return 2
+    end
+
+    return 0
+end
+
+local marker = redis.call('GET', KEYS[3])
+if marker then
+    if marker ~= ARGV[1] then
+        return -5
+    end
+    return 0
+end
+
+local private_status = validate_count(redis.call('GET', KEYS[1]))
+if private_status == 1 then return -1 end
+if private_status == 2 then return -3 end
+
+local total_status = validate_count(redis.call('GET', KEYS[2]))
+if total_status == 1 then return -2 end
+if total_status == 2 then return -4 end
+
+redis.call('SET', KEYS[3], ARGV[1])
+
+if ARGV[2] == '1' then
+    redis.call('INCR', KEYS[1])
+    redis.call('INCR', KEYS[2])
+end
+
+return 1
+)lua";
+
 constexpr const char*
     kClearPrivateUnreadScript = R"lua(
 local max_count =
@@ -365,6 +434,108 @@ UnreadCountCache::IncrementPrivateUnread(
     }
 }
 
+
+EnsureUnreadProjectionResult
+UnreadCountCache::EnsurePrivateUnreadProjection(
+    std::uint64_t message_id,
+    std::uint64_t receiver_user_id,
+    std::uint64_t sender_user_id,
+    bool should_count_as_unread
+) {
+    EnsureUnreadProjectionResult result;
+
+    if (message_id == 0 ||
+        receiver_user_id == 0 ||
+        sender_user_id == 0 ||
+        receiver_user_id == sender_user_id) {
+        result.status = EnsureUnreadProjectionStatus::kInvalidArgument;
+        result.error_message =
+            "unread projection failed: invalid message/user identity";
+        return result;
+    }
+
+    if (pool_ == nullptr) {
+        result.status = EnsureUnreadProjectionStatus::kRedisError;
+        result.error_message = "unread projection failed: redis pool is null";
+        return result;
+    }
+
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        result.status = EnsureUnreadProjectionStatus::kRedisError;
+        result.error_message =
+            "unread projection failed: acquire redis connection failed";
+        return result;
+    }
+
+    const std::string identity =
+        std::to_string(receiver_user_id) + ":" +
+        std::to_string(sender_user_id);
+
+    const auto script_result = connection->EvalInteger(
+        kEnsurePrivateUnreadProjectionScript,
+        std::vector<std::string>{
+            BuildPrivateKey(receiver_user_id, sender_user_id),
+            BuildTotalKey(receiver_user_id),
+            BuildProjectionKey(message_id)
+        },
+        std::vector<std::string>{
+            identity,
+            should_count_as_unread ? "1" : "0"
+        }
+    );
+
+    if (!script_result.has_value()) {
+        result.status = EnsureUnreadProjectionStatus::kRedisError;
+        result.error_message = connection->LastError();
+        if (result.error_message.empty()) {
+            result.error_message = "unread projection failed: redis EVAL failed";
+        }
+        return result;
+    }
+
+    switch (*script_result) {
+        case 1:
+            result.status = EnsureUnreadProjectionStatus::kApplied;
+            result.incremented = should_count_as_unread;
+            return result;
+        case 0:
+            result.status = EnsureUnreadProjectionStatus::kAlreadyApplied;
+            result.incremented = false;
+            return result;
+        case -5:
+            result.status = EnsureUnreadProjectionStatus::kIdentityConflict;
+            result.error_message =
+                "unread projection failed: message marker identity conflict";
+            return result;
+        case -1:
+            result.status = EnsureUnreadProjectionStatus::kInvalidValue;
+            result.error_message =
+                "unread projection failed: stored private count is invalid";
+            return result;
+        case -2:
+            result.status = EnsureUnreadProjectionStatus::kInvalidValue;
+            result.error_message =
+                "unread projection failed: stored total count is invalid";
+            return result;
+        case -3:
+            result.status = EnsureUnreadProjectionStatus::kInvalidValue;
+            result.error_message =
+                "unread projection failed: private count would overflow";
+            return result;
+        case -4:
+            result.status = EnsureUnreadProjectionStatus::kInvalidValue;
+            result.error_message =
+                "unread projection failed: total count would overflow";
+            return result;
+        default:
+            result.status = EnsureUnreadProjectionStatus::kRedisError;
+            result.error_message =
+                "unread projection failed: unexpected redis script code";
+            return result;
+    }
+}
+
 GetUnreadCountResult
 UnreadCountCache::GetPrivateUnread(
     std::uint64_t receiver_user_id,
@@ -431,6 +602,13 @@ GetUnreadCountResult UnreadCountCache::GetTotalUnread(
         ),
         "get total unread"
     );
+}
+
+
+std::string UnreadCountCache::BuildProjectionKey(
+    std::uint64_t message_id
+) const {
+    return key_prefix_ + "projection:message:" + std::to_string(message_id);
 }
 
 GetUnreadCountResult
@@ -788,6 +966,26 @@ std::string GetUnreadCountStatusToString(
         default:
             return "unknown";
     }
+}
+
+std::string EnsureUnreadProjectionStatusToString(
+    EnsureUnreadProjectionStatus status
+) {
+    switch (status) {
+        case EnsureUnreadProjectionStatus::kApplied:
+            return "applied";
+        case EnsureUnreadProjectionStatus::kAlreadyApplied:
+            return "already_applied";
+        case EnsureUnreadProjectionStatus::kIdentityConflict:
+            return "identity_conflict";
+        case EnsureUnreadProjectionStatus::kInvalidArgument:
+            return "invalid_argument";
+        case EnsureUnreadProjectionStatus::kInvalidValue:
+            return "invalid_value";
+        case EnsureUnreadProjectionStatus::kRedisError:
+            return "redis_error";
+    }
+    return "unknown";
 }
 
 std::string ClearUnreadStatusToString(

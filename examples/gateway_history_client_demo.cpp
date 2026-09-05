@@ -559,7 +559,7 @@ int main(int argc, char* argv[]) {
              SendPacket(
                  fd,
                  codec,
-                 MakeHistoryRequest(10004, 0, 10, 4)
+                 MakeHistoryRequest(900000001ULL, 0, 10, 4)
              );
     }
 

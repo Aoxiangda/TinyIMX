@@ -59,4 +59,56 @@ Thumbs.db
 *.temp
 *.bak
 
+
+# ============================================================
+# Local toolchain / vcpkg manifest artifacts
+# ============================================================
+
+/toolchains/
+/vcpkg_installed/
+/CMakeUserPresets.json
 /artifacts/
+
+# ============================================================
+# Local review / handoff / replacement artifacts
+# Never commit ChatGPT/review delivery intermediates.
+# ============================================================
+
+# Prefer putting all future temporary handoff files here.
+/_handoff/
+/_review/
+/_local_delivery/
+
+# Stage apply / verify helpers.
+/apply_m[0-9]*.sh
+/verify_m[0-9]*.sh
+
+# Temporary stage delivery/readme/audit documents.
+/README_M*_APPLY*.md
+/README_R[0-9]*.md
+/M*_AUDIT.md
+/M*_AUDIT.txt
+/M*_PRE_VM_*.md
+
+# Temporary replacement manifests / hashes.
+/BASELINE_SHA256SUMS*.txt
+/CANDIDATE_SHA256SUMS*.txt
+/R*_SHA256SUMS*.txt
+/SHA256SUMS
+/SHA256SUMS.txt
+/*_REPLACEMENT_MANIFEST.txt
+
+# Temporary patch/diff/insertion artifacts.
+/*_existing_files.diff
+/*_changes.diff
+/*_INSERTIONS.txt
+/LOCAL_CONFIG_*.json
+
+# Local source-review packaging helper.
+/package_current_source_for_review.sh
+
+# Local delivery archives in repository root.
+/*.zip
+/*.tar
+/*.tar.gz
+/*.tgz

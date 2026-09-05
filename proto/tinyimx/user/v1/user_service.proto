@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package tinyimx.user.v1;
+
+import "tinyimx/common/v1/common.proto";
+
+// UserService owns account identity, credential verification and durable user
+// profile data. Gateway remains the owner of TCP connection/session lifetime.
+service UserService {
+    rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
+    rpc GetUserProfile(GetUserProfileRequest) returns (GetUserProfileResponse);
+}
+
+// Business outcomes of credential verification. Transport/infrastructure
+// failures are expressed with gRPC status instead of this enum.
+enum AuthenticateResult {
+    AUTHENTICATE_RESULT_UNSPECIFIED = 0;
+    AUTHENTICATE_RESULT_AUTHENTICATED = 1;
+    AUTHENTICATE_RESULT_USER_NOT_FOUND = 2;
+    AUTHENTICATE_RESULT_USER_DISABLED = 3;
+    AUTHENTICATE_RESULT_PASSWORD_NOT_SET = 4;
+    AUTHENTICATE_RESULT_WRONG_PASSWORD = 5;
+}
+
+message UserProfile {
+    uint64 user_id = 1;
+    string username = 2;
+    string nickname = 3;
+    string avatar_url = 4;
+
+    // Durable account/business status from im_users.status. This is not
+    // Gateway/Redis online presence.
+    uint32 user_status = 5;
+}
+
+message AuthenticateRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    string username = 2;
+    string password = 3;
+}
+
+message AuthenticateResponse {
+    AuthenticateResult result = 1;
+
+    // Present only when result == AUTHENTICATE_RESULT_AUTHENTICATED.
+    UserProfile profile = 2;
+
+    // Human-readable diagnostic compatible with the current TinyIMX login
+    // semantics. Callers must branch on result rather than parse this text.
+    string message = 3;
+}
+
+message GetUserProfileRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 user_id = 2;
+}
+
+message GetUserProfileResponse {
+    UserProfile profile = 1;
+}

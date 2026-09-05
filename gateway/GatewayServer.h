@@ -19,8 +19,6 @@
 
 namespace tinyimx {
 
-class MessageRepository;
-class UserRepository;
 class FriendRequestRepository;
 
 class OnlineStatusCache;
@@ -30,6 +28,13 @@ class GatewayPeerTransportManager;
 
 class EventLoop;
 class BusinessExecutor;
+struct BusinessRequestContext;
+
+namespace rpc {
+class SocialRpcClient;
+class UserRpcClient;
+class MessageRpcClient;
+}
 
 struct GatewayForwardChatResponse;
 /*
@@ -162,7 +167,6 @@ public:
     const InetAddress& ListenAddress() const;
     std::size_t ConnectionCount() const;
 
-    void SetMessageRepository(MessageRepository* message_repository);
 
     /*
     * M13 Business Execution Runtime。
@@ -176,8 +180,9 @@ public:
     * Repository / Cache等业务依赖仍然存活。
     */
     void SetBusinessExecutor(BusinessExecutor* business_executor);
-
-    void SetUserRepository(UserRepository* user_repository);
+    void SetSocialRpcClient(rpc::SocialRpcClient* social_rpc_client);
+    void SetUserRpcClient(rpc::UserRpcClient* user_rpc_client);
+    void SetMessageRpcClient(rpc::MessageRpcClient* message_rpc_client);
     void SetFriendRepository(FriendRepository* repository);
     void SetFriendRequestRepository(
         FriendRequestRepository* repository
@@ -221,6 +226,12 @@ private:
     void HandleChatMessage(const TcpConnectionPtr& connection,
                            const Packet& packet);
 
+    void ExecuteChatMessage(
+        const TcpConnectionPtr& connection,
+        const Packet& packet,
+        const BusinessRequestContext& business_request
+    );
+
     /*
     * Receiver Client -> Gateway
     *
@@ -243,15 +254,33 @@ private:
     */
     void HandleReceiverChatDeliveryAck(const TcpConnectionPtr& connection,
                                        const Packet& packet);
+    void ExecuteReceiverChatDeliveryAck(
+        const TcpConnectionPtr& connection,
+        const Packet& packet,
+        const BusinessRequestContext& business_request
+    );
 
-
-    void HandleGatewayForwardChatRequest(const TcpConnectionPtr& connection, const Packet& packet);
+    void HandleGatewayForwardChatRequest(const TcpConnectionPtr& connection,
+                                         const Packet& packet);
+    void ExecuteGatewayForwardChatRequest(
+        const TcpConnectionPtr& connection,
+        const Packet& packet,
+        const BusinessRequestContext& business_request
+    );
 
     void HandleReadRequest(const TcpConnectionPtr& connection,
                            const Packet& packet);
+    void ExecuteReadRequest(
+        const TcpConnectionPtr& connection,
+        const Packet& packet,
+        const BusinessRequestContext& business_request
+    );
 
     void HandleHistoryRequest(const TcpConnectionPtr& connection,
                               const Packet& packet);
+
+    void HandleUserProfileRequest(const TcpConnectionPtr& connection,
+                                  const Packet& packet);
 
     void HandleFriendListRequest(const TcpConnectionPtr& connection,
                                  const Packet& packet);
@@ -488,10 +517,16 @@ private:
 
     void PushPersistentOfflineMessages(UserId user_id,
                                    const TcpConnectionPtr& connection);
+    void ExecutePersistentOfflineReplay(
+        UserId user_id,
+        const TcpConnectionPtr& connection,
+        const BusinessRequestContext& business_request
+    );
 
-    bool HasMessageRepository() const;
     bool HasBusinessExecutor() const;
-    bool HasUserRepository() const;
+    bool HasSocialRpcClient() const;
+    bool HasUserRpcClient() const;
+    bool HasMessageRpcClient() const;
     bool HasFriendRepository() const;
     bool HasFriendRequestRepository() const;
 
@@ -515,6 +550,15 @@ private:
     std::int64_t IncrementUnread(UserId receiver_user_id,
                                  UserId sender_user_id,
                                  std::int64_t* total_unread);
+
+    void EnsureUnreadProjection(
+        std::uint64_t message_id,
+        UserId receiver_user_id,
+        UserId sender_user_id,
+        bool should_count_as_unread,
+        std::int64_t* private_unread,
+        std::int64_t* total_unread
+    );
 
     void RefreshUserOnlineIfMatch(
         UserId user_id,
@@ -585,8 +629,32 @@ private:
     * Bootstrap层负责Start / Shutdown / lifetime。
     */
     BusinessExecutor* business_executor_{nullptr};
-    MessageRepository* message_repository_{nullptr};
-    UserRepository* user_repository_{nullptr};
+
+    /*
+    * M14-A3 internal RPC dependency. Non-owning.
+    * Bootstrap owns SocialRpcClient and must keep it alive until the
+    * BusinessExecutor has fully drained accepted work.
+    */
+    rpc::SocialRpcClient* social_rpc_client_{nullptr};
+
+    /*
+    * M14-B2 internal UserService RPC dependency. Non-owning.
+    * Bootstrap owns UserRpcClient and must keep it alive until the
+    * BusinessExecutor has fully drained accepted Login work.
+    */
+    rpc::UserRpcClient* user_rpc_client_{nullptr};
+
+    /*
+     * M14-C1 durable MessageService read dependency. Non-owning.
+     * C1 uses it only for History/ConversationList; C2/C3 migrate the
+     * remaining durable mutation/replay paths without changing ownership of
+     * Session, Presence, Packet.seq(D), routing or actual delivery.
+     */
+    rpc::MessageRpcClient* message_rpc_client_{nullptr};
+
+    std::atomic<std::uint64_t>
+        next_internal_rpc_id_{1};
+
     FriendRepository* friend_repository_{nullptr};
     FriendRequestRepository* friend_request_repository_{nullptr};
 

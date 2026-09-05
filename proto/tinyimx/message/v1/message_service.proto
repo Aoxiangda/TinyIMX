@@ -1,0 +1,172 @@
+syntax = "proto3";
+
+package tinyimx.message.v1;
+
+import "tinyimx/common/v1/common.proto";
+
+// M14-C freezes the durable message-domain contract once, then migrates the
+// Gateway call sites in controlled slices. C1 implements the read-side RPCs;
+// the mutation RPCs are intentionally reserved for C2/C3 so the protobuf
+// contract does not churn between sub-stages.
+service MessageService {
+    rpc PersistPrivateMessage(PersistPrivateMessageRequest)
+        returns (PersistPrivateMessageResponse);
+    rpc GetPrivateMessage(GetPrivateMessageRequest)
+        returns (GetPrivateMessageResponse);
+
+    rpc ListHistory(ListHistoryRequest)
+        returns (ListHistoryResponse);
+    rpc ListConversations(ListConversationsRequest)
+        returns (ListConversationsResponse);
+
+    rpc CountPending(CountPendingRequest)
+        returns (CountPendingResponse);
+    rpc ListPendingAfter(ListPendingAfterRequest)
+        returns (ListPendingAfterResponse);
+
+    rpc ConfirmReceiver(ConfirmReceiverRequest)
+        returns (MessageMutationResponse);
+    rpc ConfirmReceiverBatch(ConfirmReceiverBatchRequest)
+        returns (MessageMutationResponse);
+    rpc MarkDialogRead(MarkDialogReadRequest)
+        returns (MessageMutationResponse);
+}
+
+enum MessageDeliveryState {
+    MESSAGE_DELIVERY_STATE_UNSPECIFIED = 0;
+    MESSAGE_DELIVERY_STATE_PENDING = 1;
+    MESSAGE_DELIVERY_STATE_RECEIVER_CONFIRMED = 2;
+    MESSAGE_DELIVERY_STATE_READ = 3;
+    MESSAGE_DELIVERY_STATE_FAILED = 4;
+}
+
+message MessageRecord {
+    uint64 message_id = 1;
+    string client_message_id = 2;
+    uint64 from_user_id = 3;
+    uint64 to_user_id = 4;
+    uint32 message_type = 5;
+    string content = 6;
+    MessageDeliveryState delivery_state = 7;
+    string created_at = 8;
+
+    // Existing MySQL still stores this timestamp in delivered_at. The RPC
+    // contract names the semantic event, not the legacy storage column.
+    string receiver_confirmed_at = 9;
+    string read_at = 10;
+}
+
+message ConversationRecord {
+    uint64 peer_user_id = 1;
+    uint64 last_message_id = 2;
+    string last_client_message_id = 3;
+    uint64 last_from_user_id = 4;
+    uint64 last_to_user_id = 5;
+    uint32 last_message_type = 6;
+    string last_content = 7;
+    MessageDeliveryState last_delivery_state = 8;
+    string last_created_at = 9;
+    string last_receiver_confirmed_at = 10;
+    string last_read_at = 11;
+}
+
+message PersistPrivateMessageRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 from_user_id = 2;
+    uint64 to_user_id = 3;
+    string client_message_id = 4;
+    uint32 message_type = 5;
+    string content = 6;
+}
+
+enum PersistPrivateMessageResult {
+    PERSIST_PRIVATE_MESSAGE_RESULT_UNSPECIFIED = 0;
+    PERSIST_PRIVATE_MESSAGE_RESULT_CREATED = 1;
+    PERSIST_PRIVATE_MESSAGE_RESULT_REUSED = 2;
+    PERSIST_PRIVATE_MESSAGE_RESULT_IDEMPOTENCY_CONFLICT = 3;
+}
+
+message PersistPrivateMessageResponse {
+    PersistPrivateMessageResult result = 1;
+    uint64 message_id = 2;
+    MessageRecord record = 3;
+    string message = 4;
+}
+
+message GetPrivateMessageRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 message_id = 2;
+}
+
+message GetPrivateMessageResponse {
+    MessageRecord record = 1;
+}
+
+message ListHistoryRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+
+    // Gateway injects actor_user_id from its authenticated Session snapshot.
+    uint64 actor_user_id = 2;
+    uint64 peer_user_id = 3;
+    uint64 before_message_id = 4;
+    uint32 limit = 5;
+}
+
+message ListHistoryResponse {
+    repeated MessageRecord messages = 1;
+    bool has_more = 2;
+}
+
+message ListConversationsRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    uint32 limit = 3;
+}
+
+message ListConversationsResponse {
+    repeated ConversationRecord conversations = 1;
+    bool has_more = 2;
+}
+
+message CountPendingRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 to_user_id = 2;
+}
+
+message CountPendingResponse {
+    uint64 count = 1;
+}
+
+message ListPendingAfterRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 to_user_id = 2;
+    uint64 after_message_id = 3;
+    uint32 limit = 4;
+}
+
+message ListPendingAfterResponse {
+    repeated MessageRecord messages = 1;
+    bool has_more = 2;
+}
+
+message ConfirmReceiverRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 message_id = 2;
+    uint64 receiver_user_id = 3;
+}
+
+message ConfirmReceiverBatchRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 receiver_user_id = 2;
+    repeated uint64 message_ids = 3;
+}
+
+message MarkDialogReadRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 reader_user_id = 2;
+    uint64 peer_user_id = 3;
+}
+
+message MessageMutationResponse {
+    uint64 affected_rows = 1;
+}

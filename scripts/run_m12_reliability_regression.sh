@@ -23,12 +23,19 @@ CONFIG_B="${TINYIMX_GATEWAY_B_CONFIG:-$ROOT_DIR/config/gateway-b.local.json}"
 HOST="${TINYIMX_REGRESSION_HOST:-127.0.0.1}"
 GATEWAY_A_PORT="${TINYIMX_GATEWAY_A_PORT:-9001}"
 GATEWAY_B_PORT="${TINYIMX_GATEWAY_B_PORT:-9002}"
+USER_SERVICE_PORT="${TINYIMX_USER_SERVICE_PORT:-50052}"
+USER_SERVICE_TARGET="127.0.0.1:${USER_SERVICE_PORT}"
+MESSAGE_SERVICE_PORT="${TINYIMX_MESSAGE_SERVICE_PORT:-50053}"
+MESSAGE_SERVICE_TARGET="127.0.0.1:${MESSAGE_SERVICE_PORT}"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 ARTIFACT_DIR="${TINYIMX_M12_ARTIFACT_DIR:-$ROOT_DIR/artifacts/m12-regression-$TIMESTAMP}"
 SUMMARY_FILE="$ARTIFACT_DIR/summary.tsv"
+BUILD_JOBS="${TINYIMX_BUILD_JOBS:-1}"
 
 GW_A_PID=""
 GW_B_PID=""
+USER_SERVICE_PID=""
+MESSAGE_SERVICE_PID=""
 LAST_CASE_LOG=""
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -144,6 +151,8 @@ cleanup() {
     set +e
     stop_pid "$GW_B_PID" "gateway-b"
     stop_pid "$GW_A_PID" "gateway-a"
+    stop_pid "$MESSAGE_SERVICE_PID" "message-service"
+    stop_pid "$USER_SERVICE_PID" "user-service"
 }
 trap cleanup EXIT INT TERM
 
@@ -154,12 +163,44 @@ assert_ports_free() {
     if port_open "$GATEWAY_B_PORT"; then
         fail "port $GATEWAY_B_PORT already has a listener; stop the existing gateway-b first"
     fi
+    if port_open "$USER_SERVICE_PORT"; then
+        fail "port $USER_SERVICE_PORT already has a listener; stop the existing UserService first"
+    fi
+    if port_open "$MESSAGE_SERVICE_PORT"; then
+        fail "port $MESSAGE_SERVICE_PORT already has a listener; stop the existing MessageService first"
+    fi
+}
+
+start_user_service() {
+    local log_file="$ARTIFACT_DIR/user-service.log"
+    log "starting UserService -> $log_file"
+    TINYIMX_USER_LISTEN_TARGET="$USER_SERVICE_TARGET" \
+        "$BUILD_DIR/user_service_demo" "$CONFIG_A" >"$log_file" 2>&1 &
+    USER_SERVICE_PID=$!
+    wait_port_open "$USER_SERVICE_PORT" 15 || {
+        tail -n 100 "$log_file" || true
+        fail "UserService did not become ready"
+    }
+}
+
+start_message_service() {
+    local log_file="$ARTIFACT_DIR/message-service.log"
+    log "starting MessageService -> $log_file"
+    TINYIMX_MESSAGE_LISTEN_TARGET="$MESSAGE_SERVICE_TARGET" \
+        "$BUILD_DIR/message_service_demo" "$CONFIG_A" >"$log_file" 2>&1 &
+    MESSAGE_SERVICE_PID=$!
+    wait_port_open "$MESSAGE_SERVICE_PORT" 15 || {
+        tail -n 100 "$log_file" || true
+        fail "MessageService did not become ready"
+    }
 }
 
 start_gateway_a() {
     local log_file="$ARTIFACT_DIR/gateway-a.log"
     log "starting gateway-a -> $log_file"
-    "$BUILD_DIR/gateway_demo" "$CONFIG_A" >"$log_file" 2>&1 &
+    TINYIMX_USER_RPC_TARGET="$USER_SERVICE_TARGET" \
+    TINYIMX_MESSAGE_RPC_TARGET="$MESSAGE_SERVICE_TARGET" \
+        "$BUILD_DIR/gateway_demo" "$CONFIG_A" >"$log_file" 2>&1 &
     GW_A_PID=$!
     wait_port_open "$GATEWAY_A_PORT" 15 || {
         tail -n 100 "$log_file" || true
@@ -173,9 +214,13 @@ start_gateway_b() {
     log "starting gateway-b mode=$mode -> $log_file"
     if [[ "$mode" == "drop-first-peer-response" ]]; then
         TINYIMX_FAULT_DROP_FIRST_PEER_DELIVERED_RESPONSE=1 \
+        TINYIMX_USER_RPC_TARGET="$USER_SERVICE_TARGET" \
+        TINYIMX_MESSAGE_RPC_TARGET="$MESSAGE_SERVICE_TARGET" \
             "$BUILD_DIR/gateway_demo" "$CONFIG_B" >"$log_file" 2>&1 &
     else
-        "$BUILD_DIR/gateway_demo" "$CONFIG_B" >"$log_file" 2>&1 &
+        TINYIMX_USER_RPC_TARGET="$USER_SERVICE_TARGET" \
+        TINYIMX_MESSAGE_RPC_TARGET="$MESSAGE_SERVICE_TARGET" \
+            "$BUILD_DIR/gateway_demo" "$CONFIG_B" >"$log_file" 2>&1 &
     fi
     GW_B_PID=$!
     wait_port_open "$GATEWAY_B_PORT" 15 || {
@@ -348,6 +393,8 @@ build_all() {
         protocol_tests
         gateway_tests
         gateway_demo
+        user_service_demo
+        message_service_demo
         gateway_session_client_demo
         gateway_same_gateway_client_demo
         gateway_client_retry_demo
@@ -367,7 +414,7 @@ build_all() {
     )
 
     log "building M12 release targets"
-    (cd "$ROOT_DIR" && cmake --build --preset build-debug --target "${targets[@]}" -j"$(nproc)" \
+    (cd "$ROOT_DIR" && cmake --build --preset build-debug --target "${targets[@]}" -j"$BUILD_JOBS" \
         >"$ARTIFACT_DIR/build.log" 2>&1) || {
         tail -n 160 "$ARTIFACT_DIR/build.log" || true
         fail "M12 build gate failed"
@@ -627,6 +674,8 @@ main() {
     assert_ports_free
     build_all
     run_unit_tests
+    start_user_service
+    start_message_service
     run_single_gateway_suite
 
     start_gateway_b normal

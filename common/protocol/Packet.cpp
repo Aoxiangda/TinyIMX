@@ -63,6 +63,11 @@ std::string MessageTypeToString(MessageType type) {
         case MessageType::kChatDeliveryAck:
             return "chat_delivery_ack";
 
+        case MessageType::kUserProfileRequest:
+            return "user_profile_request";
+        case MessageType::kUserProfileResponse:
+            return "user_profile_response";
+
         case MessageType::kGatewayForwardChatRequest:
             return "gateway_forward_chat_request";
         case MessageType::kGatewayForwardChatResponse:
@@ -112,6 +117,9 @@ bool IsKnownMessageType(MessageType type) {
 
         case MessageType::kChatDelivery:
         case MessageType::kChatDeliveryAck:
+
+        case MessageType::kUserProfileRequest:
+        case MessageType::kUserProfileResponse:
 
         case MessageType::kGatewayForwardChatRequest:
         case MessageType::kGatewayForwardChatResponse:

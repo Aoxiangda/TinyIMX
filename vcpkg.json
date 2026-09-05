@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+
+  "builtin-baseline": "a44707152fabbedcf1c17fe80d7bfb7d9370d8d5",
+
+  "supports": "linux & x64",
+
+  "dependencies": [
+    "nlohmann-json",
+    "openssl",
+    "hiredis",
+    "libmysql",
+    "protobuf",
+    {
+      "name": "grpc",
+      "features": [
+        "codegen"
+      ]
+    }
+  ]
+}

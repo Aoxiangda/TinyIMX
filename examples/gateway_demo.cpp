@@ -6,8 +6,6 @@
 #include "common/net/InetAddress.h"
 #include "gateway/GatewayServer.h"
 #include "common/db/MySqlConnectionPool.h"
-#include "services/repository/MessageRepository.h"
-#include "services/repository/UserRepository.h"
 #include "common/cache/RedisConnectionPool.h"
 #include "services/cache/OnlineStatusCache.h"
 #include "services/cache/UnreadCountCache.h"
@@ -19,6 +17,10 @@
 #include "gateway/GatewayRouteResolver.h"
 #include "common/net/EventLoopThread.h"
 #include "gateway/GatewayPeerTransportManager.h"
+#include "services/rpc/SocialRpcClient.h"
+#include "services/rpc/UserRpcClient.h"
+#include "services/rpc/MessageRpcClient.h"
+#include "services/rpc/StaticServiceEndpointProvider.h"
 
 #include <csignal>
 #include <iostream>
@@ -197,8 +199,6 @@ int main(int argc, char* argv[]) {
 
 
         std::unique_ptr<tinyimx::MySqlConnectionPool> mysql_pool;
-        std::unique_ptr<tinyimx::MessageRepository> message_repository;
-        std::unique_ptr<tinyimx::UserRepository> user_repository;
         std::unique_ptr<tinyimx::FriendRepository> friend_repository;
         std::unique_ptr<tinyimx::FriendRequestRepository> friend_request_repository;
 
@@ -212,6 +212,14 @@ int main(int argc, char* argv[]) {
         std::unique_ptr<tinyimx::EventLoopThread> gateway_peer_loop_thread;
         std::shared_ptr<tinyimx::GatewayPeerTransportManager> gateway_peer_transport_manager;
         std::unique_ptr<tinyimx::BusinessExecutor> business_executor;
+        std::shared_ptr<tinyimx::rpc::StaticServiceEndpointProvider>
+            service_endpoint_provider;
+        std::unique_ptr<tinyimx::rpc::SocialRpcClient>
+            social_rpc_client;
+        std::unique_ptr<tinyimx::rpc::UserRpcClient>
+            user_rpc_client;
+        std::unique_ptr<tinyimx::rpc::MessageRpcClient>
+            message_rpc_client;
         if (config.MySql().enable) {
             mysql_pool = std::make_unique<tinyimx::MySqlConnectionPool>();
 
@@ -220,16 +228,6 @@ int main(int argc, char* argv[]) {
                 tinyimx::Logger::Instance().Shutdown();
                 return 1;
             }
-
-            user_repository =
-                std::make_unique<tinyimx::UserRepository>(
-                    mysql_pool.get()
-                );
-
-            message_repository =
-                std::make_unique<tinyimx::MessageRepository>(
-                    mysql_pool.get()
-                );
 
             friend_repository =
                 std::make_unique<tinyimx::FriendRepository>(
@@ -374,6 +372,92 @@ int main(int argc, char* argv[]) {
                 shutdown_timeout.count()
         );
 
+        const char* social_rpc_target_env =
+            std::getenv("TINYIMX_SOCIAL_RPC_TARGET");
+        const char* user_rpc_target_env =
+            std::getenv("TINYIMX_USER_RPC_TARGET");
+        const char* message_rpc_target_env =
+            std::getenv("TINYIMX_MESSAGE_RPC_TARGET");
+
+        const std::string social_rpc_target =
+            social_rpc_target_env != nullptr
+                ? std::string(social_rpc_target_env)
+                : std::string{};
+        const std::string user_rpc_target =
+            user_rpc_target_env != nullptr
+                ? std::string(user_rpc_target_env)
+                : std::string{};
+        const std::string message_rpc_target =
+            message_rpc_target_env != nullptr
+                ? std::string(message_rpc_target_env)
+                : std::string{};
+
+        if (!social_rpc_target.empty() ||
+            !user_rpc_target.empty() ||
+            !message_rpc_target.empty()) {
+            service_endpoint_provider =
+                std::make_shared<
+                    tinyimx::rpc::StaticServiceEndpointProvider
+                >(
+                    social_rpc_target,
+                    user_rpc_target,
+                    message_rpc_target
+                );
+        }
+
+        if (!social_rpc_target.empty()) {
+            social_rpc_client =
+                std::make_unique<tinyimx::rpc::SocialRpcClient>(
+                    service_endpoint_provider
+                );
+
+            LOG_INFO(
+                "gateway SocialService RPC enabled"
+                << ", target=" << social_rpc_target
+            );
+        } else {
+            LOG_WARN(
+                "gateway SocialService RPC disabled: "
+                "TINYIMX_SOCIAL_RPC_TARGET is not set"
+            );
+        }
+
+        if (!user_rpc_target.empty()) {
+            user_rpc_client =
+                std::make_unique<tinyimx::rpc::UserRpcClient>(
+                    service_endpoint_provider
+                );
+
+            LOG_INFO(
+                "gateway UserService RPC enabled"
+                << ", target=" << user_rpc_target
+            );
+        } else {
+            LOG_WARN(
+                "gateway UserService RPC disabled: "
+                "TINYIMX_USER_RPC_TARGET is not set; "
+                "Login will fail closed with auth_unavailable"
+            );
+        }
+
+        if (!message_rpc_target.empty()) {
+            message_rpc_client =
+                std::make_unique<tinyimx::rpc::MessageRpcClient>(
+                    service_endpoint_provider
+                );
+
+            LOG_INFO(
+                "gateway MessageService RPC enabled"
+                << ", target=" << message_rpc_target
+            );
+        } else {
+            LOG_WARN(
+                "gateway MessageService RPC disabled: "
+                "TINYIMX_MESSAGE_RPC_TARGET is not set; "
+                "Chat persistence/History/ConversationList will fail closed"
+            );
+        }
+
         tinyimx::GatewayServer gateway(
             &loop,
             listen_address,
@@ -384,12 +468,18 @@ int main(int argc, char* argv[]) {
             business_executor.get()
         );
 
-        if (user_repository) {
-            gateway.SetUserRepository(user_repository.get());
+        if (social_rpc_client) {
+            gateway.SetSocialRpcClient(
+                social_rpc_client.get()
+            );
         }
 
-        if (message_repository) {
-            gateway.SetMessageRepository(message_repository.get());
+        if (user_rpc_client) {
+            gateway.SetUserRpcClient(user_rpc_client.get());
+        }
+
+        if (message_rpc_client) {
+            gateway.SetMessageRpcClient(message_rpc_client.get());
         }
 
         if (friend_repository) {

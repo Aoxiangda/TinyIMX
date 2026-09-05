@@ -8,11 +8,16 @@ RELEASE_DIR="${ROOT_DIR}/build/linux-release"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 ARTIFACT_DIR="${ROOT_DIR}/artifacts/m13-final-${TIMESTAMP}"
 SUMMARY="${ARTIFACT_DIR}/summary.tsv"
+BUILD_JOBS="${TINYIMX_BUILD_JOBS:-1}"
 
 mkdir -p "${ARTIFACT_DIR}"
 printf 'case\tstatus\tlog\n' > "${SUMMARY}"
 
 GATEWAY_PID=""
+USER_SERVICE_PID=""
+USER_SERVICE_TARGET=""
+MESSAGE_SERVICE_PID=""
+MESSAGE_SERVICE_TARGET=""
 TEMP_CONFIGS=()
 TEMP_CONFIG_PATH=""
 PASS_COUNT=0
@@ -39,8 +44,46 @@ cleanup_gateway() {
   GATEWAY_PID=""
 }
 
+cleanup_user_service() {
+  if [[ -n "${USER_SERVICE_PID}" ]] && kill -0 "${USER_SERVICE_PID}" 2>/dev/null; then
+    kill -TERM "${USER_SERVICE_PID}" 2>/dev/null || true
+    for _ in $(seq 1 50); do
+      if ! kill -0 "${USER_SERVICE_PID}" 2>/dev/null; then
+        break
+      fi
+      sleep 0.1
+    done
+    if kill -0 "${USER_SERVICE_PID}" 2>/dev/null; then
+      kill -KILL "${USER_SERVICE_PID}" 2>/dev/null || true
+    fi
+    wait "${USER_SERVICE_PID}" 2>/dev/null || true
+  fi
+  USER_SERVICE_PID=""
+  USER_SERVICE_TARGET=""
+}
+
+cleanup_message_service() {
+  if [[ -n "${MESSAGE_SERVICE_PID}" ]] && kill -0 "${MESSAGE_SERVICE_PID}" 2>/dev/null; then
+    kill -TERM "${MESSAGE_SERVICE_PID}" 2>/dev/null || true
+    for _ in $(seq 1 50); do
+      if ! kill -0 "${MESSAGE_SERVICE_PID}" 2>/dev/null; then
+        break
+      fi
+      sleep 0.1
+    done
+    if kill -0 "${MESSAGE_SERVICE_PID}" 2>/dev/null; then
+      kill -KILL "${MESSAGE_SERVICE_PID}" 2>/dev/null || true
+    fi
+    wait "${MESSAGE_SERVICE_PID}" 2>/dev/null || true
+  fi
+  MESSAGE_SERVICE_PID=""
+  MESSAGE_SERVICE_TARGET=""
+}
+
 cleanup() {
   cleanup_gateway
+  cleanup_message_service
+  cleanup_user_service
   for file in "${TEMP_CONFIGS[@]:-}"; do
     [[ -n "${file}" ]] && rm -f -- "${file}"
   done
@@ -153,13 +196,15 @@ cmake --build --preset build-debug --target \
   concurrency_tests \
   gateway_tests \
   gateway_demo \
+  user_service_demo \
+  message_service_demo \
   gateway_business_executor_isolation_demo \
   gateway_business_runtime_overload_demo \
   business_runtime_benchmark \
-  -j2
+  -j"${BUILD_JOBS}"
 
 echo "[M13] building release benchmark"
-cmake --build --preset build-release --target business_runtime_benchmark -j2
+cmake --build --preset build-release --target business_runtime_benchmark -j"${BUILD_JOBS}"
 
 run_case "config-runtime" 30 \
   "${DEBUG_DIR}/config_business_runtime_tests"
@@ -227,6 +272,85 @@ s = socket.socket()
 s.bind(("127.0.0.1", 0))
 print(s.getsockname()[1])
 s.close()
+PY
+}
+
+
+start_user_service() {
+  local port
+  port="$(free_port)"
+  USER_SERVICE_TARGET="127.0.0.1:${port}"
+  local log="${ARTIFACT_DIR}/user-service.log"
+
+  echo "[M13] starting UserService at ${USER_SERVICE_TARGET}"
+  TINYIMX_USER_LISTEN_TARGET="${USER_SERVICE_TARGET}" \
+    "${DEBUG_DIR}/user_service_demo" "${LOCAL_A}" >"${log}" 2>&1 &
+  USER_SERVICE_PID=$!
+
+  python3 - "127.0.0.1" "${port}" "${USER_SERVICE_PID}" "${log}" <<'PY'
+import os
+import socket
+import sys
+import time
+
+host, port_text, pid_text, log = sys.argv[1:]
+port = int(port_text)
+pid = int(pid_text)
+deadline = time.monotonic() + 12.0
+while time.monotonic() < deadline:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        raise SystemExit(f"UserService exited before readiness; log={log}")
+    sock = socket.socket()
+    sock.settimeout(0.2)
+    try:
+        sock.connect((host, port))
+        sock.close()
+        raise SystemExit(0)
+    except OSError:
+        sock.close()
+        time.sleep(0.1)
+raise SystemExit(f"UserService readiness timeout; log={log}")
+PY
+}
+
+start_message_service() {
+  local port
+  port="$(free_port)"
+  MESSAGE_SERVICE_TARGET="127.0.0.1:${port}"
+  local log="${ARTIFACT_DIR}/message-service.log"
+
+  echo "[M13] starting MessageService at ${MESSAGE_SERVICE_TARGET}"
+  TINYIMX_MESSAGE_LISTEN_TARGET="${MESSAGE_SERVICE_TARGET}" \
+    "${DEBUG_DIR}/message_service_demo" "${LOCAL_A}" >"${log}" 2>&1 &
+  MESSAGE_SERVICE_PID=$!
+
+  python3 - "127.0.0.1" "${port}" "${MESSAGE_SERVICE_PID}" "${log}" <<'PY'
+import os
+import socket
+import sys
+import time
+
+host, port_text, pid_text, log = sys.argv[1:]
+port = int(port_text)
+pid = int(pid_text)
+deadline = time.monotonic() + 12.0
+while time.monotonic() < deadline:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        raise SystemExit(f"MessageService exited before readiness; log={log}")
+    sock = socket.socket()
+    sock.settimeout(0.2)
+    try:
+        sock.connect((host, port))
+        sock.close()
+        raise SystemExit(0)
+    except OSError:
+        sock.close()
+        time.sleep(0.1)
+raise SystemExit(f"MessageService readiness timeout; log={log}")
 PY
 }
 
@@ -386,6 +510,8 @@ run_gateway_fault_case() {
   echo "[M13] RUN ${case_name} on 127.0.0.1:${port}"
 
   TINYIMX_FAULT_HISTORY_BUSINESS_DELAY_MS=500 \
+  TINYIMX_USER_RPC_TARGET="${USER_SERVICE_TARGET}" \
+  TINYIMX_MESSAGE_RPC_TARGET="${MESSAGE_SERVICE_TARGET}" \
     "${DEBUG_DIR}/gateway_demo" "${temp_config}" >"${gateway_log}" 2>&1 &
   GATEWAY_PID=$!
 
@@ -420,6 +546,9 @@ run_gateway_fault_case() {
   record "${case_name}" "PASS" "${client_log}"
 }
 
+start_user_service
+start_message_service
+
 run_gateway_fault_case \
   "isolation" \
   "${DEBUG_DIR}/gateway_business_executor_isolation_demo" \
@@ -435,6 +564,9 @@ run_gateway_fault_case \
 
 grep -q 'runtime_overload_observed=1' "${ARTIFACT_DIR}/gateway-overload-client.log"
 grep -q 'heartbeat_not_blocked=1' "${ARTIFACT_DIR}/gateway-overload-client.log"
+
+cleanup_message_service
+cleanup_user_service
 
 # Full reliable-messaging regression is deliberately last, after all temporary
 # Gateway processes are stopped.  It owns its normal 9001/9002 topology.

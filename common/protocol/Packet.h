@@ -61,6 +61,10 @@ enum class MessageType : std::uint16_t {
     kChatDelivery = 2019,
     kChatDeliveryAck = 2020,
 
+    // Authenticated self-profile read path.
+    kUserProfileRequest = 2021,
+    kUserProfileResponse = 2022,
+
     // Gateway-to-Gateway internal protocol.
     kGatewayForwardChatRequest = 3001,
     kGatewayForwardChatResponse = 3002,

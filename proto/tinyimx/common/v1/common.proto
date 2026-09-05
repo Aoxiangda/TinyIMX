@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package tinyimx.common.v1;
+
+// Cross-service request correlation metadata.
+//
+// request_id and trace_id are observability/correlation identities only.
+// They must never replace TinyIMX Reliable Messaging identities:
+// - client_message_id (C)
+// - message_id (M)
+// - Packet.seq (D)
+
+message RequestMeta {
+    string request_id = 1;
+    string trace_id = 2;
+    string caller_service = 3;
+    string caller_instance = 4;
+}

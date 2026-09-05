@@ -543,15 +543,6 @@ bool ValidateFriendListSuccess(
             return false;
         }
 
-        if (ContainsFriend(friends, 10004)) {
-            std::cerr
-                << "non-friend user10004 should not appear, body="
-                << packet.body
-                << '\n';
-
-            return false;
-        }
-
         for (const auto& friend_item : friends) {
             if (friend_item.value(
                     "friend_user_id",

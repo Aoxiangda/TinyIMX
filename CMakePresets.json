@@ -8,7 +8,16 @@
       "binaryDir": "${sourceDir}/build/linux-debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_TOOLCHAIN_FILE": "$env{HOME}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "CMAKE_TOOLCHAIN_FILE": {
+          "value": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+          "type": "FILEPATH"
+        },
+        "VCPKG_MANIFEST_MODE": "ON",
+        "VCPKG_TARGET_TRIPLET": "x64-linux",
+        "VCPKG_INSTALLED_DIR": {
+          "value": "${sourceDir}/vcpkg_installed",
+          "type": "PATH"
+        },
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     },
@@ -19,7 +28,16 @@
       "binaryDir": "${sourceDir}/build/linux-release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_TOOLCHAIN_FILE": "$env{HOME}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "CMAKE_TOOLCHAIN_FILE": {
+          "value": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+          "type": "FILEPATH"
+        },
+        "VCPKG_MANIFEST_MODE": "ON",
+        "VCPKG_TARGET_TRIPLET": "x64-linux",
+        "VCPKG_INSTALLED_DIR": {
+          "value": "${sourceDir}/vcpkg_installed",
+          "type": "PATH"
+        },
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     }

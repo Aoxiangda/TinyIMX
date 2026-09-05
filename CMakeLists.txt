@@ -8,7 +8,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-find_package(nlohmann_json CONFIG REQUIRED)
+# M14-A0: vcpkg manifest dependency boundary
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXDependencies.cmake")
+
+# M14-A1: protobuf/gRPC contract generation
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXRpcProto.cmake")
 
 # M1: Config 模块
 add_library(tinyimx_config
@@ -75,6 +79,56 @@ add_custom_target(run_config_business_runtime_tests
     COMMAND $<TARGET_FILE:config_business_runtime_tests>
     DEPENDS config_business_runtime_tests
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# M14-A1: RPC contract consumer gate.
+add_executable(rpc_contract_tests
+    tests/rpc/rpc_contract_test.cpp
+)
+
+target_compile_features(rpc_contract_tests PRIVATE cxx_std_20)
+
+target_link_libraries(rpc_contract_tests PRIVATE
+    tinyimx_rpc_proto
+)
+
+add_test(
+    NAME rpc_contract_tests
+    COMMAND rpc_contract_tests
+)
+
+# M14-A2: RPC client foundation.
+add_library(tinyimx_rpc_client
+    services/rpc/StaticServiceEndpointProvider.cpp
+    services/rpc/SocialRpcClient.cpp
+    services/rpc/UserRpcClient.cpp
+    services/rpc/MessageRpcClient.cpp
+)
+
+target_include_directories(tinyimx_rpc_client PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_compile_features(tinyimx_rpc_client PUBLIC cxx_std_20)
+
+target_link_libraries(tinyimx_rpc_client PUBLIC
+    tinyimx_rpc_proto
+    gRPC::grpc++
+)
+
+add_executable(social_rpc_client_tests
+    tests/rpc/social_rpc_client_test.cpp
+)
+
+target_compile_features(social_rpc_client_tests PRIVATE cxx_std_20)
+
+target_link_libraries(social_rpc_client_tests PRIVATE
+    tinyimx_rpc_client
+)
+
+add_test(
+    NAME social_rpc_client_tests
+    COMMAND social_rpc_client_tests
 )
 
 
@@ -546,23 +600,6 @@ target_include_directories(business_runtime_benchmark PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-find_program(MYSQL_CONFIG_EXECUTABLE mysql_config REQUIRED)
-
-execute_process(
-    COMMAND ${MYSQL_CONFIG_EXECUTABLE} --cflags
-    OUTPUT_VARIABLE MYSQL_CFLAGS
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-)
-
-execute_process(
-    COMMAND ${MYSQL_CONFIG_EXECUTABLE} --libs
-    OUTPUT_VARIABLE MYSQL_LIBS
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-)
-
-separate_arguments(MYSQL_CFLAGS)
-separate_arguments(MYSQL_LIBS)
-
 add_library(tinyimx_db
     common/db/MySqlConnection.cpp
     common/db/MySqlConnectionPool.cpp
@@ -576,14 +613,10 @@ target_compile_features(tinyimx_db PUBLIC
     cxx_std_20
 )
 
-target_compile_options(tinyimx_db PRIVATE
-    ${MYSQL_CFLAGS}
-)
-
 target_link_libraries(tinyimx_db PUBLIC
     tinyimx_config
     tinyimx_logging
-    ${MYSQL_LIBS}
+    unofficial::libmysql::libmysql
 )
 
 add_executable(mysql_pool_demo
@@ -714,10 +747,6 @@ target_link_libraries(gateway_demo PRIVATE
     tinyimx_cache_service
 )
 
-find_package(PkgConfig REQUIRED)
-
-pkg_check_modules(HIREDIS REQUIRED IMPORTED_TARGET hiredis)
-
 add_library(tinyimx_cache
     common/cache/RedisConnection.cpp
     common/cache/RedisConnectionPool.cpp
@@ -734,7 +763,7 @@ target_compile_features(tinyimx_cache PUBLIC
 target_link_libraries(tinyimx_cache PUBLIC
     tinyimx_config
     tinyimx_logging
-    PkgConfig::HIREDIS
+    hiredis::hiredis
 )
 
 add_executable(redis_pool_demo
@@ -787,8 +816,6 @@ target_link_libraries(unread_count_cache_demo PRIVATE
     tinyimx_cache
     tinyimx_cache_service
 )
-
-find_package(OpenSSL REQUIRED)
 
 target_link_libraries(tinyimx_repository PUBLIC
     tinyimx_db
@@ -849,6 +876,29 @@ add_executable(gateway_login_auth_client_demo
 )
 
 target_link_libraries(gateway_login_auth_client_demo PRIVATE
+    tinyimx_net
+    tinyimx_protocol
+    nlohmann_json::nlohmann_json
+)
+
+
+add_executable(gateway_login_case_client_demo
+    examples/gateway_login_case_client_demo.cpp
+)
+
+target_link_libraries(gateway_login_case_client_demo PRIVATE
+    tinyimx_net
+    tinyimx_protocol
+    nlohmann_json::nlohmann_json
+)
+
+
+# M14-B3: authenticated self-profile Client -> Gateway -> UserService slice.
+add_executable(gateway_user_profile_client_demo
+    examples/gateway_user_profile_client_demo.cpp
+)
+
+target_link_libraries(gateway_user_profile_client_demo PRIVATE
     tinyimx_net
     tinyimx_protocol
     nlohmann_json::nlohmann_json
@@ -1255,4 +1305,19 @@ target_link_libraries(
     gateway_cross_gateway_peer_response_loss_demo
     PRIVATE
         tinyimx_protocol
+)
+
+# M14-A3: first real SocialService vertical slice.
+include(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXSocialService.cmake"
+)
+
+# M14-B: UserService contract/runtime plus Login/Profile vertical slices.
+include(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXUserService.cmake"
+)
+
+# M14-C1: MessageService durable read foundation.
+include(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXMessageService.cmake"
 )

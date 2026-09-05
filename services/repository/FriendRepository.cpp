@@ -367,8 +367,13 @@ FriendRepository::ListFriends(
         return result;
     }
 
-    if (limit > 100) {
-        limit = 100;
+    /*
+     * Public FriendList exposes at most 100 visible rows.
+     * The Social application layer queries limit + 1 to determine has_more,
+     * therefore the repository must allow the internal sentinel row (101).
+     */
+    if (limit > 101) {
+        limit = 101;
     }
 
     if (pool_ == nullptr) {

@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package tinyimx.social.v1;
+
+import "tinyimx/common/v1/common.proto";
+
+// M14-A1 intentionally exposes only the first real Social-domain RPC.
+// Additional RPCs are added only when their service ownership and failure
+// semantics are implemented and verified.
+service SocialService {
+    rpc ListFriends(ListFriendsRequest) returns (ListFriendsResponse);
+}
+
+message ListFriendsRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+
+    // Authenticated actor identity injected by Gateway from SessionManager.
+    // It must never be trusted directly from an Internet client request body.
+    uint64 actor_user_id = 2;
+
+    // Maximum visible result count requested by the caller. In M14-A3 this is
+    // used as a response-size bound; it is not yet a complete pagination API.
+    uint32 limit = 3;
+}
+
+message FriendInfo {
+    uint64 friend_user_id = 1;
+    string username = 2;
+    string nickname = 3;
+    string avatar_url = 4;
+
+    // Preserve current TinyIMX account/relation semantics during the first
+    // zero-behavior-change service-boundary migration. Online presence remains
+    // owned by Gateway + Redis and must not be encoded into user_status here.
+    uint32 user_status = 5;
+    uint32 relation_status = 6;
+
+    // Preserve the current repository/client timestamp representation in M14.
+    // Strongly typed timestamps can be introduced in a later contract evolution.
+    string relation_created_at = 7;
+    string relation_updated_at = 8;
+}
+
+message ListFriendsResponse {
+    repeated FriendInfo friends = 1;
+
+    // In the first vertical slice this only means the result was truncated by
+    // the requested limit. It does not yet promise cursor/offset pagination.
+    bool has_more = 2;
+}

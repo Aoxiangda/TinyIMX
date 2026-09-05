@@ -234,6 +234,43 @@ void RegisterProtocolCodecTests(TestRunner& runner) {
         TINYIMX_EXPECT_EQ(buffer.ReadableBytes(), kPacketHeaderSize);
     });
 
+
+    runner.Add("ProtocolCodec.UserProfileMessageTypesRoundTrip", []() {
+        ProtocolCodec codec;
+        Buffer buffer;
+
+        Packet request;
+        request.type = MessageType::kUserProfileRequest;
+        request.seq = 201;
+        request.body = "{}";
+
+        Packet response;
+        response.type = MessageType::kUserProfileResponse;
+        response.seq = 201;
+        response.body =
+            R"({"success":true,"profile":{"user_id":10001}})";
+
+        std::string error;
+        TINYIMX_EXPECT_TRUE(codec.Encode(request, &buffer, &error));
+        TINYIMX_EXPECT_TRUE(codec.Encode(response, &buffer, &error));
+
+        const DecodeResult result = codec.Decode(&buffer);
+        TINYIMX_EXPECT_EQ(result.status, DecodeStatus::kOk);
+        TINYIMX_EXPECT_EQ(result.packets.size(), static_cast<std::size_t>(2));
+        TINYIMX_EXPECT_EQ(result.packets[0].type, MessageType::kUserProfileRequest);
+        TINYIMX_EXPECT_EQ(result.packets[1].type, MessageType::kUserProfileResponse);
+        TINYIMX_EXPECT_EQ(
+            MessageTypeToString(MessageType::kUserProfileRequest),
+            std::string("user_profile_request")
+        );
+        TINYIMX_EXPECT_EQ(
+            MessageTypeToString(MessageType::kUserProfileResponse),
+            std::string("user_profile_response")
+        );
+        TINYIMX_EXPECT_TRUE(IsKnownMessageType(MessageType::kUserProfileRequest));
+        TINYIMX_EXPECT_TRUE(IsKnownMessageType(MessageType::kUserProfileResponse));
+    });
+
     runner.Add("ProtocolCodec.EncodeRejectsUnknownType", []() {
         ProtocolCodec codec;
         Buffer buffer;

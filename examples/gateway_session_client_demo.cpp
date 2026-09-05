@@ -417,96 +417,317 @@ bool WaitForPackets(
 }
 
 
-bool ValidateReceiverDelivery(
-    const tinyimx::Packet& packet,
+void PrintPacket(const std::string& tag,
+                 const tinyimx::Packet& packet);
+
+
+bool WaitForExpectedReceiverDelivery(
+    int fd,
+    const tinyimx::ProtocolCodec& codec,
+    tinyimx::Buffer* input_buffer,
+    std::vector<tinyimx::Packet>* prefetched_packets,
     const std::string& expected_text,
     std::uint64_t* message_id,
-    std::uint32_t* delivery_seq
+    std::uint32_t* delivery_seq,
+    std::size_t* historical_ack_count
 ) {
     if (
-        packet.type !=
-        tinyimx::MessageType::
-            kChatDelivery
+        input_buffer == nullptr ||
+        prefetched_packets == nullptr ||
+        message_id == nullptr ||
+        delivery_seq == nullptr
     ) {
-        std::cerr
-            << "expected receiver "
-               "chat_delivery"
-            << ", actual="
-            << tinyimx::
-                MessageTypeToString(
-                    packet.type
+        return false;
+    }
+
+    *message_id = 0;
+    *delivery_seq = 0;
+
+    std::size_t drained = 0;
+    bool found_current = false;
+
+    const auto process_packets = [&](const std::vector<tinyimx::Packet>& packets) -> bool {
+        for (const auto& packet : packets) {
+            PrintPacket("[user_b]", packet);
+
+            if (
+                packet.type !=
+                tinyimx::MessageType::kChatDelivery
+            ) {
+                std::cerr
+                    << "unexpected receiver packet while waiting for current chat_delivery"
+                    << ", actual="
+                    << tinyimx::MessageTypeToString(packet.type)
+                    << '\n';
+                return false;
+            }
+
+            if (packet.seq == 0) {
+                std::cerr
+                    << "receiver delivery seq must not be zero\n";
+                return false;
+            }
+
+            tinyimx::ServerChatDelivery delivery;
+            std::string error_message;
+
+            if (
+                !tinyimx::DeserializeServerChatDelivery(
+                    packet.body,
+                    &delivery,
+                    &error_message
                 )
-            << '\n';
+            ) {
+                std::cerr
+                    << "deserialize receiver delivery failed"
+                    << ", error=" << error_message
+                    << '\n';
+                return false;
+            }
 
-        return false;
+            if (
+                delivery.to_user_id != 10002 ||
+                delivery.message_id == 0
+            ) {
+                std::cerr
+                    << "receiver delivery ownership mismatch"
+                    << ", body=" << packet.body
+                    << '\n';
+                return false;
+            }
+
+            if (
+                delivery.from_user_id == 10001 &&
+                delivery.text == expected_text
+            ) {
+                /*
+                 * 当前测试消息使用唯一业务文本，因此可以从任意历史
+                 * Pending replay 中稳定识别出来。
+                 *
+                 * 如果当前消息在 ACK 前发生了新的 delivery attempt，
+                 * 选择最后一次观察到的 D，避免向 tracker 回 ACK 旧 attempt。
+                 */
+                *message_id = delivery.message_id;
+                *delivery_seq = packet.seq;
+                found_current = true;
+                continue;
+            }
+
+            /*
+             * Login 后可能先收到历史 Pending replay。
+             * Final acceptance 必须可重复执行，不能假设数据库为空。
+             * 对历史 delivery 使用它自己的 (M,D) 做 Receiver ACK，
+             * 只推进该历史消息的 monotonic durable state；不会把历史 M
+             * 误认为本次测试消息。
+             */
+            if (
+                !SendPacket(
+                    fd,
+                    codec,
+                    MakeReceiverChatDeliveryAck(
+                        delivery.message_id,
+                        packet.seq
+                    )
+                )
+            ) {
+                std::cerr
+                    << "failed to ACK historical pending replay"
+                    << ", message_id=" << delivery.message_id
+                    << ", delivery_seq=" << packet.seq
+                    << '\n';
+                return false;
+            }
+
+            ++drained;
+            std::cout
+                << "[DRAIN] historical pending replay ACK"
+                << ", message_id=" << delivery.message_id
+                << ", delivery_seq=" << packet.seq
+                << ", from=" << delivery.from_user_id
+                << '\n';
+        }
+
+        return true;
+    };
+
+    if (!prefetched_packets->empty()) {
+        if (!process_packets(*prefetched_packets)) {
+            return false;
+        }
+        prefetched_packets->clear();
+
+        if (found_current) {
+            if (historical_ack_count != nullptr) {
+                *historical_ack_count = drained;
+            }
+            return true;
+        }
     }
 
+    /*
+     * Socket 本身设置了有限 SO_RCVTIMEO，因此该循环不会无限等待。
+     * 这里额外限制处理批次数，防止异常服务端持续灌入无关数据时
+     * acceptance client 无界运行。
+     */
+    constexpr std::size_t kMaxReceiveBatches = 4096;
 
-    if (packet.seq == 0) {
-        std::cerr
-            << "receiver delivery seq "
-               "must not be zero\n";
+    for (std::size_t batch = 0; batch < kMaxReceiveBatches; ++batch) {
+        std::vector<tinyimx::Packet> packets;
 
-        return false;
-    }
-
-
-    tinyimx::ServerChatDelivery
-        delivery;
-
-    std::string error_message;
-
-
-    if (
-        !tinyimx::
-            DeserializeServerChatDelivery(
-                packet.body,
-                &delivery,
-                &error_message
+        if (
+            !WaitForPackets(
+                fd,
+                codec,
+                input_buffer,
+                1,
+                &packets
             )
-    ) {
-        std::cerr
-            << "deserialize receiver "
-               "delivery failed"
-            << ", error="
-            << error_message
-            << '\n';
+        ) {
+            return false;
+        }
 
-        return false;
+        if (!process_packets(packets)) {
+            return false;
+        }
+
+        if (found_current) {
+            if (historical_ack_count != nullptr) {
+                *historical_ack_count = drained;
+            }
+            return true;
+        }
     }
 
-
-    if (
-        delivery.from_user_id != 10001 ||
-        delivery.to_user_id != 10002 ||
-        delivery.text != expected_text ||
-        delivery.message_id == 0
-    ) {
-        std::cerr
-            << "receiver delivery "
-               "business fields mismatch"
-            << ", body="
-            << packet.body
-            << '\n';
-
-        return false;
-    }
-
-
-    if (message_id != nullptr) {
-        *message_id =
-            delivery.message_id;
-    }
-
-
-    if (delivery_seq != nullptr) {
-        *delivery_seq =
-            packet.seq;
-    }
-
-
-    return true;
+    std::cerr
+        << "too many receiver packets without locating current test delivery\n";
+    return false;
 }
+
+
+bool WaitForReadResponse(
+    int fd,
+    const tinyimx::ProtocolCodec& codec,
+    tinyimx::Buffer* input_buffer,
+    std::uint64_t expected_user_id,
+    std::uint64_t expected_peer_user_id,
+    tinyimx::Packet* read_response,
+    std::size_t* historical_ack_count
+) {
+    if (
+        input_buffer == nullptr ||
+        read_response == nullptr
+    ) {
+        return false;
+    }
+
+    std::size_t drained = 0;
+    constexpr std::size_t kMaxReceiveBatches = 4096;
+
+    for (std::size_t batch = 0; batch < kMaxReceiveBatches; ++batch) {
+        std::vector<tinyimx::Packet> packets;
+
+        if (
+            !WaitForPackets(
+                fd,
+                codec,
+                input_buffer,
+                1,
+                &packets
+            )
+        ) {
+            return false;
+        }
+
+        for (const auto& packet : packets) {
+            PrintPacket("[user_b]", packet);
+
+            if (
+                packet.type ==
+                tinyimx::MessageType::kReadResponse
+            ) {
+                if (
+                    !ValidateReadResponseBody(
+                        packet.body,
+                        expected_user_id,
+                        expected_peer_user_id
+                    )
+                ) {
+                    return false;
+                }
+
+                *read_response = packet;
+
+                if (historical_ack_count != nullptr) {
+                    *historical_ack_count += drained;
+                }
+
+                return true;
+            }
+
+            if (
+                packet.type !=
+                tinyimx::MessageType::kChatDelivery
+            ) {
+                std::cerr
+                    << "unexpected receiver packet while waiting for read_response"
+                    << ", actual="
+                    << tinyimx::MessageTypeToString(packet.type)
+                    << '\n';
+                return false;
+            }
+
+            tinyimx::ServerChatDelivery delivery;
+            std::string error_message;
+
+            if (
+                packet.seq == 0 ||
+                !tinyimx::DeserializeServerChatDelivery(
+                    packet.body,
+                    &delivery,
+                    &error_message
+                ) ||
+                delivery.to_user_id != expected_user_id ||
+                delivery.message_id == 0
+            ) {
+                std::cerr
+                    << "invalid historical delivery while waiting for read_response"
+                    << ", body=" << packet.body
+                    << ", error=" << error_message
+                    << '\n';
+                return false;
+            }
+
+            if (
+                !SendPacket(
+                    fd,
+                    codec,
+                    MakeReceiverChatDeliveryAck(
+                        delivery.message_id,
+                        packet.seq
+                    )
+                )
+            ) {
+                std::cerr
+                    << "failed to ACK trailing historical replay"
+                    << ", message_id=" << delivery.message_id
+                    << '\n';
+                return false;
+            }
+
+            ++drained;
+            std::cout
+                << "[DRAIN] trailing historical pending replay ACK"
+                << ", message_id=" << delivery.message_id
+                << ", delivery_seq=" << packet.seq
+                << '\n';
+        }
+    }
+
+    std::cerr
+        << "too many receiver packets without read_response\n";
+    return false;
+}
+
 
 bool ValidateSenderChatAck(
     const tinyimx::Packet& packet,
@@ -695,7 +916,8 @@ int main(int argc, char* argv[]) {
 
     const std::string
         message_text =
-            "hello from user 10001";
+            "m14-c3-session-" +
+            client_message_id;
 
 
     std::cout
@@ -719,17 +941,51 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::vector<tinyimx::Packet> user_b_chat_packets;
-    if (!WaitForPackets(
+    /*
+     * LoginResponse 与历史 Pending replay 可能被一次 recv/decode
+     * 同时取出。保留 LoginResponse 之后已经预取到的 Packet，
+     * 不能静默丢弃，否则会造成 acceptance client 自己制造丢包。
+     */
+    std::vector<tinyimx::Packet>
+        user_b_prefetched_packets;
+
+    if (user_b_packets.size() > 1) {
+        user_b_prefetched_packets.assign(
+            user_b_packets.begin() + 1,
+            user_b_packets.end()
+        );
+    }
+
+    std::uint64_t
+        receiver_message_id = 0;
+
+    std::uint32_t
+        receiver_delivery_seq = 0;
+
+    std::size_t
+        historical_ack_count = 0;
+
+    if (
+        !WaitForExpectedReceiverDelivery(
             user_b_fd,
             codec,
             &user_b_input_buffer,
-            1,
-            &user_b_chat_packets)) {
+            &user_b_prefetched_packets,
+            message_text,
+            &receiver_message_id,
+            &receiver_delivery_seq,
+            &historical_ack_count
+        )
+    ) {
         return 1;
     }
 
-    PrintPacket("[user_b]", user_b_chat_packets[0]);
+    if (historical_ack_count > 0) {
+        std::cout
+            << "[PASS] drained historical Pending replay before validating current message"
+            << ", ack_count=" << historical_ack_count
+            << '\n';
+    }
 
     std::vector<tinyimx::Packet> user_a_ack_packets;
     if (!WaitForPackets(
@@ -747,28 +1003,7 @@ int main(int argc, char* argv[]) {
     bool ok = true;
 
     std::uint64_t
-        receiver_message_id = 0;
-
-    std::uint32_t
-        receiver_delivery_seq = 0;
-
-    std::uint64_t
         sender_ack_message_id = 0;
-
-
-    /*
-     * 先验证Receiver真正观察到的M / D。
-     */
-    if (
-        !ValidateReceiverDelivery(
-            user_b_chat_packets[0],
-            message_text,
-            &receiver_message_id,
-            &receiver_delivery_seq
-        )
-    ) {
-        ok = false;
-    }
 
 
     /*
@@ -883,32 +1118,23 @@ int main(int argc, char* argv[]) {
     }
 
 
-    std::vector<tinyimx::Packet>
-        user_b_read_packets;
+    tinyimx::Packet
+        user_b_read_response;
 
 
     if (
         ok &&
-        !WaitForPackets(
+        !WaitForReadResponse(
             user_b_fd,
             codec,
             &user_b_input_buffer,
-            1,
-            &user_b_read_packets
+            10002,
+            10001,
+            &user_b_read_response,
+            &historical_ack_count
         )
     ) {
         ok = false;
-    }
-
-
-    if (
-        ok &&
-        !user_b_read_packets.empty()
-    ) {
-        PrintPacket(
-            "[user_b]",
-            user_b_read_packets[0]
-        );
     }
 
 
@@ -921,16 +1147,15 @@ int main(int argc, char* argv[]) {
              tinyimx::MessageType::kLoginResponse;
 
     ok = ok &&
-        !user_b_read_packets.empty() &&
-        user_b_read_packets[0].type ==
-            tinyimx::MessageType::kReadResponse;
+         user_b_read_response.type ==
+             tinyimx::MessageType::kReadResponse;
 
-    ok = ok &&
-        !user_b_read_packets.empty() &&
-        ValidateReadResponseBody(
-            user_b_read_packets[0].body,
-            10002,
-            10001);
+    if (historical_ack_count > 0) {
+        std::cout
+            << "historical_replay_ack_count="
+            << historical_ack_count
+            << '\n';
+    }
 
     ::close(user_a_fd);
     ::close(user_b_fd);
