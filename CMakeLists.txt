@@ -1307,6 +1307,11 @@ target_link_libraries(
         tinyimx_protocol
 )
 
+# M15-A: ZooKeeper service registration foundation.
+include(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXZooKeeperRegistry.cmake"
+)
+
 # M14-A3: first real SocialService vertical slice.
 include(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXSocialService.cmake"

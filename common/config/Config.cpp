@@ -155,6 +155,14 @@ const GatewayRegistryConfig& Config::GatewayRegistry() const {
     return gateway_registry_;
 }
 
+const ZooKeeperConfig& Config::ZooKeeper() const {
+    return zookeeper_;
+}
+
+const ServiceDiscoveryConfig& Config::ServiceDiscovery() const {
+    return service_discovery_;
+}
+
 const McpConfig& Config::Mcp() const {
     return mcp_;
 }
@@ -205,6 +213,8 @@ void Config::Reset() {
     mysql_ = MySqlConfig{};
     redis_ = RedisConfig{};
     gateway_registry_ = GatewayRegistryConfig{};
+    zookeeper_ = ZooKeeperConfig{};
+    service_discovery_ = ServiceDiscoveryConfig{};
     mcp_ = McpConfig{};
 }
 
@@ -408,6 +418,65 @@ bool Config::ApplyJsonConfig(const std::string& json_content) {
                 "discovery_refresh_interval_seconds",
                 &gateway_registry_.
                     discovery_refresh_interval_seconds
+            );
+        }
+
+        if (root.contains("zookeeper")) {
+            const auto& section = root.at("zookeeper");
+            ReadIfExists(section, "enable", &zookeeper_.enable);
+            ReadIfExists(
+                section,
+                "connect_string",
+                &zookeeper_.connect_string
+            );
+            ReadIfExists(
+                section,
+                "session_timeout_ms",
+                &zookeeper_.session_timeout_ms
+            );
+            ReadIfExists(
+                section,
+                "connect_timeout_ms",
+                &zookeeper_.connect_timeout_ms
+            );
+            ReadIfExists(
+                section,
+                "service_root",
+                &zookeeper_.service_root
+            );
+            ReadIfExists(
+                section,
+                "advertise_host",
+                &zookeeper_.advertise_host
+            );
+            ReadIfExists(
+                section,
+                "service_version",
+                &zookeeper_.service_version
+            );
+        }
+
+        if (root.contains("service_discovery")) {
+            const auto& section = root.at("service_discovery");
+            ReadIfExists(
+                section,
+                "provider",
+                &service_discovery_.provider
+            );
+            ReadIfExists(
+                section,
+                "initial_sync_timeout_ms",
+                &service_discovery_.initial_sync_timeout_ms
+            );
+            ReadIfExists(
+                section,
+                "snapshot_stale_after_ms",
+                &service_discovery_.snapshot_stale_after_ms
+            );
+            ReadIfExists(
+                section,
+                "retain_last_known_good",
+                &service_discovery_.retain_last_known_good
             );
         }
 
@@ -744,6 +813,87 @@ bool Config::Validate() {
             );
         }
     }
+    if (zookeeper_.enable) {
+        if (zookeeper_.connect_string.empty()) {
+            return SetError(
+                "zookeeper.connect_string cannot be empty "
+                "when zookeeper.enable=true"
+            );
+        }
+
+        if (zookeeper_.session_timeout_ms <= 0) {
+            return SetError(
+                "zookeeper.session_timeout_ms must be greater than 0"
+            );
+        }
+
+        if (zookeeper_.connect_timeout_ms <= 0) {
+            return SetError(
+                "zookeeper.connect_timeout_ms must be greater than 0"
+            );
+        }
+
+        if (
+            zookeeper_.service_root.empty() ||
+            zookeeper_.service_root.front() != '/' ||
+            zookeeper_.service_root == "/" ||
+            zookeeper_.service_root.back() == '/' ||
+            zookeeper_.service_root.find("//") != std::string::npos
+        ) {
+            return SetError(
+                "zookeeper.service_root must be an absolute, non-root "
+                "path without a trailing or duplicate slash"
+            );
+        }
+
+        if (zookeeper_.advertise_host.empty()) {
+            return SetError(
+                "zookeeper.advertise_host cannot be empty "
+                "when zookeeper.enable=true"
+            );
+        }
+
+        if (zookeeper_.advertise_host == "0.0.0.0" ||
+            zookeeper_.advertise_host == "::") {
+            return SetError(
+                "zookeeper.advertise_host cannot be a wildcard "
+                "listen address"
+            );
+        }
+
+        if (zookeeper_.service_version.empty()) {
+            return SetError(
+                "zookeeper.service_version cannot be empty "
+                "when zookeeper.enable=true"
+            );
+        }
+    }
+
+    if (service_discovery_.provider != "static" &&
+        service_discovery_.provider != "zookeeper") {
+        return SetError(
+            "service_discovery.provider must be one of: static, zookeeper"
+        );
+    }
+
+    if (service_discovery_.initial_sync_timeout_ms <= 0) {
+        return SetError(
+            "service_discovery.initial_sync_timeout_ms must be greater than 0"
+        );
+    }
+
+    if (service_discovery_.snapshot_stale_after_ms <= 0) {
+        return SetError(
+            "service_discovery.snapshot_stale_after_ms must be greater than 0"
+        );
+    }
+
+    if (service_discovery_.provider == "zookeeper" && !zookeeper_.enable) {
+        return SetError(
+            "zookeeper.enable must be true when service_discovery.provider=zookeeper"
+        );
+    }
+
     if (mcp_.enable) {
         if (mcp_.endpoint.empty()) {
             return SetError("mcp.endpoint cannot be empty when mcp.enable=true");

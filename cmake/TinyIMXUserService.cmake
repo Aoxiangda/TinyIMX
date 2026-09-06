@@ -4,6 +4,7 @@ foreach(required_target IN ITEMS
     tinyimx_rpc_proto
     tinyimx_rpc_client
     tinyimx_repository
+    tinyimx_service_registry
 )
   if(NOT TARGET ${required_target})
     message(FATAL_ERROR
@@ -56,6 +57,7 @@ target_link_libraries(user_service_demo PRIVATE
   tinyimx_db
   tinyimx_repository
   tinyimx_user_grpc
+  tinyimx_service_registry
 )
 
 add_executable(user_application_service_tests

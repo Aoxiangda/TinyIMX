@@ -75,6 +75,21 @@
     "heartbeat_interval_seconds": 5,
     "discovery_refresh_interval_seconds": 3
   },
+  "zookeeper": {
+    "enable": false,
+    "connect_string": "127.0.0.1:2181",
+    "session_timeout_ms": 10000,
+    "connect_timeout_ms": 5000,
+    "service_root": "/tinyimx/services",
+    "advertise_host": "127.0.0.1",
+    "service_version": "v1"
+  },
+  "service_discovery": {
+    "provider": "static",
+    "initial_sync_timeout_ms": 5000,
+    "snapshot_stale_after_ms": 30000,
+    "retain_last_known_good": true
+  },
   "mcp": {
     "enable": false,
     "endpoint": "http://127.0.0.1:8080",

@@ -21,12 +21,16 @@
 #include "services/rpc/UserRpcClient.h"
 #include "services/rpc/MessageRpcClient.h"
 #include "services/rpc/StaticServiceEndpointProvider.h"
+#include "services/rpc/ZooKeeperServiceEndpointProvider.h"
+#include "services/registry/zookeeper/ZooKeeperClient.h"
+#include "services/registry/zookeeper/ZooKeeperServiceDiscovery.h"
 
 #include <csignal>
 #include <iostream>
 #include <string>
 #include <memory>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <thread>
 
@@ -212,8 +216,14 @@ int main(int argc, char* argv[]) {
         std::unique_ptr<tinyimx::EventLoopThread> gateway_peer_loop_thread;
         std::shared_ptr<tinyimx::GatewayPeerTransportManager> gateway_peer_transport_manager;
         std::unique_ptr<tinyimx::BusinessExecutor> business_executor;
-        std::shared_ptr<tinyimx::rpc::StaticServiceEndpointProvider>
+        std::shared_ptr<const tinyimx::rpc::ServiceEndpointProvider>
             service_endpoint_provider;
+        std::shared_ptr<
+            tinyimx::registry::zookeeper::ZooKeeperClient
+        > rpc_zookeeper_client;
+        std::shared_ptr<
+            tinyimx::registry::zookeeper::ZooKeeperServiceDiscovery
+        > rpc_service_discovery;
         std::unique_ptr<tinyimx::rpc::SocialRpcClient>
             social_rpc_client;
         std::unique_ptr<tinyimx::rpc::UserRpcClient>
@@ -372,90 +382,177 @@ int main(int argc, char* argv[]) {
                 shutdown_timeout.count()
         );
 
-        const char* social_rpc_target_env =
-            std::getenv("TINYIMX_SOCIAL_RPC_TARGET");
-        const char* user_rpc_target_env =
-            std::getenv("TINYIMX_USER_RPC_TARGET");
-        const char* message_rpc_target_env =
-            std::getenv("TINYIMX_MESSAGE_RPC_TARGET");
+        const auto& discovery_config = config.ServiceDiscovery();
 
-        const std::string social_rpc_target =
-            social_rpc_target_env != nullptr
-                ? std::string(social_rpc_target_env)
-                : std::string{};
-        const std::string user_rpc_target =
-            user_rpc_target_env != nullptr
-                ? std::string(user_rpc_target_env)
-                : std::string{};
-        const std::string message_rpc_target =
-            message_rpc_target_env != nullptr
-                ? std::string(message_rpc_target_env)
-                : std::string{};
+        if (discovery_config.provider == "zookeeper") {
+            rpc_zookeeper_client = std::make_shared<
+                tinyimx::registry::zookeeper::ZooKeeperClient
+            >();
 
-        if (!social_rpc_target.empty() ||
-            !user_rpc_target.empty() ||
-            !message_rpc_target.empty()) {
-            service_endpoint_provider =
-                std::make_shared<
-                    tinyimx::rpc::StaticServiceEndpointProvider
-                >(
-                    social_rpc_target,
-                    user_rpc_target,
-                    message_rpc_target
+            if (!rpc_zookeeper_client->Start(config.ZooKeeper())) {
+                LOG_ERROR(
+                    "gateway ZooKeeper discovery client start failed"
+                    << ", error=" << rpc_zookeeper_client->LastError()
                 );
-        }
+                business_executor->ShutdownGraceful();
+                if (mysql_pool) {
+                    mysql_pool->Shutdown();
+                }
+                if (redis_pool) {
+                    redis_pool->Shutdown();
+                }
+                tinyimx::Logger::Instance().Shutdown();
+                return 1;
+            }
 
-        if (!social_rpc_target.empty()) {
+            rpc_service_discovery = std::make_shared<
+                tinyimx::registry::zookeeper::ZooKeeperServiceDiscovery
+            >(
+                rpc_zookeeper_client,
+                config.ZooKeeper().service_root,
+                discovery_config
+            );
+
+            if (!rpc_service_discovery->Start(
+                    std::chrono::milliseconds(
+                        discovery_config.initial_sync_timeout_ms
+                    )
+                )) {
+                LOG_ERROR(
+                    "gateway ZooKeeper service discovery initial sync failed"
+                    << ", error=" << rpc_service_discovery->LastError()
+                );
+                rpc_service_discovery->Stop();
+                rpc_zookeeper_client->Stop();
+                business_executor->ShutdownGraceful();
+                if (mysql_pool) {
+                    mysql_pool->Shutdown();
+                }
+                if (redis_pool) {
+                    redis_pool->Shutdown();
+                }
+                tinyimx::Logger::Instance().Shutdown();
+                return 1;
+            }
+
+            service_endpoint_provider = std::make_shared<
+                tinyimx::rpc::ZooKeeperServiceEndpointProvider
+            >(
+                rpc_service_discovery,
+                discovery_config
+            );
+
+            // Dynamic clients stay attached even when a service currently has
+            // zero instances. Future membership watches can make them usable
+            // without restarting the Gateway.
             social_rpc_client =
                 std::make_unique<tinyimx::rpc::SocialRpcClient>(
                     service_endpoint_provider
                 );
-
-            LOG_INFO(
-                "gateway SocialService RPC enabled"
-                << ", target=" << social_rpc_target
-            );
-        } else {
-            LOG_WARN(
-                "gateway SocialService RPC disabled: "
-                "TINYIMX_SOCIAL_RPC_TARGET is not set"
-            );
-        }
-
-        if (!user_rpc_target.empty()) {
             user_rpc_client =
                 std::make_unique<tinyimx::rpc::UserRpcClient>(
                     service_endpoint_provider
                 );
-
-            LOG_INFO(
-                "gateway UserService RPC enabled"
-                << ", target=" << user_rpc_target
-            );
-        } else {
-            LOG_WARN(
-                "gateway UserService RPC disabled: "
-                "TINYIMX_USER_RPC_TARGET is not set; "
-                "Login will fail closed with auth_unavailable"
-            );
-        }
-
-        if (!message_rpc_target.empty()) {
             message_rpc_client =
                 std::make_unique<tinyimx::rpc::MessageRpcClient>(
                     service_endpoint_provider
                 );
 
             LOG_INFO(
-                "gateway MessageService RPC enabled"
-                << ", target=" << message_rpc_target
+                "gateway dynamic RPC discovery enabled"
+                << ", provider=zookeeper"
+                << ", root=" << config.ZooKeeper().service_root
+                << ", stale_after_ms="
+                << discovery_config.snapshot_stale_after_ms
+                << ", retain_lkg="
+                << discovery_config.retain_last_known_good
             );
         } else {
-            LOG_WARN(
-                "gateway MessageService RPC disabled: "
-                "TINYIMX_MESSAGE_RPC_TARGET is not set; "
-                "Chat persistence/History/ConversationList will fail closed"
-            );
+            const char* social_rpc_target_env =
+                std::getenv("TINYIMX_SOCIAL_RPC_TARGET");
+            const char* user_rpc_target_env =
+                std::getenv("TINYIMX_USER_RPC_TARGET");
+            const char* message_rpc_target_env =
+                std::getenv("TINYIMX_MESSAGE_RPC_TARGET");
+
+            const std::string social_rpc_target =
+                social_rpc_target_env != nullptr
+                    ? std::string(social_rpc_target_env)
+                    : std::string{};
+            const std::string user_rpc_target =
+                user_rpc_target_env != nullptr
+                    ? std::string(user_rpc_target_env)
+                    : std::string{};
+            const std::string message_rpc_target =
+                message_rpc_target_env != nullptr
+                    ? std::string(message_rpc_target_env)
+                    : std::string{};
+
+            if (!social_rpc_target.empty() ||
+                !user_rpc_target.empty() ||
+                !message_rpc_target.empty()) {
+                service_endpoint_provider =
+                    std::make_shared<
+                        tinyimx::rpc::StaticServiceEndpointProvider
+                    >(
+                        social_rpc_target,
+                        user_rpc_target,
+                        message_rpc_target
+                    );
+            }
+
+            if (!social_rpc_target.empty()) {
+                social_rpc_client =
+                    std::make_unique<tinyimx::rpc::SocialRpcClient>(
+                        service_endpoint_provider
+                    );
+                LOG_INFO(
+                    "gateway SocialService RPC enabled"
+                    << ", provider=static"
+                    << ", target=" << social_rpc_target
+                );
+            } else {
+                LOG_WARN(
+                    "gateway SocialService RPC disabled: "
+                    "TINYIMX_SOCIAL_RPC_TARGET is not set"
+                );
+            }
+
+            if (!user_rpc_target.empty()) {
+                user_rpc_client =
+                    std::make_unique<tinyimx::rpc::UserRpcClient>(
+                        service_endpoint_provider
+                    );
+                LOG_INFO(
+                    "gateway UserService RPC enabled"
+                    << ", provider=static"
+                    << ", target=" << user_rpc_target
+                );
+            } else {
+                LOG_WARN(
+                    "gateway UserService RPC disabled: "
+                    "TINYIMX_USER_RPC_TARGET is not set; "
+                    "Login will fail closed with auth_unavailable"
+                );
+            }
+
+            if (!message_rpc_target.empty()) {
+                message_rpc_client =
+                    std::make_unique<tinyimx::rpc::MessageRpcClient>(
+                        service_endpoint_provider
+                    );
+                LOG_INFO(
+                    "gateway MessageService RPC enabled"
+                    << ", provider=static"
+                    << ", target=" << message_rpc_target
+                );
+            } else {
+                LOG_WARN(
+                    "gateway MessageService RPC disabled: "
+                    "TINYIMX_MESSAGE_RPC_TARGET is not set; "
+                    "Chat persistence/History/ConversationList will fail closed"
+                );
+            }
         }
 
         tinyimx::GatewayServer gateway(
@@ -1085,6 +1182,14 @@ int main(int argc, char* argv[]) {
             );
         }
 
+
+        if (rpc_service_discovery) {
+            rpc_service_discovery->Stop();
+        }
+
+        if (rpc_zookeeper_client) {
+            rpc_zookeeper_client->Stop();
+        }
 
         gateway.Stop();
 

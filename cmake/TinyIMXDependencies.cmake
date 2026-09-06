@@ -42,3 +42,9 @@ find_package(
     CONFIG
     REQUIRED
 )
+# M15-A: ZooKeeper C multithreaded/synchronous client.
+find_package(
+    unofficial-zookeeper
+    CONFIG
+    REQUIRED
+)

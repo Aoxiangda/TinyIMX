@@ -39,6 +39,9 @@ public:
     const GatewayRegistryConfig&
     GatewayRegistry() const;
 
+    const ZooKeeperConfig& ZooKeeper() const;
+    const ServiceDiscoveryConfig& ServiceDiscovery() const;
+
     const McpConfig& Mcp() const;
 
     // 兼容当前已有代码的旧接口，
@@ -94,6 +97,8 @@ private:
     RedisConfig redis_;
 
     GatewayRegistryConfig gateway_registry_;
+    ZooKeeperConfig zookeeper_;
+    ServiceDiscoveryConfig service_discovery_;
 
     McpConfig mcp_;
 };

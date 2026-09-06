@@ -113,6 +113,23 @@ struct GatewayRegistryConfig {
     int discovery_refresh_interval_seconds{3};
 };
 
+struct ZooKeeperConfig {
+    bool enable{false};
+    std::string connect_string{"127.0.0.1:2181"};
+    int session_timeout_ms{10000};
+    int connect_timeout_ms{5000};
+    std::string service_root{"/tinyimx/services"};
+    std::string advertise_host{"127.0.0.1"};
+    std::string service_version{"v1"};
+};
+
+struct ServiceDiscoveryConfig {
+    std::string provider{"static"};
+    int initial_sync_timeout_ms{5000};
+    int snapshot_stale_after_ms{30000};
+    bool retain_last_known_good{true};
+};
+
 struct McpConfig {
     bool enable{false};
     std::string endpoint{"http://127.0.0.1:8080"};

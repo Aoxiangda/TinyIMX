@@ -2,6 +2,7 @@
 
 #include <grpcpp/grpcpp.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -949,14 +950,31 @@ MessageRpcClient::MarkDialogRead(
     return MessageMutationRpcCallResult::Success(std::move(output));
 }
 
+std::size_t MessageRpcClient::CachedTargetCountForTest() const {
+    std::lock_guard<std::mutex> lock(cache_mutex_);
+    return stub_cache_.size();
+}
+
+std::uint64_t MessageRpcClient::StubCreationCountForTest() const {
+    std::lock_guard<std::mutex> lock(cache_mutex_);
+    return stub_creation_count_;
+}
+
 std::shared_ptr<MessageRpcClient::MessageStubInterface>
 MessageRpcClient::GetOrCreateStub(
     const ServiceEndpoint& endpoint
 ) const {
-    std::lock_guard<std::mutex> lock(cache_mutex_);
+    if (endpoint.target.empty()) {
+        return nullptr;
+    }
 
-    if (cached_stub_ && cached_target_ == endpoint.target) {
-        return cached_stub_;
+    std::lock_guard<std::mutex> lock(cache_mutex_);
+    const std::uint64_t use_sequence = ++cache_use_sequence_;
+
+    const auto existing = stub_cache_.find(endpoint.target);
+    if (existing != stub_cache_.end()) {
+        existing->second.last_used = use_sequence;
+        return existing->second.stub;
     }
 
     auto channel = grpc::CreateChannel(
@@ -967,8 +985,7 @@ MessageRpcClient::GetOrCreateStub(
         return nullptr;
     }
 
-    auto unique_stub =
-        tinyimx::message::v1::MessageService::NewStub(channel);
+    auto unique_stub = tinyimx::message::v1::MessageService::NewStub(channel);
     if (!unique_stub) {
         return nullptr;
     }
@@ -977,9 +994,25 @@ MessageRpcClient::GetOrCreateStub(
         std::move(unique_stub)
     );
 
-    cached_target_ = endpoint.target;
-    cached_channel_ = std::move(channel);
-    cached_stub_ = new_stub;
+    if (stub_cache_.size() >= kMaxCachedTargets) {
+        const auto victim = std::min_element(
+            stub_cache_.begin(),
+            stub_cache_.end(),
+            [](const auto& lhs, const auto& rhs) {
+                return lhs.second.last_used < rhs.second.last_used;
+            }
+        );
+        if (victim != stub_cache_.end()) {
+            stub_cache_.erase(victim);
+        }
+    }
+
+    CachedStubEntry entry;
+    entry.channel = std::move(channel);
+    entry.stub = new_stub;
+    entry.last_used = use_sequence;
+    stub_cache_.emplace(endpoint.target, std::move(entry));
+    ++stub_creation_count_;
     return new_stub;
 }
 

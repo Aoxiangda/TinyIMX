@@ -4,6 +4,7 @@ foreach(required_target IN ITEMS
     tinyimx_rpc_proto
     tinyimx_rpc_client
     tinyimx_repository
+    tinyimx_service_registry
     tinyimx_gateway
     gateway_demo
 )
@@ -58,6 +59,7 @@ target_link_libraries(social_service_demo PRIVATE
   tinyimx_db
   tinyimx_repository
   tinyimx_social_grpc
+  tinyimx_service_registry
 )
 
 add_executable(friend_application_service_tests
