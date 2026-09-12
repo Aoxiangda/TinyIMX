@@ -105,6 +105,44 @@ struct RedisConfig {
     int pool_size{4};
 };
 
+struct RocketMQConfig {
+    bool enable{false};
+    std::string endpoint{"127.0.0.1:8081"};
+    std::string message_topic{"tinyimx-message-events"};
+    int request_timeout_ms{3000};
+    bool tls{false};
+    std::string access_key;
+    std::string access_secret;
+};
+
+struct OutboxRelayConfig {
+    bool enable{false};
+    std::string instance_id{"outbox-relay-1"};
+    std::size_t batch_size{32};
+    std::size_t worker_threads{4};
+    std::size_t max_inflight{128};
+    int poll_interval_ms{100};
+    int lease_ms{30000};
+    int lease_renew_interval_ms{5000};
+    int retry_base_ms{200};
+    int retry_max_ms{30000};
+    int published_retention_hours{168};
+    int cleanup_interval_ms{60000};
+    std::size_t cleanup_batch_size{1000};
+    int shutdown_timeout_ms{10000};
+};
+
+struct UnreadProjectionConfig {
+    bool enable{false};
+    std::string owner{"gateway"};
+    bool shadow_mode{false};
+    std::string consumer_group{"tinyimx-unread-projector-v1"};
+    std::size_t batch_size{16};
+    int invisible_duration_ms{30000};
+    int await_duration_ms{5000};
+    int receive_error_backoff_ms{500};
+};
+
 struct GatewayRegistryConfig {
     bool enable{false};
     std::string advertise_host;

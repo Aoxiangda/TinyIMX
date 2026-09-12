@@ -7,6 +7,8 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+#include <unordered_set>
+#include <limits>
 
 namespace {
 
@@ -252,6 +254,70 @@ if total_after_clear < 0 then
 end
 
 return total_after_clear
+)lua";
+
+
+/*
+ * M16-B exact projection write.
+ * KEYS[1] private counter, KEYS[2] total counter.
+ * ARGV[1] private durable count, ARGV[2] total durable count.
+ */
+constexpr const char* kSetUnreadSnapshotScript = R"lua(
+local function valid(v)
+    if not v then return false end
+    if v == '0' then return true end
+    return string.match(v, '^[1-9][0-9]*$') ~= nil
+end
+
+if #KEYS ~= 2 or #ARGV ~= 2 then return -1 end
+if not valid(ARGV[1]) or not valid(ARGV[2]) then return -2 end
+
+if ARGV[1] == '0' then
+    redis.call('DEL', KEYS[1])
+else
+    redis.call('SET', KEYS[1], ARGV[1])
+end
+
+if ARGV[2] == '0' then
+    redis.call('DEL', KEYS[2])
+else
+    redis.call('SET', KEYS[2], ARGV[2])
+end
+
+return 1
+)lua";
+
+/*
+ * M16-B cutover/recovery write. KEYS[1] is total, remaining keys are
+ * every historical peer key returned by durable MySQL truth. Zero-count
+ * peer keys are deleted, so the operation also removes stale legacy values.
+ */
+constexpr const char* kReplaceUserUnreadProjectionScript = R"lua(
+local function valid(v)
+    if not v then return false end
+    if v == '0' then return true end
+    return string.match(v, '^[1-9][0-9]*$') ~= nil
+end
+
+if #KEYS ~= #ARGV or #KEYS < 1 then return -1 end
+for i = 1, #ARGV do
+    if not valid(ARGV[i]) then return -2 end
+end
+
+if ARGV[1] == '0' then
+    redis.call('DEL', KEYS[1])
+else
+    redis.call('SET', KEYS[1], ARGV[1])
+end
+
+for i = 2, #KEYS do
+    if ARGV[i] == '0' then
+        redis.call('DEL', KEYS[i])
+    else
+        redis.call('SET', KEYS[i], ARGV[i])
+    end
+end
+return 1
 )lua";
 
 }  // namespace
@@ -895,6 +961,137 @@ UnreadCountCache::ClearPrivateUnread(
     }
 }
 
+
+SetUnreadSnapshotResult UnreadCountCache::SetUnreadSnapshot(
+    std::uint64_t receiver_user_id,
+    std::uint64_t sender_user_id,
+    std::int64_t private_unread,
+    std::int64_t total_unread
+) {
+    SetUnreadSnapshotResult result;
+    if (receiver_user_id == 0 || sender_user_id == 0 ||
+        receiver_user_id == sender_user_id ||
+        private_unread < 0 || total_unread < 0 ||
+        private_unread > total_unread) {
+        result.status = SetUnreadSnapshotStatus::kInvalidArgument;
+        result.error_message = "unread snapshot rejected invalid input";
+        return result;
+    }
+    if (pool_ == nullptr) {
+        result.status = SetUnreadSnapshotStatus::kRedisError;
+        result.error_message = "unread snapshot failed: redis pool is null";
+        return result;
+    }
+
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        result.status = SetUnreadSnapshotStatus::kRedisError;
+        result.error_message = "unread snapshot failed: acquire redis connection";
+        return result;
+    }
+
+    const auto script_result = connection->EvalInteger(
+        kSetUnreadSnapshotScript,
+        std::vector<std::string>{
+            BuildPrivateKey(receiver_user_id, sender_user_id),
+            BuildTotalKey(receiver_user_id),
+        },
+        std::vector<std::string>{
+            std::to_string(private_unread),
+            std::to_string(total_unread),
+        }
+    );
+    if (!script_result.has_value() || script_result.value() != 1) {
+        result.status = SetUnreadSnapshotStatus::kRedisError;
+        result.error_message = connection->LastError();
+        if (result.error_message.empty()) {
+            result.error_message = "unread snapshot Redis EVAL failed";
+        }
+        return result;
+    }
+
+    result.status = SetUnreadSnapshotStatus::kApplied;
+    return result;
+}
+
+ReplaceUnreadProjectionResult UnreadCountCache::ReplaceUserUnreadProjection(
+    std::uint64_t receiver_user_id,
+    const std::vector<std::pair<std::uint64_t, std::int64_t>>& peer_counts,
+    std::int64_t total_unread
+) {
+    constexpr std::size_t kMaxPeersPerAtomicRebuild = 2048;
+    ReplaceUnreadProjectionResult result;
+
+    if (receiver_user_id == 0 || total_unread < 0) {
+        result.status = ReplaceUnreadProjectionStatus::kInvalidArgument;
+        result.error_message = "unread projection rebuild rejected invalid receiver/count";
+        return result;
+    }
+    if (peer_counts.size() > kMaxPeersPerAtomicRebuild) {
+        result.status = ReplaceUnreadProjectionStatus::kTooManyPeers;
+        result.error_message = "unread projection rebuild exceeds 2048-peer atomic bound";
+        return result;
+    }
+
+    std::unordered_set<std::uint64_t> seen;
+    std::int64_t sum = 0;
+    for (const auto& [peer_user_id, count] : peer_counts) {
+        if (peer_user_id == 0 || peer_user_id == receiver_user_id ||
+            count < 0 || !seen.insert(peer_user_id).second ||
+            count > std::numeric_limits<std::int64_t>::max() - sum) {
+            result.status = ReplaceUnreadProjectionStatus::kInvalidArgument;
+            result.error_message = "unread projection rebuild contains invalid peer/count";
+            return result;
+        }
+        sum += count;
+    }
+    if (sum != total_unread) {
+        result.status = ReplaceUnreadProjectionStatus::kInvalidArgument;
+        result.error_message = "unread projection rebuild total does not equal peer sum";
+        return result;
+    }
+    if (pool_ == nullptr) {
+        result.status = ReplaceUnreadProjectionStatus::kRedisError;
+        result.error_message = "unread projection rebuild failed: redis pool is null";
+        return result;
+    }
+
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        result.status = ReplaceUnreadProjectionStatus::kRedisError;
+        result.error_message = "unread projection rebuild failed: acquire redis connection";
+        return result;
+    }
+
+    std::vector<std::string> keys;
+    std::vector<std::string> args;
+    keys.reserve(peer_counts.size() + 1);
+    args.reserve(peer_counts.size() + 1);
+    keys.push_back(BuildTotalKey(receiver_user_id));
+    args.push_back(std::to_string(total_unread));
+    for (const auto& [peer_user_id, count] : peer_counts) {
+        keys.push_back(BuildPrivateKey(receiver_user_id, peer_user_id));
+        args.push_back(std::to_string(count));
+    }
+
+    const auto script_result = connection->EvalInteger(
+        kReplaceUserUnreadProjectionScript,
+        keys,
+        args
+    );
+    if (!script_result.has_value() || script_result.value() != 1) {
+        result.status = ReplaceUnreadProjectionStatus::kRedisError;
+        result.error_message = connection->LastError();
+        if (result.error_message.empty()) {
+            result.error_message = "unread projection rebuild Redis EVAL failed";
+        }
+        return result;
+    }
+
+    result.status = ReplaceUnreadProjectionStatus::kApplied;
+    return result;
+}
+
 std::string UnreadCountCache::BuildPrivateKey(
     std::uint64_t receiver_user_id,
     std::uint64_t sender_user_id
@@ -1015,6 +1212,37 @@ std::string ClearUnreadStatusToString(
         default:
             return "unknown";
     }
+}
+
+
+std::string SetUnreadSnapshotStatusToString(
+    SetUnreadSnapshotStatus status
+) {
+    switch (status) {
+        case SetUnreadSnapshotStatus::kApplied:
+            return "applied";
+        case SetUnreadSnapshotStatus::kInvalidArgument:
+            return "invalid_argument";
+        case SetUnreadSnapshotStatus::kRedisError:
+            return "redis_error";
+    }
+    return "unknown";
+}
+
+std::string ReplaceUnreadProjectionStatusToString(
+    ReplaceUnreadProjectionStatus status
+) {
+    switch (status) {
+        case ReplaceUnreadProjectionStatus::kApplied:
+            return "applied";
+        case ReplaceUnreadProjectionStatus::kInvalidArgument:
+            return "invalid_argument";
+        case ReplaceUnreadProjectionStatus::kTooManyPeers:
+            return "too_many_peers";
+        case ReplaceUnreadProjectionStatus::kRedisError:
+            return "redis_error";
+    }
+    return "unknown";
 }
 
 

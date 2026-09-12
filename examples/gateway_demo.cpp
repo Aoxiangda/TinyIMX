@@ -595,6 +595,9 @@ int main(int argc, char* argv[]) {
 
         if (unread_count_cache) {
             gateway.SetUnreadCountCache(unread_count_cache.get());
+            gateway.SetUnreadProjectionWriteEnabled(
+                config.UnreadProjection().owner == "gateway"
+            );
         }
 
         const char*

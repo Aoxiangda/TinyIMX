@@ -2045,6 +2045,260 @@ MessageRepository::MarkReadByDialog(
     return result;
 }
 
+SavePrivateMessageResult MessageRepository::SavePrivateMessageOnConnection(
+    MySqlConnection* connection,
+    std::uint64_t from_user_id,
+    std::uint64_t to_user_id,
+    const std::string& content,
+    DeliveryStatus delivery_status,
+    PrivateMessageType message_type,
+    const std::string& client_message_id
+) {
+    SavePrivateMessageResult result;
+
+    if (from_user_id == 0 || to_user_id == 0 || from_user_id == to_user_id) {
+        result.status = MessageMutationStatus::kInvalidArgument;
+        result.message = "message repository transactional save failed: invalid user id";
+        return result;
+    }
+
+    if (client_message_id.size() > 64) {
+        result.status = MessageMutationStatus::kInvalidArgument;
+        result.message = "message repository transactional save failed: client_message_id too long";
+        return result;
+    }
+
+    const auto message_type_value = static_cast<std::uint32_t>(message_type);
+    if (message_type_value < static_cast<std::uint32_t>(PrivateMessageType::kText) ||
+        message_type_value > static_cast<std::uint32_t>(PrivateMessageType::kFile)) {
+        result.status = MessageMutationStatus::kInvalidArgument;
+        result.message = "message repository transactional save failed: invalid message type";
+        return result;
+    }
+
+    const auto delivery_status_value = static_cast<std::uint32_t>(delivery_status);
+    if (delivery_status_value > static_cast<std::uint32_t>(DeliveryStatus::kFailed)) {
+        result.status = MessageMutationStatus::kInvalidArgument;
+        result.message = "message repository transactional save failed: invalid delivery status";
+        return result;
+    }
+
+    if (connection == nullptr || !connection->IsConnected()) {
+        result.status = MessageMutationStatus::kStorageError;
+        result.message = "message repository transactional save failed: connection unavailable";
+        return result;
+    }
+
+    const std::string escaped_content = connection->EscapeString(content);
+    std::string client_message_sql = "NULL";
+    if (!client_message_id.empty()) {
+        client_message_sql = "'" + connection->EscapeString(client_message_id) + "'";
+    }
+
+    const std::string sql =
+        "INSERT INTO im_private_messages ("
+        "client_message_id, from_user_id, to_user_id, message_type, content, delivery_status"
+        ") VALUES (" +
+        client_message_sql + ", " +
+        std::to_string(from_user_id) + ", " +
+        std::to_string(to_user_id) + ", " +
+        std::to_string(message_type_value) + ", '" +
+        escaped_content + "', " +
+        std::to_string(delivery_status_value) + ")";
+
+    if (!connection->Execute(sql)) {
+        result.status = MessageMutationStatus::kStorageError;
+        result.message = connection->LastError();
+        if (result.message.empty()) {
+            result.message = "message repository transactional save failed: execute failed";
+        }
+        return result;
+    }
+
+    result.message_id = connection->LastInsertId();
+    if (result.message_id == 0) {
+        result.status = MessageMutationStatus::kStorageError;
+        result.message = "message repository transactional save failed: invalid last insert id";
+        return result;
+    }
+
+    result.status = MessageMutationStatus::kSucceeded;
+    result.message = "private message saved on caller transaction";
+    return result;
+}
+
+FindPrivateMessageResult MessageRepository::FindPrivateMessageByIdOnConnection(
+    MySqlConnection* connection,
+    std::uint64_t message_id
+) {
+    FindPrivateMessageResult result;
+
+    if (message_id == 0) {
+        result.status = MessageQueryStatus::kInvalidArgument;
+        result.message = "message repository transactional find failed: invalid message id";
+        return result;
+    }
+
+    if (connection == nullptr || !connection->IsConnected()) {
+        result.status = MessageQueryStatus::kStorageError;
+        result.message = "message repository transactional find failed: connection unavailable";
+        return result;
+    }
+
+    const std::string sql =
+        "SELECT message_id, IFNULL(client_message_id, ''), from_user_id, to_user_id, "
+        "message_type, content, delivery_status, created_at, "
+        "IFNULL(delivered_at, ''), IFNULL(read_at, '') "
+        "FROM im_private_messages WHERE message_id = " +
+        std::to_string(message_id) + " LIMIT 1";
+
+    MySqlQueryResult query_result;
+    if (!connection->Query(sql, &query_result)) {
+        result.status = MessageQueryStatus::kStorageError;
+        result.message = connection->LastError();
+        if (result.message.empty()) {
+            result.message = "message repository transactional find failed: query failed";
+        }
+        return result;
+    }
+
+    if (query_result.rows.empty()) {
+        result.status = MessageQueryStatus::kSucceeded;
+        result.found = false;
+        result.message = "private message not found";
+        return result;
+    }
+
+    if (query_result.rows.size() != 1) {
+        result.status = MessageQueryStatus::kInvalidRecord;
+        result.message = "message repository transactional find failed: unexpected row count";
+        return result;
+    }
+
+    const auto built = BuildMessagesFromResult(query_result);
+    if (!built.Succeeded() || built.records.size() != 1) {
+        result.status = built.Succeeded() ? MessageQueryStatus::kInvalidRecord : built.status;
+        result.message = built.message.empty()
+            ? "message repository transactional find failed: invalid record"
+            : built.message;
+        return result;
+    }
+
+    result.status = MessageQueryStatus::kSucceeded;
+    result.found = true;
+    result.record = built.records.front();
+    result.message = "private message found";
+    return result;
+}
+
+FindPrivateMessageResult
+MessageRepository::FindPrivateMessageByClientMessageIdOnConnection(
+    MySqlConnection* connection,
+    std::uint64_t from_user_id,
+    const std::string& client_message_id
+) {
+    FindPrivateMessageResult result;
+
+    if (from_user_id == 0 || client_message_id.empty() || client_message_id.size() > 64) {
+        result.status = MessageQueryStatus::kInvalidArgument;
+        result.message = "message repository transactional idempotency find failed: invalid argument";
+        return result;
+    }
+
+    if (connection == nullptr || !connection->IsConnected()) {
+        result.status = MessageQueryStatus::kStorageError;
+        result.message = "message repository transactional idempotency find failed: connection unavailable";
+        return result;
+    }
+
+    const std::string escaped = connection->EscapeString(client_message_id);
+    const std::string sql =
+        "SELECT message_id, IFNULL(client_message_id, ''), from_user_id, to_user_id, "
+        "message_type, content, delivery_status, created_at, "
+        "IFNULL(delivered_at, ''), IFNULL(read_at, '') "
+        "FROM im_private_messages WHERE from_user_id = " +
+        std::to_string(from_user_id) +
+        " AND client_message_id = '" + escaped + "' LIMIT 2";
+
+    MySqlQueryResult query_result;
+    if (!connection->Query(sql, &query_result)) {
+        result.status = MessageQueryStatus::kStorageError;
+        result.message = connection->LastError();
+        if (result.message.empty()) {
+            result.message = "message repository transactional idempotency find failed: query failed";
+        }
+        return result;
+    }
+
+    if (query_result.rows.empty()) {
+        result.status = MessageQueryStatus::kSucceeded;
+        result.found = false;
+        result.message = "private message not found";
+        return result;
+    }
+
+    if (query_result.rows.size() != 1) {
+        result.status = MessageQueryStatus::kInvalidRecord;
+        result.message = "message repository transactional idempotency find failed: duplicate records";
+        return result;
+    }
+
+    const auto built = BuildMessagesFromResult(query_result);
+    if (!built.Succeeded() || built.records.size() != 1) {
+        result.status = built.Succeeded() ? MessageQueryStatus::kInvalidRecord : built.status;
+        result.message = built.message.empty()
+            ? "message repository transactional idempotency find failed: invalid record"
+            : built.message;
+        return result;
+    }
+
+    result.status = MessageQueryStatus::kSucceeded;
+    result.found = true;
+    result.record = built.records.front();
+    result.message = "private message found";
+    return result;
+}
+
+UpdatePrivateMessagesResult MessageRepository::MarkReadByDialogOnConnection(
+    MySqlConnection* connection,
+    std::uint64_t reader_user_id,
+    std::uint64_t peer_user_id
+) {
+    UpdatePrivateMessagesResult result;
+
+    if (reader_user_id == 0 || peer_user_id == 0 || reader_user_id == peer_user_id) {
+        result.status = MessageMutationStatus::kInvalidArgument;
+        result.message = "message repository transactional mark read failed: invalid user id";
+        return result;
+    }
+
+    if (connection == nullptr || !connection->IsConnected()) {
+        result.status = MessageMutationStatus::kStorageError;
+        result.message = "message repository transactional mark read failed: connection unavailable";
+        return result;
+    }
+
+    const std::string sql =
+        "UPDATE im_private_messages SET delivery_status = 2, read_at = NOW() "
+        "WHERE to_user_id = " + std::to_string(reader_user_id) +
+        " AND from_user_id = " + std::to_string(peer_user_id) +
+        " AND delivery_status = 1";
+
+    if (!connection->Execute(sql)) {
+        result.status = MessageMutationStatus::kStorageError;
+        result.message = connection->LastError();
+        if (result.message.empty()) {
+            result.message = "message repository transactional mark read failed: execute failed";
+        }
+        return result;
+    }
+
+    result.status = MessageMutationStatus::kSucceeded;
+    result.affected_rows = connection->AffectedRows();
+    result.message = "private messages marked read on caller transaction";
+    return result;
+}
+
 UpdatePrivateMessagesResult MessageRepository::MarkReceiverConfirmed(
     std::uint64_t message_id
 ) {

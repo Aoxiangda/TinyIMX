@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace tinyimx {
 
@@ -134,6 +136,38 @@ struct ClearUnreadResult {
     }
 };
 
+
+enum class SetUnreadSnapshotStatus {
+    kApplied = 0,
+    kInvalidArgument,
+    kRedisError
+};
+
+struct SetUnreadSnapshotResult {
+    SetUnreadSnapshotStatus status{SetUnreadSnapshotStatus::kRedisError};
+    std::string error_message;
+
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return status == SetUnreadSnapshotStatus::kApplied;
+    }
+};
+
+enum class ReplaceUnreadProjectionStatus {
+    kApplied = 0,
+    kInvalidArgument,
+    kTooManyPeers,
+    kRedisError
+};
+
+struct ReplaceUnreadProjectionResult {
+    ReplaceUnreadProjectionStatus status{ReplaceUnreadProjectionStatus::kRedisError};
+    std::string error_message;
+
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return status == ReplaceUnreadProjectionStatus::kApplied;
+    }
+};
+
 class UnreadCountCache {
 public:
     explicit UnreadCountCache(
@@ -182,6 +216,24 @@ public:
         std::uint64_t sender_user_id
     );
 
+    // M16-B exact, idempotent projection writer. Both counters are replaced
+    // from durable MySQL truth in one Redis script.
+    SetUnreadSnapshotResult SetUnreadSnapshot(
+        std::uint64_t receiver_user_id,
+        std::uint64_t sender_user_id,
+        std::int64_t private_unread,
+        std::int64_t total_unread
+    );
+
+    // Recovery/cutover primitive. peer_counts must include all historical
+    // peers for the receiver, including zero counts, so stale legacy keys
+    // are deleted without a blocking Redis KEYS/SCAN operation.
+    ReplaceUnreadProjectionResult ReplaceUserUnreadProjection(
+        std::uint64_t receiver_user_id,
+        const std::vector<std::pair<std::uint64_t, std::int64_t>>& peer_counts,
+        std::int64_t total_unread
+    );
+
 private:
     std::string BuildPrivateKey(
         std::uint64_t receiver_user_id,
@@ -228,6 +280,14 @@ EnsureUnreadProjectionStatusToString(
 std::string
 ClearUnreadStatusToString(
     ClearUnreadStatus status
+);
+
+std::string SetUnreadSnapshotStatusToString(
+    SetUnreadSnapshotStatus status
+);
+
+std::string ReplaceUnreadProjectionStatusToString(
+    ReplaceUnreadProjectionStatus status
 );
 
 }  // namespace tinyimx

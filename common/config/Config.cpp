@@ -34,6 +34,22 @@ bool IsValidCompressType(const std::string& compress) {
            compress == "zlib";
 }
 
+bool IsValidRocketMQTopic(const std::string& topic) {
+    if (topic.empty() || topic.size() > 128) {
+        return false;
+    }
+
+    for (char ch : topic) {
+        const unsigned char value = static_cast<unsigned char>(ch);
+        if (std::isalnum(value) != 0 || ch == '-' || ch == '_') {
+            continue;
+        }
+        return false;
+    }
+
+    return true;
+}
+
 bool IsValidInstanceId(const std::string& instance_id) {
     if (instance_id.empty() ||
         instance_id.size() > 64) {
@@ -151,6 +167,18 @@ const RedisConfig& Config::Redis() const {
     return redis_;
 }
 
+const RocketMQConfig& Config::RocketMQ() const {
+    return rocketmq_;
+}
+
+const OutboxRelayConfig& Config::OutboxRelay() const {
+    return outbox_relay_;
+}
+
+const UnreadProjectionConfig& Config::UnreadProjection() const {
+    return unread_projection_;
+}
+
 const GatewayRegistryConfig& Config::GatewayRegistry() const {
     return gateway_registry_;
 }
@@ -212,6 +240,9 @@ void Config::Reset() {
     rpc_ = RpcConfig{};
     mysql_ = MySqlConfig{};
     redis_ = RedisConfig{};
+    rocketmq_ = RocketMQConfig{};
+    outbox_relay_ = OutboxRelayConfig{};
+    unread_projection_ = UnreadProjectionConfig{};
     gateway_registry_ = GatewayRegistryConfig{};
     zookeeper_ = ZooKeeperConfig{};
     service_discovery_ = ServiceDiscoveryConfig{};
@@ -384,6 +415,47 @@ bool Config::ApplyJsonConfig(const std::string& json_content) {
             ReadIfExists(section, "password", &redis_.password);
             ReadIfExists(section, "db", &redis_.db);
             ReadIfExists(section, "pool_size", &redis_.pool_size);
+        }
+
+        if (root.contains("rocketmq")) {
+            const auto& section = root.at("rocketmq");
+            ReadIfExists(section, "enable", &rocketmq_.enable);
+            ReadIfExists(section, "endpoint", &rocketmq_.endpoint);
+            ReadIfExists(section, "message_topic", &rocketmq_.message_topic);
+            ReadIfExists(section, "request_timeout_ms", &rocketmq_.request_timeout_ms);
+            ReadIfExists(section, "tls", &rocketmq_.tls);
+            ReadIfExists(section, "access_key", &rocketmq_.access_key);
+            ReadIfExists(section, "access_secret", &rocketmq_.access_secret);
+        }
+
+        if (root.contains("outbox_relay")) {
+            const auto& section = root.at("outbox_relay");
+            ReadIfExists(section, "enable", &outbox_relay_.enable);
+            ReadIfExists(section, "instance_id", &outbox_relay_.instance_id);
+            ReadIfExists(section, "batch_size", &outbox_relay_.batch_size);
+            ReadIfExists(section, "worker_threads", &outbox_relay_.worker_threads);
+            ReadIfExists(section, "max_inflight", &outbox_relay_.max_inflight);
+            ReadIfExists(section, "poll_interval_ms", &outbox_relay_.poll_interval_ms);
+            ReadIfExists(section, "lease_ms", &outbox_relay_.lease_ms);
+            ReadIfExists(section, "lease_renew_interval_ms", &outbox_relay_.lease_renew_interval_ms);
+            ReadIfExists(section, "retry_base_ms", &outbox_relay_.retry_base_ms);
+            ReadIfExists(section, "retry_max_ms", &outbox_relay_.retry_max_ms);
+            ReadIfExists(section, "published_retention_hours", &outbox_relay_.published_retention_hours);
+            ReadIfExists(section, "cleanup_interval_ms", &outbox_relay_.cleanup_interval_ms);
+            ReadIfExists(section, "cleanup_batch_size", &outbox_relay_.cleanup_batch_size);
+            ReadIfExists(section, "shutdown_timeout_ms", &outbox_relay_.shutdown_timeout_ms);
+        }
+
+        if (root.contains("unread_projection")) {
+            const auto& section = root.at("unread_projection");
+            ReadIfExists(section, "enable", &unread_projection_.enable);
+            ReadIfExists(section, "owner", &unread_projection_.owner);
+            ReadIfExists(section, "shadow_mode", &unread_projection_.shadow_mode);
+            ReadIfExists(section, "consumer_group", &unread_projection_.consumer_group);
+            ReadIfExists(section, "batch_size", &unread_projection_.batch_size);
+            ReadIfExists(section, "invisible_duration_ms", &unread_projection_.invisible_duration_ms);
+            ReadIfExists(section, "await_duration_ms", &unread_projection_.await_duration_ms);
+            ReadIfExists(section, "receive_error_backoff_ms", &unread_projection_.receive_error_backoff_ms);
         }
 
         if (root.contains("gateway_registry")) {
@@ -722,6 +794,103 @@ bool Config::Validate() {
 
         if (redis_.pool_size <= 0) {
             return SetError("redis.pool_size must be greater than 0");
+        }
+    }
+
+    if (rocketmq_.enable) {
+        if (rocketmq_.endpoint.empty()) {
+            return SetError("rocketmq.endpoint cannot be empty when rocketmq.enable=true");
+        }
+        if (!IsValidRocketMQTopic(rocketmq_.message_topic)) {
+            return SetError(
+                "rocketmq.message_topic must be 1-128 characters using only [A-Za-z0-9_-]"
+            );
+        }
+        if (rocketmq_.request_timeout_ms <= 0) {
+            return SetError("rocketmq.request_timeout_ms must be greater than 0");
+        }
+        if (rocketmq_.access_key.empty() != rocketmq_.access_secret.empty()) {
+            return SetError("rocketmq access_key and access_secret must be configured together");
+        }
+    }
+
+    if (outbox_relay_.enable) {
+        if (!mysql_.enable) {
+            return SetError("outbox_relay requires mysql.enable=true");
+        }
+        if (!rocketmq_.enable) {
+            return SetError("outbox_relay requires rocketmq.enable=true");
+        }
+        if (!IsValidInstanceId(outbox_relay_.instance_id)) {
+            return SetError("outbox_relay.instance_id is invalid");
+        }
+        if (outbox_relay_.batch_size == 0 || outbox_relay_.batch_size > 1024) {
+            return SetError("outbox_relay.batch_size must be in range 1-1024");
+        }
+        if (outbox_relay_.worker_threads == 0 || outbox_relay_.worker_threads > 64) {
+            return SetError("outbox_relay.worker_threads must be in range 1-64");
+        }
+        if (outbox_relay_.max_inflight < outbox_relay_.batch_size ||
+            outbox_relay_.max_inflight < outbox_relay_.worker_threads ||
+            outbox_relay_.max_inflight > 8192) {
+            return SetError("outbox_relay.max_inflight must cover batch/workers and not exceed 8192");
+        }
+        if (outbox_relay_.poll_interval_ms <= 0 || outbox_relay_.lease_ms <= 0 ||
+            outbox_relay_.lease_renew_interval_ms <= 0 ||
+            outbox_relay_.lease_renew_interval_ms * 3 >= outbox_relay_.lease_ms) {
+            return SetError("outbox_relay lease/poll timing is invalid");
+        }
+        if (outbox_relay_.retry_base_ms <= 0 ||
+            outbox_relay_.retry_max_ms < outbox_relay_.retry_base_ms) {
+            return SetError("outbox_relay retry timing is invalid");
+        }
+        if (outbox_relay_.published_retention_hours <= 0 ||
+            outbox_relay_.cleanup_interval_ms <= 0 ||
+            outbox_relay_.cleanup_batch_size == 0 ||
+            outbox_relay_.shutdown_timeout_ms <= 0) {
+            return SetError("outbox_relay cleanup/shutdown configuration is invalid");
+        }
+    }
+
+    if (unread_projection_.owner != "gateway" &&
+        unread_projection_.owner != "projector") {
+        return SetError("unread_projection.owner must be one of: gateway, projector");
+    }
+    if (unread_projection_.shadow_mode && unread_projection_.owner != "gateway") {
+        return SetError("unread_projection.shadow_mode requires owner=gateway");
+    }
+    if (unread_projection_.owner == "projector" && !unread_projection_.enable) {
+        return SetError("unread_projection.enable must be true when owner=projector");
+    }
+    if (unread_projection_.enable) {
+        if (!mysql_.enable || !redis_.enable || !rocketmq_.enable) {
+            return SetError("unread_projection requires mysql, redis and rocketmq enabled");
+        }
+        if (unread_projection_.consumer_group.empty() ||
+            unread_projection_.consumer_group.size() > 128) {
+            return SetError("unread_projection.consumer_group is invalid");
+        }
+        if (unread_projection_.batch_size == 0 || unread_projection_.batch_size > 256) {
+            return SetError("unread_projection.batch_size must be in range 1-256");
+        }
+        /*
+         * RocketMQ SimpleConsumer requires an invisibility window of
+         * at least 10 seconds. Reject invalid configurations before
+         * they reach Receive() and fail at the broker/proxy boundary.
+         */
+        if (unread_projection_.invisible_duration_ms < 10000) {
+            return SetError(
+                "unread_projection.invisible_duration_ms "
+                "must be at least 10000"
+            );
+        }
+
+        if (unread_projection_.await_duration_ms <= 0 ||
+            unread_projection_.receive_error_backoff_ms <= 0) {
+            return SetError(
+                "unread_projection await/backoff timing values "
+                "must be positive"
+            );
         }
     }
 

@@ -10,6 +10,7 @@
 #include "services/message/server/MessageServiceServer.h"
 #include "services/message/service/MessageServiceImpl.h"
 #include "services/repository/MessageRepository.h"
+#include "services/outbox/OutboxRepository.h"
 
 #include <pthread.h>
 #include <signal.h>
@@ -106,8 +107,11 @@ int main(int argc, char* argv[]) {
     }
 
     tinyimx::MessageRepository repository(&mysql_pool);
+    tinyimx::outbox::OutboxRepository outbox_repository(&mysql_pool);
     tinyimx::message::MessageRepositoryAdapter repository_adapter(
-        &repository
+        &repository,
+        &mysql_pool,
+        &outbox_repository
     );
     tinyimx::message::MessageApplicationService application_service(
         &repository_adapter

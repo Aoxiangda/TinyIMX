@@ -476,6 +476,42 @@ public:
         std::uint64_t peer_user_id
     );
 
+    /*
+     * M16 Transactional Outbox composition primitives.
+     *
+     * These APIs never Acquire() a second connection. The caller owns the
+     * MySqlConnection lifetime and transaction boundary, so a business row
+     * and its outbox row can be committed atomically on the same session.
+     * Existing public M12 APIs remain unchanged and continue to own their
+     * connection acquisition for backward-compatible repository callers.
+     */
+    SavePrivateMessageResult SavePrivateMessageOnConnection(
+        MySqlConnection* connection,
+        std::uint64_t from_user_id,
+        std::uint64_t to_user_id,
+        const std::string& content,
+        DeliveryStatus delivery_status,
+        PrivateMessageType message_type = PrivateMessageType::kText,
+        const std::string& client_message_id = ""
+    );
+
+    FindPrivateMessageResult FindPrivateMessageByIdOnConnection(
+        MySqlConnection* connection,
+        std::uint64_t message_id
+    );
+
+    FindPrivateMessageResult FindPrivateMessageByClientMessageIdOnConnection(
+        MySqlConnection* connection,
+        std::uint64_t from_user_id,
+        const std::string& client_message_id
+    );
+
+    UpdatePrivateMessagesResult MarkReadByDialogOnConnection(
+        MySqlConnection* connection,
+        std::uint64_t reader_user_id,
+        std::uint64_t peer_user_id
+    );
+
 private:
     static ListPrivateMessagesResult BuildMessagesFromResult(
         const MySqlQueryResult& result

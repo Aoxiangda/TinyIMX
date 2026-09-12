@@ -1095,6 +1095,14 @@ bool GatewayServer::HasUnreadCountCache() const {
     return unread_count_cache_ != nullptr;
 }
 
+void GatewayServer::SetUnreadProjectionWriteEnabled(bool enabled) {
+    unread_projection_write_enabled_ = enabled;
+    LOG_INFO(
+        "gateway unread projection writer ownership updated"
+        << ", gateway_writes=" << unread_projection_write_enabled_
+    );
+}
+
 std::int64_t GatewayServer::GetTotalUnread(
     UserId user_id
 ) {
@@ -1176,6 +1184,13 @@ std::int64_t GatewayServer::IncrementUnread(
         return 0;
     }
 
+    if (!unread_projection_write_enabled_) {
+        if (total_unread != nullptr) {
+            *total_unread = GetTotalUnread(receiver_user_id);
+        }
+        return GetPrivateUnread(receiver_user_id, sender_user_id);
+    }
+
     const IncrementUnreadResult
         increment_result =
             unread_count_cache_->
@@ -1248,6 +1263,16 @@ void GatewayServer::EnsureUnreadProjection(
     }
 
     if (!HasUnreadCountCache()) {
+        return;
+    }
+
+    if (!unread_projection_write_enabled_) {
+        if (private_unread != nullptr) {
+            *private_unread = GetPrivateUnread(receiver_user_id, sender_user_id);
+        }
+        if (total_unread != nullptr) {
+            *total_unread = GetTotalUnread(receiver_user_id);
+        }
         return;
     }
 
@@ -3049,6 +3074,13 @@ bool GatewayServer::ClearUnread(
     }
 
     if (!HasUnreadCountCache()) {
+        return true;
+    }
+
+    if (!unread_projection_write_enabled_) {
+        if (total_unread != nullptr) {
+            *total_unread = GetTotalUnread(reader_user_id);
+        }
         return true;
     }
 
@@ -5949,6 +5981,8 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
     const Packet& packet,
     const BusinessRequestContext& business_request
 ) {
+
+
     GatewayForwardChatResponse response;
 
     response.status =
@@ -6926,6 +6960,8 @@ void GatewayServer::ExecuteReadRequest(
     const Packet& packet,
     const BusinessRequestContext& business_request
 ) {
+
+
 
     Json response_body;
     response_body["success"] = false;

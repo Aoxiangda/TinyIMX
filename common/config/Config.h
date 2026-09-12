@@ -35,6 +35,9 @@ public:
     const RpcConfig& Rpc() const;
     const MySqlConfig& MySql() const;
     const RedisConfig& Redis() const;
+    const RocketMQConfig& RocketMQ() const;
+    const OutboxRelayConfig& OutboxRelay() const;
+    const UnreadProjectionConfig& UnreadProjection() const;
 
     const GatewayRegistryConfig&
     GatewayRegistry() const;
@@ -95,6 +98,9 @@ private:
     RpcConfig rpc_;
     MySqlConfig mysql_;
     RedisConfig redis_;
+    RocketMQConfig rocketmq_;
+    OutboxRelayConfig outbox_relay_;
+    UnreadProjectionConfig unread_projection_;
 
     GatewayRegistryConfig gateway_registry_;
     ZooKeeperConfig zookeeper_;

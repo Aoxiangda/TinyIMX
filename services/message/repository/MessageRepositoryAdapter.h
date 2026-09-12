@@ -2,8 +2,19 @@
 
 #include "services/message/application/MessageRepositoryPort.h"
 
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <string>
+#include <vector>
+
 namespace tinyimx {
 class MessageRepository;
+class MySqlConnectionPool;
+}
+
+namespace tinyimx::outbox {
+class OutboxRepository;
 }
 
 namespace tinyimx::message {
@@ -11,8 +22,10 @@ namespace tinyimx::message {
 class MessageRepositoryAdapter final
     : public MessageRepositoryPort {
 public:
-    explicit MessageRepositoryAdapter(
-        tinyimx::MessageRepository* repository
+    MessageRepositoryAdapter(
+        tinyimx::MessageRepository* repository,
+        tinyimx::MySqlConnectionPool* pool,
+        tinyimx::outbox::OutboxRepository* outbox_repository
     );
 
     [[nodiscard]] MessageRepositoryPersistResult PersistPrivateMessage(
@@ -62,8 +75,18 @@ public:
         std::uint64_t peer_user_id
     ) override;
 
+    using TransactionalPreInsertHookForTest = std::function<void()>;
+
+    // Deterministic concurrency seam. Configure before concurrent calls.
+    void SetTransactionalPreInsertHookForTest(
+        TransactionalPreInsertHookForTest hook
+    );
+
 private:
-    tinyimx::MessageRepository* repository_{nullptr};  // non-owning
+    tinyimx::MessageRepository* repository_{nullptr};       // non-owning
+    tinyimx::MySqlConnectionPool* pool_{nullptr};           // non-owning
+    tinyimx::outbox::OutboxRepository* outbox_{nullptr};    // non-owning
+    TransactionalPreInsertHookForTest pre_insert_hook_for_test_;
 };
 
 }  // namespace tinyimx::message

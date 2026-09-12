@@ -1326,3 +1326,13 @@ include(
 include(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXMessageService.cmake"
 )
+
+# M16-B: isolated RocketMQ producer/consumer transport executables.
+include(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXRocketMQ.cmake"
+)
+
+# ============================================================================
+# M16 final CTest labels / external-resource policy
+# ============================================================================
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXM16TestPolicy.cmake")

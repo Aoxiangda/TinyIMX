@@ -192,6 +192,7 @@ public:
     void SetGatewayRouteResolver(GatewayRouteResolver* route_resolver);
     void SetGatewayPeerVerifyCallback(GatewayPeerVerifyCallback callback);
     void SetUnreadCountCache(UnreadCountCache* unread_count_cache);
+    void SetUnreadProjectionWriteEnabled(bool enabled);
     void SetGatewayPeerTransportManager(GatewayPeerTransportManager*manager);
 
     void SetGatewayPeerResponseDropCallbackForTest(
@@ -664,6 +665,7 @@ private:
     GatewayPeerResponseDropCallback gateway_peer_response_drop_callback_for_test_;
     GatewayPeerTransportManager* gateway_peer_transport_manager_{nullptr};
     UnreadCountCache* unread_count_cache_{nullptr};
+    bool unread_projection_write_enabled_{true};
     PacketHandler packet_handler_;
 };
 

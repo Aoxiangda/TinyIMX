@@ -69,6 +69,41 @@
     "db": 0,
     "pool_size": 4
   },
+  "rocketmq": {
+    "enable": false,
+    "endpoint": "127.0.0.1:8081",
+    "message_topic": "tinyimx-message-events",
+    "request_timeout_ms": 3000,
+    "tls": false,
+    "access_key": "",
+    "access_secret": ""
+  },
+  "outbox_relay": {
+    "enable": false,
+    "instance_id": "outbox-relay-1",
+    "batch_size": 32,
+    "worker_threads": 4,
+    "max_inflight": 128,
+    "poll_interval_ms": 100,
+    "lease_ms": 30000,
+    "lease_renew_interval_ms": 5000,
+    "retry_base_ms": 200,
+    "retry_max_ms": 30000,
+    "published_retention_hours": 168,
+    "cleanup_interval_ms": 60000,
+    "cleanup_batch_size": 1000,
+    "shutdown_timeout_ms": 10000
+  },
+  "unread_projection": {
+    "enable": false,
+    "owner": "gateway",
+    "shadow_mode": false,
+    "consumer_group": "tinyimx-unread-projector-v1",
+    "batch_size": 16,
+    "invisible_duration_ms": 30000,
+    "await_duration_ms": 5000,
+    "receive_error_backoff_ms": 500
+  },
   "gateway_registry": {
     "enable": true,
     "lease_ttl_seconds": 15,
