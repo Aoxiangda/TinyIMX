@@ -11,6 +11,9 @@ struct RocketMQSimpleConsumerOptions {
     std::string endpoint{"127.0.0.1:8081"};
     std::string topic{"tinyimx-message-events"};
     std::string consumer_group{"tinyimx-unread-projector-v1"};
+    // TAG filter expression. "*" preserves the historical all-tags behavior.
+    // Consumers sharing the same consumer_group must use the same expression.
+    std::string filter_expression{"*"};
     int request_timeout_ms{3000};
     int await_duration_ms{5000};
     bool tls{false};

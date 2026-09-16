@@ -42,7 +42,7 @@ private:
         registry::zookeeper::ZooKeeperServiceDiscovery
     > discovery_;
     ServiceDiscoveryConfig config_;
-    mutable std::array<std::atomic<std::uint64_t>, 3> counters_{};
+    mutable std::array<std::atomic<std::uint64_t>, 4> counters_{};
 };
 
 }  // namespace tinyimx::rpc

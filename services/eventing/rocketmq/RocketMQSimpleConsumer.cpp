@@ -50,7 +50,7 @@ namespace {
         .withConfiguration(std::move(configuration))
         .subscribe(
             options.topic,
-            ::ROCKETMQ_NAMESPACE::FilterExpression("*")
+            ::ROCKETMQ_NAMESPACE::FilterExpression(options.filter_expression)
         )
         .withAwaitDuration(std::chrono::milliseconds(options.await_duration_ms))
         .build();
@@ -82,7 +82,8 @@ bool RocketMQSimpleConsumer::Start() {
         return true;
     }
     if (options_.endpoint.empty() || options_.topic.empty() ||
-        options_.consumer_group.empty() || options_.request_timeout_ms <= 0 ||
+        options_.consumer_group.empty() || options_.filter_expression.empty() ||
+        options_.request_timeout_ms <= 0 ||
         options_.await_duration_ms <= 0) {
         last_error_ = "RocketMQ SimpleConsumer configuration is invalid";
         return false;
@@ -96,6 +97,7 @@ bool RocketMQSimpleConsumer::Start() {
             << ", endpoint=" << options_.endpoint
             << ", topic=" << options_.topic
             << ", group=" << options_.consumer_group
+            << ", filter=" << options_.filter_expression
         );
         return true;
     } catch (const std::exception& e) {

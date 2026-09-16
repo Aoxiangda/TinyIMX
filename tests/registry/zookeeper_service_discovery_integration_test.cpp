@@ -74,9 +74,9 @@ ServiceDiscoveryConfig MakeDiscoveryConfig() {
     return config;
 }
 
-ServiceInstance MakeUserInstance(int port) {
+ServiceInstance MakeInstance(const std::string& service_name, int port) {
     ServiceInstance instance;
-    instance.service_name = "user";
+    instance.service_name = service_name;
     instance.target = "127.0.0.1:" + std::to_string(port);
     instance.instance_id = ServiceInstance::BuildInstanceId(
         instance.service_name,
@@ -88,9 +88,10 @@ ServiceInstance MakeUserInstance(int port) {
 
 bool HasTargets(
     const std::shared_ptr<ZooKeeperServiceDiscovery>& discovery,
-    const std::vector<std::string>& expected
+    const std::vector<std::string>& expected,
+    const std::string& service_name = "user"
 ) {
-    const auto snapshot = discovery->Snapshot("user");
+    const auto snapshot = discovery->Snapshot(service_name);
     if (!snapshot.initialized ||
         snapshot.instances.size() != expected.size()) {
         return false;
@@ -113,6 +114,7 @@ void Cleanup(
     client->DeleteNode(root + "/user", -1);
     client->DeleteNode(root + "/social", -1);
     client->DeleteNode(root + "/message", -1);
+    client->DeleteNode(root + "/group", -1);
     client->DeleteNode(root, -1);
 
     const auto slash = root.rfind('/');
@@ -171,6 +173,11 @@ int main(int argc, char* argv[]) {
             discovery->Snapshot("message").initialized &&
                 discovery->Snapshot("message").instances.empty(),
             "initial message snapshot empty"
+        ) ||
+        !Expect(
+            discovery->Snapshot("group").initialized &&
+                discovery->Snapshot("group").instances.empty(),
+            "initial group snapshot empty"
         )) {
         discovery->Stop();
         discovery_client->Stop();
@@ -180,20 +187,24 @@ int main(int argc, char* argv[]) {
     ZooKeeperClient owner1;
     ZooKeeperClient owner2;
     ZooKeeperClient owner3;
+    ZooKeeperClient group_owner;
     if (!Expect(owner1.Start(zk_config), "owner1 connected") ||
         !Expect(owner2.Start(zk_config), "owner2 connected") ||
-        !Expect(owner3.Start(zk_config), "owner3 connected")) {
+        !Expect(owner3.Start(zk_config), "owner3 connected") ||
+        !Expect(group_owner.Start(zk_config), "group owner connected")) {
         discovery->Stop();
         discovery_client->Stop();
         return 1;
     }
 
-    const auto u1 = MakeUserInstance(56001);
-    const auto u2 = MakeUserInstance(56002);
-    const auto u3 = MakeUserInstance(56003);
+    const auto u1 = MakeInstance("user", 56001);
+    const auto u2 = MakeInstance("user", 56002);
+    const auto u3 = MakeInstance("user", 56003);
+    const auto g1 = MakeInstance("group", 56054);
     ZooKeeperServiceRegistrar r1(&owner1, u1, root);
     ZooKeeperServiceRegistrar r2(&owner2, u2, root);
     ZooKeeperServiceRegistrar r3(&owner3, u3, root);
+    ZooKeeperServiceRegistrar group_registrar(&group_owner, g1, root);
 
     if (!Expect(
             r1.Start(std::chrono::milliseconds(3000)),
@@ -222,10 +233,39 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    if (!Expect(
+            group_registrar.Start(std::chrono::milliseconds(3000)),
+            "register GroupService"
+        ) ||
+        !Expect(
+            WaitFor([&]() {
+                return HasTargets(discovery, {g1.target}, "group");
+            }),
+            "group watch discovers GroupService"
+        )) {
+        r1.Stop(); r2.Stop(); r3.Stop(); group_registrar.Stop();
+        discovery->Stop();
+        owner1.Stop(); owner2.Stop(); owner3.Stop(); group_owner.Stop();
+        discovery_client->Stop();
+        return 1;
+    }
+
     ZooKeeperServiceEndpointProvider provider(
         discovery,
         discovery_config
     );
+    const auto group_endpoint = provider.Resolve(ServiceKind::kGroup);
+    if (!Expect(
+            group_endpoint && group_endpoint->target == g1.target,
+            "ServiceKind::kGroup resolves discovered GroupService"
+        )) {
+        r1.Stop(); r2.Stop(); r3.Stop(); group_registrar.Stop();
+        discovery->Stop();
+        owner1.Stop(); owner2.Stop(); owner3.Stop(); group_owner.Stop();
+        discovery_client->Stop();
+        return 1;
+    }
+
     const auto rr1 = provider.Resolve(ServiceKind::kUser);
     const auto rr2 = provider.Resolve(ServiceKind::kUser);
     const auto rr3 = provider.Resolve(ServiceKind::kUser);
@@ -351,7 +391,9 @@ int main(int argc, char* argv[]) {
 
     discovery->Stop();
     r3.Stop();
+    group_registrar.Stop();
     Cleanup(&owner3, root);
+    group_owner.Stop();
     owner1.Stop();
     owner2.Stop();
     owner3.Stop();

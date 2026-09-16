@@ -5,6 +5,7 @@ namespace tinyimx::test {
 void RegisterProtocolCodecTests(TestRunner& runner);
 void RegisterGatewayPeerProtocolTests(TestRunner& runner);
 void RegisterClientChatProtocolTests(TestRunner& runner);
+void RegisterGroupControlProtocolTests(TestRunner& runner);
 
 }  // namespace tinyimx::test
 
@@ -14,6 +15,7 @@ int main() {
     tinyimx::test::RegisterProtocolCodecTests(runner);
     tinyimx::test::RegisterGatewayPeerProtocolTests(runner);
     tinyimx::test::RegisterClientChatProtocolTests(runner);
+    tinyimx::test::RegisterGroupControlProtocolTests(runner);
     const int failed_count = runner.RunAll("TinyIMX Protocol Tests");
 
     return failed_count == 0 ? 0 : 1;

@@ -34,6 +34,7 @@ namespace rpc {
 class SocialRpcClient;
 class UserRpcClient;
 class MessageRpcClient;
+class GroupRpcClient;
 }
 
 struct GatewayForwardChatResponse;
@@ -183,6 +184,7 @@ public:
     void SetSocialRpcClient(rpc::SocialRpcClient* social_rpc_client);
     void SetUserRpcClient(rpc::UserRpcClient* user_rpc_client);
     void SetMessageRpcClient(rpc::MessageRpcClient* message_rpc_client);
+    void SetGroupRpcClient(rpc::GroupRpcClient* group_rpc_client);
     void SetFriendRepository(FriendRepository* repository);
     void SetFriendRequestRepository(
         FriendRequestRepository* repository
@@ -305,6 +307,11 @@ private:
     );
 
     void HandleFriendRequestRejectRequest(
+        const TcpConnectionPtr& connection,
+        const Packet& packet
+    );
+
+    void HandleGroupControlRequest(
         const TcpConnectionPtr& connection,
         const Packet& packet
     );
@@ -528,6 +535,7 @@ private:
     bool HasSocialRpcClient() const;
     bool HasUserRpcClient() const;
     bool HasMessageRpcClient() const;
+    bool HasGroupRpcClient() const;
     bool HasFriendRepository() const;
     bool HasFriendRequestRepository() const;
 
@@ -652,6 +660,10 @@ private:
      * Session, Presence, Packet.seq(D), routing or actual delivery.
      */
     rpc::MessageRpcClient* message_rpc_client_{nullptr};
+
+    // M17-A3 GroupService RPC dependency. Non-owning; bootstrap keeps it
+    // alive until BusinessExecutor drain completes.
+    rpc::GroupRpcClient* group_rpc_client_{nullptr};
 
     std::atomic<std::uint64_t>
         next_internal_rpc_id_{1};

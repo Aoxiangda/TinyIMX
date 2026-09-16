@@ -1,0 +1,294 @@
+========== BRANCH ==========
+feature/m17-group-domain-foundation-v1
+
+========== PRE-FREEZE HEAD ==========
+789a9cfde9dcb735b15773fb0e9da8f44c5f3e7e
+
+========== STAGED STATUS ==========
+M  CMakeLists.txt
+A  M17_A_CHANGED_FILES.txt
+A  M17_A_CLOSEOUT_MANIFEST.md
+A  M17_A_FINAL_ACCEPTANCE.md
+AM M17_A_FINAL_GIT_PRECHECK.txt
+A  cmake/TinyIMXGroupService.cmake
+M  cmake/TinyIMXRpcProto.cmake
+M  common/db/schema.sql
+M  common/protocol/Packet.cpp
+M  common/protocol/Packet.h
+A  db/migrations/006_create_group_domain.sql
+M  examples/gateway_demo.cpp
+A  examples/gateway_group_client_demo.cpp
+A  examples/group_service_demo.cpp
+M  examples/unread_projector_demo.cpp
+M  gateway/GatewayServer.cpp
+M  gateway/GatewayServer.h
+A  proto/tinyimx/group/v1/group_service.proto
+A  scripts/run_m17_a1_group_domain_acceptance.sh
+A  scripts/run_m17_a2_membership_acceptance.sh
+A  scripts/run_m17_a3_gateway_group_vertical_acceptance.sh
+A  scripts/run_m17_a_final_acceptance.sh
+M  services/eventing/rocketmq/RocketMQSimpleConsumer.cpp
+M  services/eventing/rocketmq/RocketMQSimpleConsumer.h
+A  services/group/application/GroupApplicationService.cpp
+A  services/group/application/GroupApplicationService.h
+A  services/group/application/GroupApplicationTypes.h
+A  services/group/application/GroupEventFactory.cpp
+A  services/group/application/GroupEventFactory.h
+A  services/group/application/GroupPermissionPolicy.cpp
+A  services/group/application/GroupPermissionPolicy.h
+A  services/group/application/GroupRepositoryPort.h
+A  services/group/repository/GroupMembershipRepositoryAdapter.cpp
+A  services/group/repository/GroupRepositoryAdapter.cpp
+A  services/group/repository/GroupRepositoryAdapter.h
+A  services/group/server/GroupServiceServer.cpp
+A  services/group/server/GroupServiceServer.h
+A  services/group/service/GroupServiceImpl.cpp
+A  services/group/service/GroupServiceImpl.h
+M  services/projection/unread/UnreadProjector.h
+M  services/registry/zookeeper/ZooKeeperServiceDiscovery.cpp
+A  services/repository/GroupRepository.cpp
+A  services/repository/GroupRepository.h
+A  services/rpc/GroupRpcClient.cpp
+A  services/rpc/GroupRpcClient.h
+A  services/rpc/GroupRpcTypes.h
+M  services/rpc/ServiceEndpointProvider.h
+M  services/rpc/StaticServiceEndpointProvider.cpp
+M  services/rpc/StaticServiceEndpointProvider.h
+M  services/rpc/ZooKeeperServiceEndpointProvider.cpp
+M  services/rpc/ZooKeeperServiceEndpointProvider.h
+A  tests/eventing/m17_a1_rocketmq_subscription_contract_test.cpp
+A  tests/group/group_application_service_test.cpp
+A  tests/group/group_membership_repository_integration_test.cpp
+A  tests/group/group_permission_policy_test.cpp
+A  tests/group/group_repository_integration_test.cpp
+A  tests/group/group_service_integration_test.cpp
+A  tests/protocol/group_control_protocol_test.cpp
+M  tests/protocol/protocol_test_main.cpp
+M  tests/registry/zookeeper_service_discovery_integration_test.cpp
+M  tests/reliability/m16_fault_recovery_runtime_test.cpp
+A  tests/rpc/group_rpc_client_test.cpp
+M  tests/rpc/rpc_contract_test.cpp
+M  tests/rpc/rpc_multi_target_cache_test.cpp
+
+========== STAGED DIFF CHECK ==========
+
+========== STAGED FILE COUNT ==========
+64
+
+========== STAGED NAME STATUS ==========
+M	CMakeLists.txt
+A	M17_A_CHANGED_FILES.txt
+A	M17_A_CLOSEOUT_MANIFEST.md
+A	M17_A_FINAL_ACCEPTANCE.md
+A	M17_A_FINAL_GIT_PRECHECK.txt
+A	cmake/TinyIMXGroupService.cmake
+M	cmake/TinyIMXRpcProto.cmake
+M	common/db/schema.sql
+M	common/protocol/Packet.cpp
+M	common/protocol/Packet.h
+A	db/migrations/006_create_group_domain.sql
+M	examples/gateway_demo.cpp
+A	examples/gateway_group_client_demo.cpp
+A	examples/group_service_demo.cpp
+M	examples/unread_projector_demo.cpp
+M	gateway/GatewayServer.cpp
+M	gateway/GatewayServer.h
+A	proto/tinyimx/group/v1/group_service.proto
+A	scripts/run_m17_a1_group_domain_acceptance.sh
+A	scripts/run_m17_a2_membership_acceptance.sh
+A	scripts/run_m17_a3_gateway_group_vertical_acceptance.sh
+A	scripts/run_m17_a_final_acceptance.sh
+M	services/eventing/rocketmq/RocketMQSimpleConsumer.cpp
+M	services/eventing/rocketmq/RocketMQSimpleConsumer.h
+A	services/group/application/GroupApplicationService.cpp
+A	services/group/application/GroupApplicationService.h
+A	services/group/application/GroupApplicationTypes.h
+A	services/group/application/GroupEventFactory.cpp
+A	services/group/application/GroupEventFactory.h
+A	services/group/application/GroupPermissionPolicy.cpp
+A	services/group/application/GroupPermissionPolicy.h
+A	services/group/application/GroupRepositoryPort.h
+A	services/group/repository/GroupMembershipRepositoryAdapter.cpp
+A	services/group/repository/GroupRepositoryAdapter.cpp
+A	services/group/repository/GroupRepositoryAdapter.h
+A	services/group/server/GroupServiceServer.cpp
+A	services/group/server/GroupServiceServer.h
+A	services/group/service/GroupServiceImpl.cpp
+A	services/group/service/GroupServiceImpl.h
+M	services/projection/unread/UnreadProjector.h
+M	services/registry/zookeeper/ZooKeeperServiceDiscovery.cpp
+A	services/repository/GroupRepository.cpp
+A	services/repository/GroupRepository.h
+A	services/rpc/GroupRpcClient.cpp
+A	services/rpc/GroupRpcClient.h
+A	services/rpc/GroupRpcTypes.h
+M	services/rpc/ServiceEndpointProvider.h
+M	services/rpc/StaticServiceEndpointProvider.cpp
+M	services/rpc/StaticServiceEndpointProvider.h
+M	services/rpc/ZooKeeperServiceEndpointProvider.cpp
+M	services/rpc/ZooKeeperServiceEndpointProvider.h
+A	tests/eventing/m17_a1_rocketmq_subscription_contract_test.cpp
+A	tests/group/group_application_service_test.cpp
+A	tests/group/group_membership_repository_integration_test.cpp
+A	tests/group/group_permission_policy_test.cpp
+A	tests/group/group_repository_integration_test.cpp
+A	tests/group/group_service_integration_test.cpp
+A	tests/protocol/group_control_protocol_test.cpp
+M	tests/protocol/protocol_test_main.cpp
+M	tests/registry/zookeeper_service_discovery_integration_test.cpp
+M	tests/reliability/m16_fault_recovery_runtime_test.cpp
+A	tests/rpc/group_rpc_client_test.cpp
+M	tests/rpc/rpc_contract_test.cpp
+M	tests/rpc/rpc_multi_target_cache_test.cpp
+
+========== STAGED DIFF STAT ==========
+ CMakeLists.txt                                     |   27 +
+ M17_A_CHANGED_FILES.txt                            |   64 +
+ M17_A_CLOSEOUT_MANIFEST.md                         |   49 +
+ M17_A_FINAL_ACCEPTANCE.md                          |   75 ++
+ M17_A_FINAL_GIT_PRECHECK.txt                       |  165 +++
+ cmake/TinyIMXGroupService.cmake                    |  142 ++
+ cmake/TinyIMXRpcProto.cmake                        |    6 +-
+ common/db/schema.sql                               |  172 +++
+ common/protocol/Packet.cpp                         |   54 +
+ common/protocol/Packet.h                           |   28 +
+ db/migrations/006_create_group_domain.sql          |  173 +++
+ examples/gateway_demo.cpp                          |   41 +-
+ examples/gateway_group_client_demo.cpp             |  228 ++++
+ examples/group_service_demo.cpp                    |  212 +++
+ examples/unread_projector_demo.cpp                 |    2 +
+ gateway/GatewayServer.cpp                          |  556 ++++++++
+ gateway/GatewayServer.h                            |   12 +
+ proto/tinyimx/group/v1/group_service.proto         |  234 ++++
+ scripts/run_m17_a1_group_domain_acceptance.sh      |  129 ++
+ scripts/run_m17_a2_membership_acceptance.sh        |  134 ++
+ ...run_m17_a3_gateway_group_vertical_acceptance.sh |  121 ++
+ scripts/run_m17_a_final_acceptance.sh              |  334 +++++
+ .../eventing/rocketmq/RocketMQSimpleConsumer.cpp   |    6 +-
+ .../eventing/rocketmq/RocketMQSimpleConsumer.h     |    3 +
+ .../group/application/GroupApplicationService.cpp  |  377 ++++++
+ .../group/application/GroupApplicationService.h    |   48 +
+ services/group/application/GroupApplicationTypes.h |  255 ++++
+ services/group/application/GroupEventFactory.cpp   |  190 +++
+ services/group/application/GroupEventFactory.h     |   57 +
+ .../group/application/GroupPermissionPolicy.cpp    |   78 ++
+ services/group/application/GroupPermissionPolicy.h |   22 +
+ services/group/application/GroupRepositoryPort.h   |   65 +
+ .../GroupMembershipRepositoryAdapter.cpp           | 1391 ++++++++++++++++++++
+ .../group/repository/GroupRepositoryAdapter.cpp    |  852 ++++++++++++
+ services/group/repository/GroupRepositoryAdapter.h |   81 ++
+ services/group/server/GroupServiceServer.cpp       |   94 ++
+ services/group/server/GroupServiceServer.h         |   39 +
+ services/group/service/GroupServiceImpl.cpp        |  247 ++++
+ services/group/service/GroupServiceImpl.h          |   32 +
+ services/projection/unread/UnreadProjector.h       |    6 +
+ .../zookeeper/ZooKeeperServiceDiscovery.cpp        |    5 +-
+ services/repository/GroupRepository.cpp            |  945 +++++++++++++
+ services/repository/GroupRepository.h              |  294 +++++
+ services/rpc/GroupRpcClient.cpp                    |  251 ++++
+ services/rpc/GroupRpcClient.h                      |   63 +
+ services/rpc/GroupRpcTypes.h                       |  200 +++
+ services/rpc/ServiceEndpointProvider.h             |    1 +
+ services/rpc/StaticServiceEndpointProvider.cpp     |   23 +-
+ services/rpc/StaticServiceEndpointProvider.h       |   10 +
+ services/rpc/ZooKeeperServiceEndpointProvider.cpp  |    4 +
+ services/rpc/ZooKeeperServiceEndpointProvider.h    |    2 +-
+ .../m17_a1_rocketmq_subscription_contract_test.cpp |   42 +
+ tests/group/group_application_service_test.cpp     |  176 +++
+ ...roup_membership_repository_integration_test.cpp |  210 +++
+ tests/group/group_permission_policy_test.cpp       |   49 +
+ tests/group/group_repository_integration_test.cpp  |  319 +++++
+ tests/group/group_service_integration_test.cpp     |  174 +++
+ tests/protocol/group_control_protocol_test.cpp     |   36 +
+ tests/protocol/protocol_test_main.cpp              |    2 +
+ ...ookeeper_service_discovery_integration_test.cpp |   58 +-
+ .../m16_fault_recovery_runtime_test.cpp            |    2 +
+ tests/rpc/group_rpc_client_test.cpp                |   75 ++
+ tests/rpc/rpc_contract_test.cpp                    |   98 ++
+ tests/rpc/rpc_multi_target_cache_test.cpp          |   13 +-
+ 64 files changed, 9834 insertions(+), 19 deletions(-)
+
+========== FINAL CHANGED FILE INVENTORY ==========
+CMakeLists.txt
+cmake/TinyIMXGroupService.cmake
+cmake/TinyIMXRpcProto.cmake
+common/db/schema.sql
+common/protocol/Packet.cpp
+common/protocol/Packet.h
+db/migrations/006_create_group_domain.sql
+examples/gateway_demo.cpp
+examples/gateway_group_client_demo.cpp
+examples/group_service_demo.cpp
+examples/unread_projector_demo.cpp
+gateway/GatewayServer.cpp
+gateway/GatewayServer.h
+M17_A_CHANGED_FILES.txt
+M17_A_CLOSEOUT_MANIFEST.md
+M17_A_FINAL_ACCEPTANCE.md
+M17_A_FINAL_GIT_PRECHECK.txt
+proto/tinyimx/group/v1/group_service.proto
+scripts/run_m17_a1_group_domain_acceptance.sh
+scripts/run_m17_a2_membership_acceptance.sh
+scripts/run_m17_a3_gateway_group_vertical_acceptance.sh
+scripts/run_m17_a_final_acceptance.sh
+services/eventing/rocketmq/RocketMQSimpleConsumer.cpp
+services/eventing/rocketmq/RocketMQSimpleConsumer.h
+services/group/application/GroupApplicationService.cpp
+services/group/application/GroupApplicationService.h
+services/group/application/GroupApplicationTypes.h
+services/group/application/GroupEventFactory.cpp
+services/group/application/GroupEventFactory.h
+services/group/application/GroupPermissionPolicy.cpp
+services/group/application/GroupPermissionPolicy.h
+services/group/application/GroupRepositoryPort.h
+services/group/repository/GroupMembershipRepositoryAdapter.cpp
+services/group/repository/GroupRepositoryAdapter.cpp
+services/group/repository/GroupRepositoryAdapter.h
+services/group/server/GroupServiceServer.cpp
+services/group/server/GroupServiceServer.h
+services/group/service/GroupServiceImpl.cpp
+services/group/service/GroupServiceImpl.h
+services/projection/unread/UnreadProjector.h
+services/registry/zookeeper/ZooKeeperServiceDiscovery.cpp
+services/repository/GroupRepository.cpp
+services/repository/GroupRepository.h
+services/rpc/GroupRpcClient.cpp
+services/rpc/GroupRpcClient.h
+services/rpc/GroupRpcTypes.h
+services/rpc/ServiceEndpointProvider.h
+services/rpc/StaticServiceEndpointProvider.cpp
+services/rpc/StaticServiceEndpointProvider.h
+services/rpc/ZooKeeperServiceEndpointProvider.cpp
+services/rpc/ZooKeeperServiceEndpointProvider.h
+tests/eventing/m17_a1_rocketmq_subscription_contract_test.cpp
+tests/group/group_application_service_test.cpp
+tests/group/group_membership_repository_integration_test.cpp
+tests/group/group_permission_policy_test.cpp
+tests/group/group_repository_integration_test.cpp
+tests/group/group_service_integration_test.cpp
+tests/protocol/group_control_protocol_test.cpp
+tests/protocol/protocol_test_main.cpp
+tests/registry/zookeeper_service_discovery_integration_test.cpp
+tests/reliability/m16_fault_recovery_runtime_test.cpp
+tests/rpc/group_rpc_client_test.cpp
+tests/rpc/rpc_contract_test.cpp
+tests/rpc/rpc_multi_target_cache_test.cpp
+
+========== FINAL ACCEPTANCE ==========
+M17-A FINAL ACCEPTANCE
+status=PASS
+timestamp=20260916-063804
+branch=feature/m17-group-domain-foundation-v1
+pre_freeze_head=789a9cfde9dcb735b15773fb0e9da8f44c5f3e7e
+fresh_e2e_group_id=47
+
+A1_group_domain=PASS
+A2_durable_membership=PASS
+A3_gateway_vertical=PASS
+zookeeper_group_discovery=PASS
+ordinary_regression=PASS
+fresh_tcp_e2e=PASS
+actor_spoof_protection=PASS
+durable_retry_reused=PASS
+permission_negative_case=PASS
+ownership_lifecycle=PASS

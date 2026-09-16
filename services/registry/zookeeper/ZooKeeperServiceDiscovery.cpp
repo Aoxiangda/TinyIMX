@@ -14,10 +14,11 @@ namespace tinyimx::registry::zookeeper {
 namespace {
 
 constexpr auto kControlTick = std::chrono::milliseconds(200);
-constexpr std::array<const char*, 3> kKnownServices = {
+constexpr std::array<const char*, 4> kKnownServices = {
     "user",
     "social",
     "message",
+    "group",
 };
 
 std::string NormalizeRoot(std::string root) {
@@ -97,7 +98,7 @@ bool ZooKeeperServiceDiscovery::Start(
 
     // Start() always establishes a fresh authoritative initial view.  A prior
     // Stop()/Start() cycle must not become "ready" from snapshots left over
-    // from the previous run before all three service paths are refreshed.
+    // from the previous run before all known service paths are refreshed.
     {
         std::unique_lock<std::shared_mutex> lock(snapshot_mutex_);
         for (const char* service : kKnownServices) {

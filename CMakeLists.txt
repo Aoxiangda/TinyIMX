@@ -103,6 +103,7 @@ add_library(tinyimx_rpc_client
     services/rpc/SocialRpcClient.cpp
     services/rpc/UserRpcClient.cpp
     services/rpc/MessageRpcClient.cpp
+    services/rpc/GroupRpcClient.cpp
 )
 
 target_include_directories(tinyimx_rpc_client PUBLIC
@@ -130,6 +131,14 @@ add_test(
     NAME social_rpc_client_tests
     COMMAND social_rpc_client_tests
 )
+
+add_executable(group_rpc_client_tests
+    tests/rpc/group_rpc_client_test.cpp
+)
+
+target_compile_features(group_rpc_client_tests PRIVATE cxx_std_20)
+target_link_libraries(group_rpc_client_tests PRIVATE tinyimx_rpc_client)
+add_test(NAME group_rpc_client_tests COMMAND group_rpc_client_tests)
 
 
 add_executable(logger_demo
@@ -376,6 +385,7 @@ add_executable(protocol_tests
     tests/protocol/protocol_codec_test.cpp
     tests/protocol/gateway_peer_protocol_test.cpp
     tests/protocol/client_chat_protocol_test.cpp
+    tests/protocol/group_control_protocol_test.cpp
 )
 
 target_link_libraries(protocol_tests PRIVATE
@@ -635,6 +645,7 @@ add_library(tinyimx_repository
     services/repository/MessageRepository.cpp
     services/repository/FriendRepository.cpp
     services/repository/FriendRequestRepository.cpp
+    services/repository/GroupRepository.cpp
 )
 
 target_include_directories(tinyimx_repository PUBLIC
@@ -1031,6 +1042,16 @@ target_link_libraries(gateway_friend_list_client_demo PRIVATE
     nlohmann_json::nlohmann_json
 )
 
+add_executable(gateway_group_client_demo
+    examples/gateway_group_client_demo.cpp
+)
+
+target_link_libraries(gateway_group_client_demo PRIVATE
+    tinyimx_net
+    tinyimx_protocol
+    nlohmann_json::nlohmann_json
+)
+
 add_executable(gateway_friend_request_client_demo
     examples/gateway_friend_request_client_demo.cpp
 )
@@ -1325,6 +1346,12 @@ include(
 # M14-C1: MessageService durable read foundation.
 include(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXMessageService.cmake"
+)
+
+# M17-A1/A2: Group domain foundation plus durable membership, roles,
+# mute/ownership transitions, transactional outbox, and idempotent mutations.
+include(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXGroupService.cmake"
 )
 
 # M16-B: isolated RocketMQ producer/consumer transport executables.

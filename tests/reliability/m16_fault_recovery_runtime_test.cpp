@@ -85,6 +85,8 @@ ConsumerOptions(const Config& config) {
         config.RocketMQ().message_topic;
     options.consumer_group =
         config.UnreadProjection().consumer_group;
+    options.filter_expression =
+        tinyimx::projection::unread::kUnreadProjectionTagFilter;
     options.request_timeout_ms =
         config.RocketMQ().request_timeout_ms;
     options.await_duration_ms =

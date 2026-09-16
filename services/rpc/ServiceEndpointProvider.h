@@ -10,6 +10,7 @@ enum class ServiceKind : std::uint8_t {
     kSocial = 0,
     kUser,
     kMessage,
+    kGroup,
 };
 
 struct ServiceEndpoint {

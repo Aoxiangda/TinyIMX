@@ -1,4 +1,5 @@
 #include "services/rpc/MessageRpcClient.h"
+#include "services/rpc/GroupRpcClient.h"
 #include "services/rpc/SocialRpcClient.h"
 #include "services/rpc/UserRpcClient.h"
 
@@ -15,6 +16,7 @@
 namespace {
 
 using tinyimx::rpc::MessageRpcClient;
+using tinyimx::rpc::GroupRpcClient;
 using tinyimx::rpc::ServiceEndpoint;
 using tinyimx::rpc::ServiceEndpointProvider;
 using tinyimx::rpc::ServiceKind;
@@ -82,6 +84,13 @@ void Call(MessageRpcClient* client) {
     (void)client->CountPending(request, Options());
 }
 
+void Call(GroupRpcClient* client) {
+    tinyimx::rpc::GetGroupRpcRequest request;
+    request.actor_user_id = 1;
+    request.group_id = 1;
+    (void)client->GetGroup(request, Options());
+}
+
 template <typename Client>
 bool TestReuse(const std::string& name) {
     auto provider = std::make_shared<SequenceEndpointProvider>(
@@ -134,9 +143,11 @@ int main() {
         TestReuse<UserRpcClient>("UserRpcClient") &&
         TestReuse<SocialRpcClient>("SocialRpcClient") &&
         TestReuse<MessageRpcClient>("MessageRpcClient") &&
+        TestReuse<GroupRpcClient>("GroupRpcClient") &&
         TestBounded<UserRpcClient>("UserRpcClient") &&
         TestBounded<SocialRpcClient>("SocialRpcClient") &&
-        TestBounded<MessageRpcClient>("MessageRpcClient");
+        TestBounded<MessageRpcClient>("MessageRpcClient") &&
+        TestBounded<GroupRpcClient>("GroupRpcClient");
     std::cout
         << "================================================================="
         << '\n';

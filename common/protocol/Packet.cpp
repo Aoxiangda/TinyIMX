@@ -68,6 +68,33 @@ std::string MessageTypeToString(MessageType type) {
         case MessageType::kUserProfileResponse:
             return "user_profile_response";
 
+        case MessageType::kCreateGroupRequest: return "create_group_request";
+        case MessageType::kCreateGroupResponse: return "create_group_response";
+        case MessageType::kGetGroupRequest: return "get_group_request";
+        case MessageType::kGetGroupResponse: return "get_group_response";
+        case MessageType::kUpdateGroupRequest: return "update_group_request";
+        case MessageType::kUpdateGroupResponse: return "update_group_response";
+        case MessageType::kDisbandGroupRequest: return "disband_group_request";
+        case MessageType::kDisbandGroupResponse: return "disband_group_response";
+        case MessageType::kJoinGroupRequest: return "join_group_request";
+        case MessageType::kJoinGroupResponse: return "join_group_response";
+        case MessageType::kLeaveGroupRequest: return "leave_group_request";
+        case MessageType::kLeaveGroupResponse: return "leave_group_response";
+        case MessageType::kInviteGroupMemberRequest: return "invite_group_member_request";
+        case MessageType::kInviteGroupMemberResponse: return "invite_group_member_response";
+        case MessageType::kKickGroupMemberRequest: return "kick_group_member_request";
+        case MessageType::kKickGroupMemberResponse: return "kick_group_member_response";
+        case MessageType::kSetGroupMemberRoleRequest: return "set_group_member_role_request";
+        case MessageType::kSetGroupMemberRoleResponse: return "set_group_member_role_response";
+        case MessageType::kSetGroupMemberMuteRequest: return "set_group_member_mute_request";
+        case MessageType::kSetGroupMemberMuteResponse: return "set_group_member_mute_response";
+        case MessageType::kTransferGroupOwnershipRequest: return "transfer_group_ownership_request";
+        case MessageType::kTransferGroupOwnershipResponse: return "transfer_group_ownership_response";
+        case MessageType::kListGroupMembersRequest: return "list_group_members_request";
+        case MessageType::kListGroupMembersResponse: return "list_group_members_response";
+        case MessageType::kListMyGroupsRequest: return "list_my_groups_request";
+        case MessageType::kListMyGroupsResponse: return "list_my_groups_response";
+
         case MessageType::kGatewayForwardChatRequest:
             return "gateway_forward_chat_request";
         case MessageType::kGatewayForwardChatResponse:
@@ -120,6 +147,33 @@ bool IsKnownMessageType(MessageType type) {
 
         case MessageType::kUserProfileRequest:
         case MessageType::kUserProfileResponse:
+
+        case MessageType::kCreateGroupRequest:
+        case MessageType::kCreateGroupResponse:
+        case MessageType::kGetGroupRequest:
+        case MessageType::kGetGroupResponse:
+        case MessageType::kUpdateGroupRequest:
+        case MessageType::kUpdateGroupResponse:
+        case MessageType::kDisbandGroupRequest:
+        case MessageType::kDisbandGroupResponse:
+        case MessageType::kJoinGroupRequest:
+        case MessageType::kJoinGroupResponse:
+        case MessageType::kLeaveGroupRequest:
+        case MessageType::kLeaveGroupResponse:
+        case MessageType::kInviteGroupMemberRequest:
+        case MessageType::kInviteGroupMemberResponse:
+        case MessageType::kKickGroupMemberRequest:
+        case MessageType::kKickGroupMemberResponse:
+        case MessageType::kSetGroupMemberRoleRequest:
+        case MessageType::kSetGroupMemberRoleResponse:
+        case MessageType::kSetGroupMemberMuteRequest:
+        case MessageType::kSetGroupMemberMuteResponse:
+        case MessageType::kTransferGroupOwnershipRequest:
+        case MessageType::kTransferGroupOwnershipResponse:
+        case MessageType::kListGroupMembersRequest:
+        case MessageType::kListGroupMembersResponse:
+        case MessageType::kListMyGroupsRequest:
+        case MessageType::kListMyGroupsResponse:
 
         case MessageType::kGatewayForwardChatRequest:
         case MessageType::kGatewayForwardChatResponse:

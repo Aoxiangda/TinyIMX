@@ -17,6 +17,12 @@ class UnreadCountCache;
 
 namespace tinyimx::projection::unread {
 
+// The unread projection owns only private-message unread events on the shared
+// M16 business-event topic. Keep this expression identical for every member
+// of the unread-projector consumer group.
+inline constexpr const char* kUnreadProjectionTagFilter =
+    "message.created.v1||dialog.read_advanced.v1";
+
 enum class UnreadProjectorMode {
     kShadow = 0,
     kWriter,

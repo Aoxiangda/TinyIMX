@@ -10,6 +10,8 @@
 #include "tinyimx/user/v1/user_service.pb.h"
 #include "tinyimx/message/v1/message_service.grpc.pb.h"
 #include "tinyimx/message/v1/message_service.pb.h"
+#include "tinyimx/group/v1/group_service.grpc.pb.h"
+#include "tinyimx/group/v1/group_service.pb.h"
 
 namespace {
 
@@ -368,6 +370,102 @@ int main() {
   }
 
   std::cout << "==============================================\n";
+
+
+  // M17-A1 GroupService contract gate. The complete M17-A service surface is
+  // frozen now; A1 implements lifecycle RPCs and A2 fills membership RPCs.
+  using tinyimx::group::v1::CreateGroupRequest;
+  using tinyimx::group::v1::GroupRecord;
+  using tinyimx::group::v1::GroupService;
+  using tinyimx::group::v1::UpdateGroupRequest;
+
+  static_assert(std::is_class_v<GroupService>);
+  static_assert(std::is_class_v<GroupService::StubInterface>);
+
+  CreateGroupRequest group_create_request;
+  *group_create_request.mutable_meta() = meta;
+  group_create_request.set_actor_user_id(10001);
+  group_create_request.set_client_operation_id("m17-a1-create-1");
+  group_create_request.set_name("backend-team");
+  group_create_request.set_join_policy(
+      tinyimx::group::v1::GROUP_JOIN_POLICY_INVITE_ONLY);
+  group_create_request.set_max_members(500);
+
+  const auto* group_create_descriptor = CreateGroupRequest::descriptor();
+  Expect(FindField(group_create_descriptor, "meta") != nullptr &&
+             FindField(group_create_descriptor, "meta")->number() == 1,
+         "CreateGroupRequest.meta field number frozen at 1");
+  Expect(FindField(group_create_descriptor, "actor_user_id") != nullptr &&
+             FindField(group_create_descriptor, "actor_user_id")->number() == 2,
+         "CreateGroupRequest.actor_user_id field number frozen at 2");
+  Expect(FindField(group_create_descriptor, "client_operation_id") != nullptr &&
+             FindField(group_create_descriptor, "client_operation_id")->number() == 3,
+         "CreateGroupRequest.client_operation_id field number frozen at 3");
+
+  GroupRecord group_record;
+  group_record.set_group_id(9001);
+  group_record.set_owner_user_id(10001);
+  group_record.set_status(tinyimx::group::v1::GROUP_STATUS_ACTIVE);
+  group_record.set_join_policy(tinyimx::group::v1::GROUP_JOIN_POLICY_INVITE_ONLY);
+  group_record.set_version(1);
+  group_record.set_member_version(1);
+  Expect(group_record.group_id() == 9001 && group_record.version() == 1,
+         "GroupRecord durable identity/version typed fields work");
+
+  UpdateGroupRequest group_update_request;
+  group_update_request.set_actor_user_id(10001);
+  group_update_request.set_client_operation_id("m17-a1-update-1");
+  group_update_request.set_group_id(9001);
+  group_update_request.set_expected_version(1);
+  group_update_request.set_name("platform-team");
+  Expect(group_update_request.has_name(),
+         "UpdateGroupRequest proto3 optional presence works");
+  const auto* group_update_descriptor = UpdateGroupRequest::descriptor();
+  Expect(FindField(group_update_descriptor, "expected_version") != nullptr &&
+             FindField(group_update_descriptor, "expected_version")->number() == 5,
+         "UpdateGroupRequest.expected_version field number frozen at 5");
+
+
+  const auto* group_service =
+      google::protobuf::DescriptorPool::generated_pool()->FindServiceByName(
+          "tinyimx.group.v1.GroupService");
+  Expect(group_service != nullptr && group_service->method_count() == 14,
+         "GroupService 14-method M17-A contract frozen");
+  static const char* kExpectedGroupMethods[] = {
+      "CreateGroup",
+      "GetGroup",
+      "UpdateGroup",
+      "DisbandGroup",
+      "JoinGroup",
+      "LeaveGroup",
+      "InviteMember",
+      "KickMember",
+      "SetMemberRole",
+      "SetMemberMute",
+      "TransferOwnership",
+      "ListGroupMembers",
+      "ListMyGroups",
+      "CheckGroupSendPermission",
+  };
+  if (group_service != nullptr) {
+    for (int i = 0; i < group_service->method_count() && i < 14; ++i) {
+      const std::string label =
+          std::string("GroupService method frozen: ") + kExpectedGroupMethods[i];
+      Expect(group_service->method(i)->name() == kExpectedGroupMethods[i],
+             label.c_str());
+    }
+  }
+
+  const auto* set_role_descriptor =
+      tinyimx::group::v1::SetMemberRoleRequest::descriptor();
+  Expect(FindField(set_role_descriptor, "role") != nullptr &&
+             FindField(set_role_descriptor, "role")->number() == 6,
+         "SetMemberRoleRequest.role field number frozen at 6");
+  const auto* check_send_descriptor =
+      tinyimx::group::v1::CheckGroupSendPermissionResponse::descriptor();
+  Expect(FindField(check_send_descriptor, "member_version") != nullptr &&
+             FindField(check_send_descriptor, "member_version")->number() == 4,
+         "CheckGroupSendPermissionResponse.member_version frozen at 4");
   std::cout << "total_failed=" << g_failed << '\n';
 
   return g_failed == 0 ? 0 : 1;

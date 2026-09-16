@@ -28,6 +28,15 @@ public:
         std::string message_target
     );
 
+    // M17-A3 constructor: adds GroupService while preserving all older
+    // call sites and tests.
+    StaticServiceEndpointProvider(
+        std::string social_target,
+        std::string user_target,
+        std::string message_target,
+        std::string group_target
+    );
+
     [[nodiscard]] std::optional<ServiceEndpoint> Resolve(
         ServiceKind service
     ) const override;
@@ -36,6 +45,7 @@ private:
     const std::string social_target_;
     const std::string user_target_;
     const std::string message_target_;
+    const std::string group_target_;
 };
 
 }  // namespace tinyimx::rpc

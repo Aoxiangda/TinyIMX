@@ -1,0 +1,234 @@
+syntax = "proto3";
+
+package tinyimx.group.v1;
+
+import "tinyimx/common/v1/common.proto";
+
+// M17-A freezes the Group domain boundary before Gateway integration. The
+// A1 wires Create/Get/Update/Disband end-to-end; A2 implements the
+// durable membership, role/mute, ownership, pagination and send-permission RPCs.
+service GroupService {
+    rpc CreateGroup(CreateGroupRequest) returns (GroupMutationResponse);
+    rpc GetGroup(GetGroupRequest) returns (GetGroupResponse);
+    rpc UpdateGroup(UpdateGroupRequest) returns (GroupMutationResponse);
+    rpc DisbandGroup(DisbandGroupRequest) returns (GroupMutationResponse);
+
+    rpc JoinGroup(JoinGroupRequest) returns (GroupMutationResponse);
+    rpc LeaveGroup(LeaveGroupRequest) returns (GroupMutationResponse);
+    rpc InviteMember(InviteMemberRequest) returns (GroupMutationResponse);
+    rpc KickMember(KickMemberRequest) returns (GroupMutationResponse);
+    rpc SetMemberRole(SetMemberRoleRequest) returns (GroupMutationResponse);
+    rpc SetMemberMute(SetMemberMuteRequest) returns (GroupMutationResponse);
+    rpc TransferOwnership(TransferOwnershipRequest) returns (GroupMutationResponse);
+    rpc ListGroupMembers(ListGroupMembersRequest) returns (ListGroupMembersResponse);
+    rpc ListMyGroups(ListMyGroupsRequest) returns (ListMyGroupsResponse);
+    rpc CheckGroupSendPermission(CheckGroupSendPermissionRequest)
+        returns (CheckGroupSendPermissionResponse);
+}
+
+enum GroupStatus {
+    GROUP_STATUS_UNSPECIFIED = 0;
+    GROUP_STATUS_ACTIVE = 1;
+    GROUP_STATUS_DISBANDED = 2;
+}
+
+enum GroupJoinPolicy {
+    GROUP_JOIN_POLICY_UNSPECIFIED = 0;
+    GROUP_JOIN_POLICY_INVITE_ONLY = 1;
+    GROUP_JOIN_POLICY_OPEN = 2;
+}
+
+enum GroupRole {
+    GROUP_ROLE_UNSPECIFIED = 0;
+    GROUP_ROLE_OWNER = 1;
+    GROUP_ROLE_ADMIN = 2;
+    GROUP_ROLE_MEMBER = 3;
+}
+
+enum GroupMemberStatus {
+    GROUP_MEMBER_STATUS_UNSPECIFIED = 0;
+    GROUP_MEMBER_STATUS_ACTIVE = 1;
+    GROUP_MEMBER_STATUS_LEFT = 2;
+    GROUP_MEMBER_STATUS_KICKED = 3;
+}
+
+enum GroupMutationResult {
+    GROUP_MUTATION_RESULT_UNSPECIFIED = 0;
+    GROUP_MUTATION_RESULT_APPLIED = 1;
+    GROUP_MUTATION_RESULT_REUSED = 2;
+    GROUP_MUTATION_RESULT_IDEMPOTENCY_CONFLICT = 3;
+}
+
+message GroupRecord {
+    uint64 group_id = 1;
+    string name = 2;
+    string description = 3;
+    string avatar_url = 4;
+    uint64 owner_user_id = 5;
+    GroupStatus status = 6;
+    GroupJoinPolicy join_policy = 7;
+    uint32 max_members = 8;
+    uint64 version = 9;
+    uint64 member_version = 10;
+    string created_at = 11;
+    string updated_at = 12;
+    string disbanded_at = 13;
+    uint64 disbanded_by_user_id = 14;
+}
+
+message GroupMemberRecord {
+    uint64 group_id = 1;
+    uint64 user_id = 2;
+    GroupRole role = 3;
+    GroupMemberStatus status = 4;
+    uint64 membership_epoch = 5;
+    string muted_until = 6;
+    string joined_at = 7;
+    string left_at = 8;
+    string updated_at = 9;
+}
+
+message CreateGroupRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    string client_operation_id = 3;
+    string name = 4;
+    string description = 5;
+    string avatar_url = 6;
+    GroupJoinPolicy join_policy = 7;
+    uint32 max_members = 8;
+}
+
+message GetGroupRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    uint64 group_id = 3;
+}
+
+message UpdateGroupRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    string client_operation_id = 3;
+    uint64 group_id = 4;
+    uint64 expected_version = 5;
+
+    optional string name = 6;
+    optional string description = 7;
+    optional string avatar_url = 8;
+    optional GroupJoinPolicy join_policy = 9;
+}
+
+message DisbandGroupRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    string client_operation_id = 3;
+    uint64 group_id = 4;
+    uint64 expected_version = 5;
+}
+
+message GroupMutationResponse {
+    GroupMutationResult result = 1;
+    GroupRecord group = 2;
+    string message = 3;
+}
+
+message GetGroupResponse {
+    GroupRecord group = 1;
+}
+
+// M17-A2 contract. actor_user_id remains an authenticated identity injected
+// by Gateway; Internet clients must never be authoritative for this field.
+message JoinGroupRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    string client_operation_id = 3;
+    uint64 group_id = 4;
+}
+
+message LeaveGroupRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    string client_operation_id = 3;
+    uint64 group_id = 4;
+}
+
+message InviteMemberRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    string client_operation_id = 3;
+    uint64 group_id = 4;
+    uint64 target_user_id = 5;
+}
+
+message KickMemberRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    string client_operation_id = 3;
+    uint64 group_id = 4;
+    uint64 target_user_id = 5;
+}
+
+message SetMemberRoleRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    string client_operation_id = 3;
+    uint64 group_id = 4;
+    uint64 target_user_id = 5;
+    GroupRole role = 6;
+}
+
+message SetMemberMuteRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    string client_operation_id = 3;
+    uint64 group_id = 4;
+    uint64 target_user_id = 5;
+    string muted_until = 6;
+}
+
+message TransferOwnershipRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    string client_operation_id = 3;
+    uint64 group_id = 4;
+    uint64 target_user_id = 5;
+}
+
+message ListGroupMembersRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    uint64 group_id = 3;
+    uint64 after_user_id = 4;
+    uint32 limit = 5;
+}
+
+message ListGroupMembersResponse {
+    repeated GroupMemberRecord members = 1;
+    bool has_more = 2;
+}
+
+message ListMyGroupsRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    uint64 after_group_id = 3;
+    uint32 limit = 4;
+}
+
+message ListMyGroupsResponse {
+    repeated GroupRecord groups = 1;
+    bool has_more = 2;
+}
+
+message CheckGroupSendPermissionRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    uint64 group_id = 3;
+}
+
+message CheckGroupSendPermissionResponse {
+    bool allowed = 1;
+    GroupRole role = 2;
+    uint64 membership_epoch = 3;
+    uint64 member_version = 4;
+    string message = 5;
+}

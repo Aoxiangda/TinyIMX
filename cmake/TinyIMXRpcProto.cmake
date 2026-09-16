@@ -31,12 +31,14 @@ set(TINYIMX_RPC_PROTO_FILES
     "${TINYIMX_PROTO_ROOT}/tinyimx/common/v1/common.proto"
     "${TINYIMX_PROTO_ROOT}/tinyimx/social/v1/social_service.proto"
     "${TINYIMX_PROTO_ROOT}/tinyimx/user/v1/user_service.proto"
-    "${TINYIMX_PROTO_ROOT}/tinyimx/message/v1/message_service.proto")
+    "${TINYIMX_PROTO_ROOT}/tinyimx/message/v1/message_service.proto"
+    "${TINYIMX_PROTO_ROOT}/tinyimx/group/v1/group_service.proto")
 
 set(TINYIMX_RPC_GRPC_PROTO_FILES
     "${TINYIMX_PROTO_ROOT}/tinyimx/social/v1/social_service.proto"
     "${TINYIMX_PROTO_ROOT}/tinyimx/user/v1/user_service.proto"
-    "${TINYIMX_PROTO_ROOT}/tinyimx/message/v1/message_service.proto")
+    "${TINYIMX_PROTO_ROOT}/tinyimx/message/v1/message_service.proto"
+    "${TINYIMX_PROTO_ROOT}/tinyimx/group/v1/group_service.proto")
 
 foreach(proto_file IN LISTS TINYIMX_RPC_PROTO_FILES)
   if(NOT EXISTS "${proto_file}")

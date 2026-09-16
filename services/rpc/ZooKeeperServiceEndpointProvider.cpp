@@ -89,6 +89,8 @@ ZooKeeperServiceEndpointProvider::ServiceIndex(
             return 1;
         case ServiceKind::kMessage:
             return 2;
+        case ServiceKind::kGroup:
+            return 3;
         default:
             return std::nullopt;
     }
@@ -104,6 +106,8 @@ const char* ZooKeeperServiceEndpointProvider::ServiceName(
             return "user";
         case ServiceKind::kMessage:
             return "message";
+        case ServiceKind::kGroup:
+            return "group";
         default:
             return nullptr;
     }

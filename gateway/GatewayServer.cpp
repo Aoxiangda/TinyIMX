@@ -5,6 +5,7 @@
 #include "gateway/business/BusinessExecutor.h"
 #include "services/rpc/UserRpcClient.h"
 #include "services/rpc/MessageRpcClient.h"
+#include "services/rpc/GroupRpcClient.h"
 #include "services/repository/FriendRequestRepository.h"
 #include "services/rpc/SocialRpcClient.h"
 #include "services/cache/OnlineStatusCache.h"
@@ -870,6 +871,398 @@ const char* SocialRpcErrorReason(
 }
 
 
+
+
+const char* GroupRpcErrorReason(
+    tinyimx::rpc::RpcErrorCode code
+) noexcept {
+    using tinyimx::rpc::RpcErrorCode;
+    switch (code) {
+        case RpcErrorCode::kInvalidArgument: return "invalid_group_request";
+        case RpcErrorCode::kNotFound: return "group_not_found";
+        case RpcErrorCode::kAlreadyExists: return "group_member_already_exists";
+        case RpcErrorCode::kPermissionDenied: return "group_permission_denied";
+        case RpcErrorCode::kResourceExhausted: return "group_capacity_exceeded";
+        case RpcErrorCode::kFailedPrecondition: return "group_failed_precondition";
+        case RpcErrorCode::kAborted: return "group_version_conflict";
+        case RpcErrorCode::kDeadlineExceeded: return "group_service_deadline_exceeded";
+        case RpcErrorCode::kUnavailable: return "group_service_unavailable";
+        case RpcErrorCode::kDataLoss: return "group_service_invalid_response";
+        case RpcErrorCode::kCancelled: return "group_request_cancelled";
+        case RpcErrorCode::kUnauthenticated: return "not_logged_in";
+        default: return "group_service_error";
+    }
+}
+
+const char* GroupMutationOutcomeToString(
+    tinyimx::rpc::GroupRpcMutationOutcome value
+) noexcept {
+    using tinyimx::rpc::GroupRpcMutationOutcome;
+    switch (value) {
+        case GroupRpcMutationOutcome::kApplied: return "applied";
+        case GroupRpcMutationOutcome::kReused: return "reused";
+        case GroupRpcMutationOutcome::kIdempotencyConflict:
+            return "idempotency_conflict";
+    }
+    return "unknown";
+}
+
+const char* GroupStatusToString(tinyimx::rpc::GroupRpcStatus value) noexcept {
+    switch (value) {
+        case tinyimx::rpc::GroupRpcStatus::kActive: return "active";
+        case tinyimx::rpc::GroupRpcStatus::kDisbanded: return "disbanded";
+    }
+    return "unknown";
+}
+
+const char* GroupJoinPolicyToString(
+    tinyimx::rpc::GroupRpcJoinPolicy value
+) noexcept {
+    switch (value) {
+        case tinyimx::rpc::GroupRpcJoinPolicy::kInviteOnly: return "invite_only";
+        case tinyimx::rpc::GroupRpcJoinPolicy::kOpen: return "open";
+    }
+    return "unknown";
+}
+
+const char* GroupRoleToString(tinyimx::rpc::GroupRpcRole value) noexcept {
+    switch (value) {
+        case tinyimx::rpc::GroupRpcRole::kOwner: return "owner";
+        case tinyimx::rpc::GroupRpcRole::kAdmin: return "admin";
+        case tinyimx::rpc::GroupRpcRole::kMember: return "member";
+    }
+    return "unknown";
+}
+
+const char* GroupMemberStatusToString(
+    tinyimx::rpc::GroupRpcMemberStatus value
+) noexcept {
+    switch (value) {
+        case tinyimx::rpc::GroupRpcMemberStatus::kActive: return "active";
+        case tinyimx::rpc::GroupRpcMemberStatus::kLeft: return "left";
+        case tinyimx::rpc::GroupRpcMemberStatus::kKicked: return "kicked";
+    }
+    return "unknown";
+}
+
+Json GroupToJson(const tinyimx::rpc::GroupRpcView& group) {
+    return Json{
+        {"group_id", group.group_id},
+        {"name", group.name},
+        {"description", group.description},
+        {"avatar_url", group.avatar_url},
+        {"owner_user_id", group.owner_user_id},
+        {"status", GroupStatusToString(group.status)},
+        {"join_policy", GroupJoinPolicyToString(group.join_policy)},
+        {"max_members", group.max_members},
+        {"version", group.version},
+        {"member_version", group.member_version},
+        {"created_at", group.created_at},
+        {"updated_at", group.updated_at},
+        {"disbanded_at", group.disbanded_at},
+        {"disbanded_by_user_id", group.disbanded_by_user_id},
+    };
+}
+
+Json GroupMemberToJson(const tinyimx::rpc::GroupMemberRpcView& member) {
+    return Json{
+        {"group_id", member.group_id},
+        {"user_id", member.user_id},
+        {"role", GroupRoleToString(member.role)},
+        {"status", GroupMemberStatusToString(member.status)},
+        {"membership_epoch", member.membership_epoch},
+        {"muted_until", member.muted_until},
+        {"joined_at", member.joined_at},
+        {"left_at", member.left_at},
+        {"updated_at", member.updated_at},
+    };
+}
+
+bool JsonPositiveU64(
+    const Json& body,
+    const char* field,
+    std::uint64_t* value
+) {
+    if (!value || !field || !body.contains(field)) return false;
+    try {
+        if (!body.at(field).is_number_unsigned() &&
+            !body.at(field).is_number_integer()) return false;
+        const auto candidate = body.at(field).get<std::int64_t>();
+        if (candidate <= 0) return false;
+        *value = static_cast<std::uint64_t>(candidate);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool JsonOptionalU64(
+    const Json& body,
+    const char* field,
+    std::uint64_t* value
+) {
+    if (!value || !field) return false;
+    if (!body.contains(field)) {
+        *value = 0;
+        return true;
+    }
+    try {
+        if (!body.at(field).is_number_unsigned() &&
+            !body.at(field).is_number_integer()) return false;
+        const auto candidate = body.at(field).get<std::int64_t>();
+        if (candidate < 0) return false;
+        *value = static_cast<std::uint64_t>(candidate);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool JsonStringField(
+    const Json& body,
+    const char* field,
+    std::string* value,
+    bool allow_empty = false
+) {
+    if (!value || !field || !body.contains(field) ||
+        !body.at(field).is_string()) return false;
+    *value = body.at(field).get<std::string>();
+    return allow_empty || !value->empty();
+}
+
+bool JsonU32WithDefault(
+    const Json& body,
+    const char* field,
+    std::uint32_t default_value,
+    std::uint32_t min_value,
+    std::uint32_t max_value,
+    std::uint32_t* value
+) {
+    if (!value || !field) return false;
+    if (!body.contains(field)) {
+        *value = default_value;
+        return true;
+    }
+    try {
+        if (!body.at(field).is_number_unsigned() &&
+            !body.at(field).is_number_integer()) return false;
+        const auto candidate = body.at(field).get<std::int64_t>();
+        if (candidate < static_cast<std::int64_t>(min_value) ||
+            candidate > static_cast<std::int64_t>(max_value)) return false;
+        *value = static_cast<std::uint32_t>(candidate);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+std::optional<tinyimx::rpc::GroupRpcJoinPolicy> ParseJoinPolicy(
+    const std::string& value
+) {
+    if (value == "open") return tinyimx::rpc::GroupRpcJoinPolicy::kOpen;
+    if (value == "invite_only") return tinyimx::rpc::GroupRpcJoinPolicy::kInviteOnly;
+    return std::nullopt;
+}
+
+std::optional<tinyimx::rpc::GroupRpcRole> ParseMutableRole(
+    const std::string& value
+) {
+    if (value == "admin") return tinyimx::rpc::GroupRpcRole::kAdmin;
+    if (value == "member") return tinyimx::rpc::GroupRpcRole::kMember;
+    return std::nullopt;
+}
+
+std::optional<tinyimx::MessageType> GroupResponseType(
+    tinyimx::MessageType type
+) {
+    using tinyimx::MessageType;
+    switch (type) {
+        case MessageType::kCreateGroupRequest: return MessageType::kCreateGroupResponse;
+        case MessageType::kGetGroupRequest: return MessageType::kGetGroupResponse;
+        case MessageType::kUpdateGroupRequest: return MessageType::kUpdateGroupResponse;
+        case MessageType::kDisbandGroupRequest: return MessageType::kDisbandGroupResponse;
+        case MessageType::kJoinGroupRequest: return MessageType::kJoinGroupResponse;
+        case MessageType::kLeaveGroupRequest: return MessageType::kLeaveGroupResponse;
+        case MessageType::kInviteGroupMemberRequest: return MessageType::kInviteGroupMemberResponse;
+        case MessageType::kKickGroupMemberRequest: return MessageType::kKickGroupMemberResponse;
+        case MessageType::kSetGroupMemberRoleRequest: return MessageType::kSetGroupMemberRoleResponse;
+        case MessageType::kSetGroupMemberMuteRequest: return MessageType::kSetGroupMemberMuteResponse;
+        case MessageType::kTransferGroupOwnershipRequest: return MessageType::kTransferGroupOwnershipResponse;
+        case MessageType::kListGroupMembersRequest: return MessageType::kListGroupMembersResponse;
+        case MessageType::kListMyGroupsRequest: return MessageType::kListMyGroupsResponse;
+        default: return std::nullopt;
+    }
+}
+
+const char* GroupOperationName(tinyimx::MessageType type) noexcept {
+    using tinyimx::MessageType;
+    switch (type) {
+        case MessageType::kCreateGroupRequest: return "create_group";
+        case MessageType::kGetGroupRequest: return "get_group";
+        case MessageType::kUpdateGroupRequest: return "update_group";
+        case MessageType::kDisbandGroupRequest: return "disband_group";
+        case MessageType::kJoinGroupRequest: return "join_group";
+        case MessageType::kLeaveGroupRequest: return "leave_group";
+        case MessageType::kInviteGroupMemberRequest: return "invite_group_member";
+        case MessageType::kKickGroupMemberRequest: return "kick_group_member";
+        case MessageType::kSetGroupMemberRoleRequest: return "set_group_member_role";
+        case MessageType::kSetGroupMemberMuteRequest: return "set_group_member_mute";
+        case MessageType::kTransferGroupOwnershipRequest: return "transfer_group_ownership";
+        case MessageType::kListGroupMembersRequest: return "list_group_members";
+        case MessageType::kListMyGroupsRequest: return "list_my_groups";
+        default: return "unknown_group_operation";
+    }
+}
+
+std::optional<tinyimx::BusinessOrderingKey> GroupOrderingKey(
+    tinyimx::MessageType type,
+    const Json& body
+) {
+    using tinyimx::MessageType;
+    if (type == MessageType::kCreateGroupRequest ||
+        type == MessageType::kGetGroupRequest ||
+        type == MessageType::kListGroupMembersRequest ||
+        type == MessageType::kListMyGroupsRequest) {
+        return std::nullopt;
+    }
+    std::uint64_t group_id = 0;
+    if (!JsonPositiveU64(body, "group_id", &group_id)) return std::nullopt;
+    constexpr std::uint64_t kGroupDomainSalt = 0x9E3779B97F4A7C15ULL;
+    const std::uint64_t mixed = group_id ^ (kGroupDomainSalt + (group_id << 6U) + (group_id >> 2U));
+    return static_cast<tinyimx::BusinessOrderingKey>(mixed);
+}
+
+Json GroupRpcFailure(const tinyimx::rpc::RpcStatus& status) {
+    return Json{
+        {"success", false},
+        {"reason", GroupRpcErrorReason(status.code)},
+        {"message", status.message.empty() ? "group service request failed" : status.message},
+    };
+}
+
+Json InvalidGroupRequest(const std::string& message) {
+    return Json{{"success", false}, {"reason", "invalid_group_request"}, {"message", message}};
+}
+
+Json MutationToJson(const tinyimx::rpc::RpcResult<tinyimx::rpc::GroupMutationRpcResponse>& result) {
+    if (!result.ok()) return GroupRpcFailure(result.status);
+    if (result.value->outcome == tinyimx::rpc::GroupRpcMutationOutcome::kIdempotencyConflict) {
+        return Json{{"success", false}, {"reason", "idempotency_conflict"}, {"message", result.value->message}};
+    }
+    return Json{
+        {"success", true},
+        {"result", GroupMutationOutcomeToString(result.value->outcome)},
+        {"message", result.value->message},
+        {"group", GroupToJson(result.value->group)},
+    };
+}
+
+Json ExecuteGroupRpc(
+    tinyimx::rpc::GroupRpcClient* client,
+    tinyimx::MessageType type,
+    tinyimx::UserId actor_user_id,
+    const Json& body,
+    const tinyimx::rpc::RpcCallOptions& options
+) {
+    using namespace tinyimx::rpc;
+    if (!client || actor_user_id == 0 || !body.is_object()) {
+        return InvalidGroupRequest("invalid group request context");
+    }
+
+    std::uint64_t group_id = 0;
+    std::uint64_t target_user_id = 0;
+    std::uint64_t expected_version = 0;
+    std::uint64_t cursor = 0;
+    std::string operation_id;
+
+    switch (type) {
+        case tinyimx::MessageType::kCreateGroupRequest: {
+            CreateGroupRpcRequest request;
+            request.actor_user_id = actor_user_id;
+            if (!JsonStringField(body, "client_operation_id", &request.client_operation_id) ||
+                !JsonStringField(body, "name", &request.name)) {
+                return InvalidGroupRequest("CreateGroup requires client_operation_id and name");
+            }
+            if (body.contains("description") && !JsonStringField(body, "description", &request.description, true)) return InvalidGroupRequest("invalid description");
+            if (body.contains("avatar_url") && !JsonStringField(body, "avatar_url", &request.avatar_url, true)) return InvalidGroupRequest("invalid avatar_url");
+            std::string join_policy = "invite_only";
+            if (body.contains("join_policy") && !JsonStringField(body, "join_policy", &join_policy)) return InvalidGroupRequest("invalid join_policy");
+            const auto policy = ParseJoinPolicy(join_policy);
+            if (!policy) return InvalidGroupRequest("join_policy must be invite_only or open");
+            request.join_policy = *policy;
+            if (!JsonU32WithDefault(body, "max_members", 500U, 2U, 500U, &request.max_members))
+                return InvalidGroupRequest("max_members must be in [2,500]");
+            return MutationToJson(client->CreateGroup(request, options));
+        }
+        case tinyimx::MessageType::kGetGroupRequest: {
+            if (!JsonPositiveU64(body, "group_id", &group_id)) return InvalidGroupRequest("invalid group_id");
+            auto result = client->GetGroup({actor_user_id, group_id}, options);
+            if (!result.ok()) return GroupRpcFailure(result.status);
+            return Json{{"success", true}, {"group", GroupToJson(result.value->group)}};
+        }
+        case tinyimx::MessageType::kUpdateGroupRequest: {
+            UpdateGroupRpcRequest request; request.actor_user_id = actor_user_id;
+            if (!JsonStringField(body,"client_operation_id",&request.client_operation_id) ||
+                !JsonPositiveU64(body,"group_id",&request.group_id) ||
+                !JsonPositiveU64(body,"expected_version",&request.expected_version)) return InvalidGroupRequest("invalid UpdateGroup identity/version");
+            if (body.contains("name")) { std::string v; if(!JsonStringField(body,"name",&v)) return InvalidGroupRequest("invalid name"); request.name=v; }
+            if (body.contains("description")) { std::string v; if(!JsonStringField(body,"description",&v,true)) return InvalidGroupRequest("invalid description"); request.description=v; }
+            if (body.contains("avatar_url")) { std::string v; if(!JsonStringField(body,"avatar_url",&v,true)) return InvalidGroupRequest("invalid avatar_url"); request.avatar_url=v; }
+            if (body.contains("join_policy")) { std::string v; if(!JsonStringField(body,"join_policy",&v)) return InvalidGroupRequest("invalid join_policy"); const auto policy=ParseJoinPolicy(v); if(!policy) return InvalidGroupRequest("invalid join_policy"); request.join_policy=*policy; }
+            return MutationToJson(client->UpdateGroup(request, options));
+        }
+        case tinyimx::MessageType::kDisbandGroupRequest: {
+            if(!JsonStringField(body,"client_operation_id",&operation_id)||!JsonPositiveU64(body,"group_id",&group_id)||!JsonPositiveU64(body,"expected_version",&expected_version)) return InvalidGroupRequest("invalid DisbandGroup request");
+            return MutationToJson(client->DisbandGroup({actor_user_id,operation_id,group_id,expected_version},options));
+        }
+        case tinyimx::MessageType::kJoinGroupRequest: {
+            if(!JsonStringField(body,"client_operation_id",&operation_id)||!JsonPositiveU64(body,"group_id",&group_id)) return InvalidGroupRequest("invalid JoinGroup request");
+            return MutationToJson(client->JoinGroup({actor_user_id,operation_id,group_id},options));
+        }
+        case tinyimx::MessageType::kLeaveGroupRequest: {
+            if(!JsonStringField(body,"client_operation_id",&operation_id)||!JsonPositiveU64(body,"group_id",&group_id)) return InvalidGroupRequest("invalid LeaveGroup request");
+            return MutationToJson(client->LeaveGroup({actor_user_id,operation_id,group_id},options));
+        }
+        case tinyimx::MessageType::kInviteGroupMemberRequest: {
+            if(!JsonStringField(body,"client_operation_id",&operation_id)||!JsonPositiveU64(body,"group_id",&group_id)||!JsonPositiveU64(body,"target_user_id",&target_user_id)) return InvalidGroupRequest("invalid InviteMember request");
+            return MutationToJson(client->InviteMember({actor_user_id,operation_id,group_id,target_user_id},options));
+        }
+        case tinyimx::MessageType::kKickGroupMemberRequest: {
+            if(!JsonStringField(body,"client_operation_id",&operation_id)||!JsonPositiveU64(body,"group_id",&group_id)||!JsonPositiveU64(body,"target_user_id",&target_user_id)) return InvalidGroupRequest("invalid KickMember request");
+            return MutationToJson(client->KickMember({actor_user_id,operation_id,group_id,target_user_id},options));
+        }
+        case tinyimx::MessageType::kSetGroupMemberRoleRequest: {
+            std::string role_text;
+            if(!JsonStringField(body,"client_operation_id",&operation_id)||!JsonPositiveU64(body,"group_id",&group_id)||!JsonPositiveU64(body,"target_user_id",&target_user_id)||!JsonStringField(body,"role",&role_text)) return InvalidGroupRequest("invalid SetMemberRole request");
+            const auto role=ParseMutableRole(role_text); if(!role) return InvalidGroupRequest("role must be admin or member");
+            return MutationToJson(client->SetMemberRole({actor_user_id,operation_id,group_id,target_user_id,*role},options));
+        }
+        case tinyimx::MessageType::kSetGroupMemberMuteRequest: {
+            std::string muted_until;
+            if(!JsonStringField(body,"client_operation_id",&operation_id)||!JsonPositiveU64(body,"group_id",&group_id)||!JsonPositiveU64(body,"target_user_id",&target_user_id)||!JsonStringField(body,"muted_until",&muted_until,true)) return InvalidGroupRequest("invalid SetMemberMute request");
+            return MutationToJson(client->SetMemberMute({actor_user_id,operation_id,group_id,target_user_id,muted_until},options));
+        }
+        case tinyimx::MessageType::kTransferGroupOwnershipRequest: {
+            if(!JsonStringField(body,"client_operation_id",&operation_id)||!JsonPositiveU64(body,"group_id",&group_id)||!JsonPositiveU64(body,"target_user_id",&target_user_id)) return InvalidGroupRequest("invalid TransferOwnership request");
+            return MutationToJson(client->TransferOwnership({actor_user_id,operation_id,group_id,target_user_id},options));
+        }
+        case tinyimx::MessageType::kListGroupMembersRequest: {
+            if(!JsonPositiveU64(body,"group_id",&group_id)||!JsonOptionalU64(body,"after_user_id",&cursor)) return InvalidGroupRequest("invalid ListGroupMembers request");
+            std::uint32_t limit = 50; if (!JsonU32WithDefault(body,"limit",50U,1U,100U,&limit)) return InvalidGroupRequest("limit must be in [1,100]"); auto result=client->ListGroupMembers({actor_user_id,group_id,cursor,limit},options); if(!result.ok()) return GroupRpcFailure(result.status);
+            Json members=Json::array(); for(const auto& member:result.value->members) members.push_back(GroupMemberToJson(member));
+            return Json{{"success",true},{"members",std::move(members)},{"has_more",result.value->has_more}};
+        }
+        case tinyimx::MessageType::kListMyGroupsRequest: {
+            if(!JsonOptionalU64(body,"after_group_id",&cursor)) return InvalidGroupRequest("invalid ListMyGroups request");
+            std::uint32_t limit = 50; if (!JsonU32WithDefault(body,"limit",50U,1U,100U,&limit)) return InvalidGroupRequest("limit must be in [1,100]"); auto result=client->ListMyGroups({actor_user_id,cursor,limit},options); if(!result.ok()) return GroupRpcFailure(result.status);
+            Json groups=Json::array(); for(const auto& group:result.value->groups) groups.push_back(GroupToJson(group));
+            return Json{{"success",true},{"groups",std::move(groups)},{"has_more",result.value->has_more}};
+        }
+        default:
+            return InvalidGroupRequest("unsupported group request type");
+    }
+}
+
 }  // namespace
 
 namespace tinyimx {
@@ -1348,6 +1741,20 @@ void GatewayServer::SetMessageRpcClient(
 
 bool GatewayServer::HasMessageRpcClient() const {
     return message_rpc_client_ != nullptr;
+}
+
+void GatewayServer::SetGroupRpcClient(
+    rpc::GroupRpcClient* group_rpc_client
+) {
+    group_rpc_client_ = group_rpc_client;
+    LOG_INFO(
+        "gateway group rpc client attached"
+        << ", enabled=" << (group_rpc_client_ != nullptr)
+    );
+}
+
+bool GatewayServer::HasGroupRpcClient() const {
+    return group_rpc_client_ != nullptr;
 }
 
 
@@ -2816,6 +3223,22 @@ void GatewayServer::HandlePacket(const TcpConnectionPtr& connection,
                 connection,
                 packet
             );
+            break;
+
+        case MessageType::kCreateGroupRequest:
+        case MessageType::kGetGroupRequest:
+        case MessageType::kUpdateGroupRequest:
+        case MessageType::kDisbandGroupRequest:
+        case MessageType::kJoinGroupRequest:
+        case MessageType::kLeaveGroupRequest:
+        case MessageType::kInviteGroupMemberRequest:
+        case MessageType::kKickGroupMemberRequest:
+        case MessageType::kSetGroupMemberRoleRequest:
+        case MessageType::kSetGroupMemberMuteRequest:
+        case MessageType::kTransferGroupOwnershipRequest:
+        case MessageType::kListGroupMembersRequest:
+        case MessageType::kListMyGroupsRequest:
+            HandleGroupControlRequest(connection, packet);
             break;
 
         case MessageType::kHeartbeat:
@@ -9926,6 +10349,139 @@ void GatewayServer::HandleFriendRequestRejectRequest(
         << ", changed="
         << changed
     );
+}
+
+
+void GatewayServer::HandleGroupControlRequest(
+    const TcpConnectionPtr& connection,
+    const Packet& packet
+) {
+    const BusinessTimePoint request_received_at = BusinessClock::now();
+    const auto response_type = GroupResponseType(packet.type);
+    if (!response_type.has_value()) {
+        SendPacket(connection, MakeErrorPacket(packet.seq, "unsupported group request type"));
+        return;
+    }
+
+    auto send_response = [this, connection, request_seq = packet.seq, type = *response_type](const Json& body) {
+        if (!connection || !connection->IsConnected()) return;
+        Packet response;
+        response.type = type;
+        response.seq = request_seq;
+        response.body = body.dump();
+        SendPacket(connection, response);
+    };
+
+    Json request_body;
+    std::string parse_error;
+    if (!ParseJsonBody(packet, &request_body, &parse_error) || !request_body.is_object()) {
+        send_response(Json{{"success",false},{"reason","invalid_json"},{"message","invalid group request json"}});
+        return;
+    }
+
+    const auto session_snapshot = session_manager_.FindSessionByConnection(connection);
+    if (!session_snapshot.has_value()) {
+        send_response(Json{{"success",false},{"reason","not_logged_in"},{"message","group request rejected: not logged in"}});
+        return;
+    }
+    if (!HasGroupRpcClient()) {
+        send_response(Json{{"success",false},{"reason","group_service_unavailable"},{"message","group service unavailable"}});
+        return;
+    }
+    if (!HasBusinessExecutor()) {
+        send_response(Json{{"success",false},{"reason","business_runtime_unavailable"},{"message","business runtime unavailable"}});
+        return;
+    }
+
+    const UserId actor_user_id = session_snapshot->user_id;
+    const std::uint64_t rpc_id = next_internal_rpc_id_.fetch_add(1, std::memory_order_relaxed);
+    const std::string operation = GroupOperationName(packet.type);
+    const std::string rpc_request_id = options_.gateway_id + ":group:" + operation + ":req:" + std::to_string(rpc_id);
+    const std::string trace_id = options_.gateway_id + ":group:trace:" + std::to_string(rpc_id) + ":client-seq:" + std::to_string(packet.seq);
+    const auto ordering_key = GroupOrderingKey(packet.type, request_body);
+
+    const BusinessSubmitStatus submit_status = SubmitSessionBusinessTask(
+        business_executor_,
+        &session_manager_,
+        connection,
+        *session_snapshot,
+        packet.seq,
+        request_received_at,
+        std::string("gateway.group.") + operation + ".rpc",
+        BusinessCancellationPolicy::kCancelable,
+        ordering_key,
+        [
+            this,
+            connection,
+            request_seq = packet.seq,
+            response_type = *response_type,
+            request_type = packet.type,
+            actor_user_id,
+            request_body = std::move(request_body),
+            rpc_request_id,
+            trace_id
+        ](const BusinessExecutor::ExecutionContext& context) mutable -> BusinessExecutor::Completion {
+            if (context.CancellationRequested()) return {};
+
+            rpc::RpcCallOptions call_options;
+            call_options.request_id = rpc_request_id;
+            call_options.trace_id = trace_id;
+            call_options.caller_service = "gateway";
+            call_options.caller_instance = options_.gateway_id;
+            const auto remaining = context.Request().RemainingTime();
+            call_options.remaining_timeout =
+                remaining == std::chrono::milliseconds::max()
+                    ? std::chrono::milliseconds{0}
+                    : remaining;
+
+            Json async_body = ExecuteGroupRpc(
+                group_rpc_client_,
+                request_type,
+                actor_user_id,
+                request_body,
+                call_options
+            );
+
+            if (context.CancellationRequested()) return {};
+
+            return BusinessExecutor::Completion(
+                [this, connection, request_seq, response_type, body = std::move(async_body)]() mutable {
+                    if (!connection || !connection->IsConnected()) return;
+                    Packet response;
+                    response.type = response_type;
+                    response.seq = request_seq;
+                    response.body = body.dump();
+                    SendPacket(connection, response);
+                }
+            );
+        }
+    );
+
+    if (submit_status == BusinessSubmitStatus::kAccepted) return;
+
+    Json rejected{{"success",false}};
+    switch (submit_status) {
+        case BusinessSubmitStatus::kOverloaded:
+        case BusinessSubmitStatus::kHotKeyOverloaded:
+            rejected["reason"] = "business_runtime_overloaded";
+            rejected["message"] = "business runtime overloaded";
+            break;
+        case BusinessSubmitStatus::kDeadlineExpired:
+            rejected["reason"] = "business_deadline_expired";
+            rejected["message"] = "group request deadline expired";
+            break;
+        case BusinessSubmitStatus::kShuttingDown:
+            rejected["reason"] = "business_runtime_shutting_down";
+            rejected["message"] = "business runtime shutting down";
+            break;
+        case BusinessSubmitStatus::kInvalidArgument:
+            rejected["reason"] = "business_runtime_unavailable";
+            rejected["message"] = "business runtime unavailable";
+            break;
+        case BusinessSubmitStatus::kAccepted:
+            return;
+    }
+    send_response(rejected);
 }
 
 void GatewayServer::HandleHeartbeat(
