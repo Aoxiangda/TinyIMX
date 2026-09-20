@@ -227,9 +227,100 @@ RpcResult<ListMyGroupsRpcResponse> GroupRpcClient::ListMyGroups(const ListMyGrou
     if(request.actor_user_id==0||!ValidPageLimit(request.limit))return Failure<ListMyGroupsRpcResponse>(RpcErrorCode::kInvalidArgument,"invalid ListMyGroups request");
     TINYIMX_GROUP_PREPARE("ListMyGroups",ListMyGroupsRpcResponse);tinyimx::group::v1::ListMyGroupsRequest in;FillMeta(options,in.mutable_meta());in.set_actor_user_id(request.actor_user_id);in.set_after_group_id(request.after_group_id);in.set_limit(request.limit);tinyimx::group::v1::ListMyGroupsResponse out;const auto status=stub->ListMyGroups(&context,in,&out);if(!status.ok()){const auto mapped=MapGrpcStatus(status);return Failure<ListMyGroupsRpcResponse>(mapped.code,mapped.message);}ListMyGroupsRpcResponse response;response.has_more=out.has_more();response.groups.reserve(static_cast<std::size_t>(out.groups_size()));std::uint64_t previous=request.after_group_id;for(const auto& item:out.groups()){auto group=ToGroup(item);if(!group||group->group_id<=previous)return Failure<ListMyGroupsRpcResponse>(RpcErrorCode::kDataLoss,"ListMyGroups returned invalid page");previous=group->group_id;response.groups.push_back(std::move(*group));}return RpcResult<ListMyGroupsRpcResponse>::Success(std::move(response));
 }
-RpcResult<CheckGroupSendPermissionRpcResponse> GroupRpcClient::CheckGroupSendPermission(const CheckGroupSendPermissionRpcRequest& request,const RpcCallOptions& options) const {
-    if(request.actor_user_id==0||request.group_id==0)return Failure<CheckGroupSendPermissionRpcResponse>(RpcErrorCode::kInvalidArgument,"invalid CheckGroupSendPermission request");
-    TINYIMX_GROUP_PREPARE("CheckGroupSendPermission",CheckGroupSendPermissionRpcResponse);tinyimx::group::v1::CheckGroupSendPermissionRequest in;FillMeta(options,in.mutable_meta());in.set_actor_user_id(request.actor_user_id);in.set_group_id(request.group_id);tinyimx::group::v1::CheckGroupSendPermissionResponse out;const auto status=stub->CheckGroupSendPermission(&context,in,&out);if(!status.ok()){const auto mapped=MapGrpcStatus(status);return Failure<CheckGroupSendPermissionRpcResponse>(mapped.code,mapped.message);}const auto role=ToRole(out.role());if(!role||out.member_version()==0||(out.allowed()&&out.membership_epoch()==0))return Failure<CheckGroupSendPermissionRpcResponse>(RpcErrorCode::kDataLoss,"CheckGroupSendPermission returned invalid authorization snapshot");CheckGroupSendPermissionRpcResponse response;response.allowed=out.allowed();response.role=*role;response.membership_epoch=out.membership_epoch();response.member_version=out.member_version();response.message=out.message();return RpcResult<CheckGroupSendPermissionRpcResponse>::Success(std::move(response));
+RpcResult<CheckGroupSendPermissionRpcResponse>
+GroupRpcClient::CheckGroupSendPermission(
+    const CheckGroupSendPermissionRpcRequest& request,
+    const RpcCallOptions& options
+) const {
+    if (request.actor_user_id == 0 || request.group_id == 0) {
+        return Failure<CheckGroupSendPermissionRpcResponse>(
+            RpcErrorCode::kInvalidArgument,
+            "invalid CheckGroupSendPermission request"
+        );
+    }
+
+    TINYIMX_GROUP_PREPARE(
+        "CheckGroupSendPermission",
+        CheckGroupSendPermissionRpcResponse
+    );
+
+    tinyimx::group::v1::CheckGroupSendPermissionRequest in;
+    FillMeta(options, in.mutable_meta());
+    in.set_actor_user_id(request.actor_user_id);
+    in.set_group_id(request.group_id);
+
+    tinyimx::group::v1::CheckGroupSendPermissionResponse out;
+    const auto status = stub->CheckGroupSendPermission(&context, in, &out);
+    if (!status.ok()) {
+        const auto mapped = MapGrpcStatus(status);
+        return Failure<CheckGroupSendPermissionRpcResponse>(mapped.code, mapped.message);
+    }
+
+    const auto role = ToRole(out.role());
+    if (out.allowed()) {
+        if (!role || out.membership_epoch() == 0 || out.member_version() == 0) {
+            return Failure<CheckGroupSendPermissionRpcResponse>(
+                RpcErrorCode::kDataLoss,
+                "CheckGroupSendPermission returned invalid allowed authorization snapshot"
+            );
+        }
+    }
+
+    CheckGroupSendPermissionRpcResponse response;
+    response.allowed = out.allowed();
+    if (role.has_value()) response.role = *role;
+    response.membership_epoch = out.membership_epoch();
+    response.member_version = out.member_version();
+    response.message = out.message();
+    return RpcResult<CheckGroupSendPermissionRpcResponse>::Success(std::move(response));
+}
+
+RpcResult<PrepareGroupMessageSendRpcResponse> GroupRpcClient::PrepareGroupMessageSend(
+    const PrepareGroupMessageSendRpcRequest& request,
+    const RpcCallOptions& options
+) const {
+    if (request.actor_user_id == 0 || request.group_id == 0) {
+        return Failure<PrepareGroupMessageSendRpcResponse>(
+            RpcErrorCode::kInvalidArgument, "invalid PrepareGroupMessageSend request");
+    }
+    TINYIMX_GROUP_PREPARE("PrepareGroupMessageSend", PrepareGroupMessageSendRpcResponse);
+    tinyimx::group::v1::PrepareGroupMessageSendRequest in;
+    FillMeta(options, in.mutable_meta());
+    in.set_actor_user_id(request.actor_user_id);
+    in.set_group_id(request.group_id);
+    tinyimx::group::v1::PrepareGroupMessageSendResponse out;
+    const auto status = stub->PrepareGroupMessageSend(&context, in, &out);
+    if (!status.ok()) {
+        const auto mapped = MapGrpcStatus(status);
+        return Failure<PrepareGroupMessageSendRpcResponse>(mapped.code, mapped.message);
+    }
+    const auto role = ToRole(out.role());
+    PrepareGroupMessageSendRpcResponse response;
+    response.allowed = out.allowed();
+    response.message = out.message();
+    response.membership_epoch = out.membership_epoch();
+    response.member_version = out.member_version();
+    if (role.has_value()) response.role = *role;
+    if (out.allowed()) {
+        if (!role || response.membership_epoch == 0 || response.member_version == 0) {
+            return Failure<PrepareGroupMessageSendRpcResponse>(
+                RpcErrorCode::kDataLoss, "PrepareGroupMessageSend returned invalid authorization snapshot");
+        }
+        response.recipient_user_ids.reserve(static_cast<std::size_t>(out.recipient_user_ids_size()));
+        std::uint64_t previous = 0;
+        for (const auto user_id : out.recipient_user_ids()) {
+            if (user_id == 0 || user_id == request.actor_user_id || user_id <= previous) {
+                return Failure<PrepareGroupMessageSendRpcResponse>(
+                    RpcErrorCode::kDataLoss, "PrepareGroupMessageSend returned invalid recipient snapshot");
+            }
+            previous = user_id;
+            response.recipient_user_ids.push_back(user_id);
+        }
+    } else if (out.recipient_user_ids_size() != 0) {
+        return Failure<PrepareGroupMessageSendRpcResponse>(
+            RpcErrorCode::kDataLoss, "denied PrepareGroupMessageSend returned recipients");
+    }
+    return RpcResult<PrepareGroupMessageSendRpcResponse>::Success(std::move(response));
 }
 
 #undef TINYIMX_GROUP_SIMPLE_MUTATION

@@ -312,6 +312,19 @@ RegisterReceiverDeliveryTrackerTests(
                 ReceiverDeliveryRegisterStatus::
                     kReceiverMismatch
             );
+
+
+            TINYIMX_EXPECT_EQ(
+                tracker.RegisterRetryAttempt(
+                    1006,
+                    10003,
+                    91,
+                    93,
+                    3
+                ),
+                ReceiverDeliveryRetryRegisterStatus::
+                    kReceiverMismatch
+            );
         }
     );
 
@@ -747,6 +760,35 @@ RegisterReceiverDeliveryTrackerTests(
             );
         }
     );
+
+
+    runner.Add(
+        "ReceiverDeliveryTracker.M17B2GroupRecipientsAreIndependent",
+        []() {
+            ReceiverDeliveryTracker tracker;
+            const auto u2 = GroupDeliveryIdentity(77, 10002);
+            const auto u3 = GroupDeliveryIdentity(77, 10003);
+            TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(u2, 11), ReceiverDeliveryRegisterStatus::kRegistered);
+            TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(u3, 12), ReceiverDeliveryRegisterStatus::kRegistered);
+            TINYIMX_EXPECT_EQ(tracker.Acknowledge(u2, 11), ReceiverDeliveryAckStatus::kConfirmed);
+            ReceiverDeliverySnapshot u2_snapshot;
+            ReceiverDeliverySnapshot u3_snapshot;
+            TINYIMX_EXPECT_TRUE(tracker.GetSnapshot(u2, &u2_snapshot));
+            TINYIMX_EXPECT_TRUE(tracker.GetSnapshot(u3, &u3_snapshot));
+            TINYIMX_EXPECT_TRUE(u2_snapshot.confirmed);
+            TINYIMX_EXPECT_TRUE(!u3_snapshot.confirmed);
+        });
+
+    runner.Add(
+        "ReceiverDeliveryTracker.M17B2PrivateAndGroupNamespacesDoNotCollide",
+        []() {
+            ReceiverDeliveryTracker tracker;
+            const auto private_id = PrivateDeliveryIdentity(88, 10002);
+            const auto group_id = GroupDeliveryIdentity(88, 10002);
+            TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(private_id, 21), ReceiverDeliveryRegisterStatus::kRegistered);
+            TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(group_id, 22), ReceiverDeliveryRegisterStatus::kRegistered);
+            TINYIMX_EXPECT_EQ(tracker.Size(), static_cast<std::size_t>(2));
+        });
 
 
 }

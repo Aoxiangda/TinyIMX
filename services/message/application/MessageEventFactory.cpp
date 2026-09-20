@@ -77,6 +77,34 @@ OutboxEventSpec MessageEventFactory::MessageCreated(
     return spec;
 }
 
+
+
+OutboxEventSpec MessageEventFactory::GroupMessageCreated(
+    const GroupMessageView& message
+) {
+    OutboxEventSpec spec;
+    spec.event.schema_version = 1;
+    spec.event.event_id =
+        "group_message.created.v1:" + std::to_string(message.message_id);
+    spec.event.event_type = "group_message.created.v1";
+    spec.event.aggregate_type = "group_message";
+    spec.event.aggregate_id = std::to_string(message.message_id);
+    spec.event.producer_service = kProducerService;
+    spec.event.occurred_at = CurrentUtcIso8601();
+    spec.event.payload = {
+        {"message_id", message.message_id},
+        {"group_id", message.group_id},
+        {"from_user_id", message.from_user_id},
+        {"message_type", message.message_type},
+        {"membership_epoch", message.membership_epoch},
+        {"member_version", message.member_version},
+    };
+    spec.topic = kMessageEventsTopic;
+    spec.tag = spec.event.event_type;
+    spec.message_key = spec.event.event_id;
+    return spec;
+}
+
 OutboxEventSpec MessageEventFactory::DialogReadAdvanced(
     std::uint64_t reader_user_id,
     std::uint64_t peer_user_id,

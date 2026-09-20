@@ -112,6 +112,13 @@ struct GroupMemberListStorageResult {
     [[nodiscard]] bool Succeeded() const noexcept { return status == GroupRepositoryStatus::kSucceeded; }
 };
 
+struct GroupUserIdListStorageResult {
+    GroupRepositoryStatus status{GroupRepositoryStatus::kStorageError};
+    std::vector<std::uint64_t> user_ids;
+    std::string message;
+    [[nodiscard]] bool Succeeded() const noexcept { return status == GroupRepositoryStatus::kSucceeded; }
+};
+
 struct GroupListStorageResult {
     GroupRepositoryStatus status{GroupRepositoryStatus::kStorageError};
     std::vector<GroupRecord> records;
@@ -269,6 +276,12 @@ public:
         std::uint64_t group_id,
         std::uint64_t after_user_id,
         std::uint32_t limit
+    );
+    [[nodiscard]] GroupUserIdListStorageResult ListActiveRecipientUserIdsOnConnection(
+        MySqlConnection* connection,
+        std::uint64_t group_id,
+        std::uint64_t excluded_user_id,
+        std::uint32_t max_recipients
     );
     [[nodiscard]] GroupMemberListStorageResult ListActiveMembers(
         std::uint64_t group_id,

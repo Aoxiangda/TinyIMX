@@ -202,7 +202,40 @@ int main(int argc,char* argv[]) {
     Expect(accepted==1 && exhausted==1,"group-row locking prevents concurrent max_members overflow");
     Expect(CountRows(&pool,"im_group_members","group_id="+std::to_string(capacity_gid)+" AND status=1")==2,"capacity race leaves exactly max_members active rows");
 
-    CleanupGroup(&pool,gid); CleanupGroup(&pool,capacity_gid);
+    // M17-B2 recipient snapshot isolation: authorization/member-version reads and
+    // recipient enumeration must observe one point-in-time view even if the
+    // server/session default transaction isolation is changed by deployment.
+    const std::uint64_t snapshot_gid=CreateOpenGroup(&adapter,10,UniqueId("m17b2-snapshot-"));
+    tinyimx::group::JoinGroupCommand snapshot_join2{kUser2,UniqueId("snapshot-join2-"),snapshot_gid};
+    Expect(snapshot_gid!=0 && adapter.JoinGroup(snapshot_join2).Accepted(),
+           "M17-B2 snapshot fixture has one recipient before concurrent join");
+    auto snapshot_connection=pool.Acquire();
+    bool snapshot_started=snapshot_connection && snapshot_connection->BeginConsistentReadTransaction();
+    Expect(snapshot_started,"M17-B2 explicit consistent-read transaction starts");
+    if(snapshot_started) {
+        tinyimx::MySqlQueryResult before_rows;
+        const std::string recipient_count_sql=
+            "SELECT COUNT(*) FROM im_group_members WHERE group_id="+std::to_string(snapshot_gid)+
+            " AND status=1 AND user_id<>"+std::to_string(kOwner);
+        const bool before_ok=snapshot_connection->Query(recipient_count_sql,&before_rows) &&
+            before_rows.rows.size()==1 && before_rows.rows[0].size()==1 && before_rows.rows[0][0]=="1";
+        Expect(before_ok,"M17-B2 consistent snapshot initially sees original recipient set");
+
+        tinyimx::group::JoinGroupCommand concurrent_snapshot_join{kUser3,UniqueId("snapshot-join3-"),snapshot_gid};
+        const auto joined_after_snapshot=adapter.JoinGroup(concurrent_snapshot_join);
+        Expect(joined_after_snapshot.Accepted(),"concurrent member join commits outside frozen snapshot");
+
+        tinyimx::MySqlQueryResult frozen_rows;
+        const bool frozen_ok=snapshot_connection->Query(recipient_count_sql,&frozen_rows) &&
+            frozen_rows.rows.size()==1 && frozen_rows.rows[0].size()==1 && frozen_rows.rows[0][0]=="1";
+        Expect(frozen_ok,"M17-B2 frozen recipient snapshot excludes join-after-snapshot member");
+        Expect(snapshot_connection->Commit(),"M17-B2 consistent-read transaction commits read-only");
+        Expect(CountRows(&pool,"im_group_members","group_id="+std::to_string(snapshot_gid)+
+                         " AND status=1 AND user_id<>"+std::to_string(kOwner))==2,
+               "fresh read observes join-after-snapshot member after snapshot closes");
+    }
+
+    CleanupGroup(&pool,gid); CleanupGroup(&pool,capacity_gid); CleanupGroup(&pool,snapshot_gid);
     pool.Shutdown(); tinyimx::Logger::Instance().Shutdown();
     std::cout<<"========================================================================\n";
     if(g_failed==0){std::cout<<"[PASS] M17-A2 Membership Repository integration tests\n"; return 0;}

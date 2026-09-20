@@ -6,6 +6,8 @@ void RegisterProtocolCodecTests(TestRunner& runner);
 void RegisterGatewayPeerProtocolTests(TestRunner& runner);
 void RegisterClientChatProtocolTests(TestRunner& runner);
 void RegisterGroupControlProtocolTests(TestRunner& runner);
+void RegisterGroupMessageProtocolTests(TestRunner& runner);
+void RegisterGroupMessageDeliveryProtocolTests(TestRunner& runner);
 
 }  // namespace tinyimx::test
 
@@ -16,6 +18,8 @@ int main() {
     tinyimx::test::RegisterGatewayPeerProtocolTests(runner);
     tinyimx::test::RegisterClientChatProtocolTests(runner);
     tinyimx::test::RegisterGroupControlProtocolTests(runner);
+    tinyimx::test::RegisterGroupMessageProtocolTests(runner);
+    tinyimx::test::RegisterGroupMessageDeliveryProtocolTests(runner);
     const int failed_count = runner.RunAll("TinyIMX Protocol Tests");
 
     return failed_count == 0 ? 0 : 1;

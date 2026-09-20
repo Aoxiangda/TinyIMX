@@ -265,6 +265,94 @@ struct SavePrivateMessageResult {
     }
 };
 
+
+
+struct GroupMessageRecord {
+    std::uint64_t message_id{0};
+    std::string client_message_id;
+    std::uint64_t group_id{0};
+    std::uint64_t from_user_id{0};
+    std::uint32_t message_type{1};
+    std::string content;
+    std::uint64_t membership_epoch{0};
+    std::uint64_t member_version{0};
+    std::uint32_t authorized_role{0};
+    std::string created_at;
+};
+
+struct FindGroupMessageResult {
+    MessageQueryStatus status{MessageQueryStatus::kStorageError};
+    bool found{false};
+    GroupMessageRecord record;
+    std::string message;
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return status == MessageQueryStatus::kSucceeded;
+    }
+    [[nodiscard]] bool Found() const noexcept {
+        return Succeeded() && found;
+    }
+};
+
+struct SaveGroupMessageResult {
+    MessageMutationStatus status{MessageMutationStatus::kStorageError};
+    std::uint64_t message_id{0};
+    std::string message;
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return status == MessageMutationStatus::kSucceeded;
+    }
+};
+
+enum class GroupDeliveryStatus : std::uint32_t {
+    kPending = 1,
+    kDeferredOffline = 2,
+    kDelivered = 3,
+};
+
+struct GroupMessageDeliveryRecord {
+    std::uint64_t message_id{0};
+    std::uint64_t group_id{0};
+    std::uint64_t recipient_user_id{0};
+    GroupDeliveryStatus delivery_status{GroupDeliveryStatus::kPending};
+    std::uint32_t attempt_count{0};
+    std::string last_gateway_id;
+    std::string lease_owner;
+    std::string lease_token;
+    std::string lease_until;
+    std::string next_retry_at;
+    std::string last_error_code;
+    std::string created_at;
+    std::string updated_at;
+    std::string delivered_at;
+};
+
+struct GroupDeliveryWorkRecord {
+    GroupMessageRecord message;
+    GroupMessageDeliveryRecord delivery;
+};
+
+struct FindGroupDeliveryResult {
+    MessageQueryStatus status{MessageQueryStatus::kStorageError};
+    bool found{false};
+    GroupDeliveryWorkRecord record;
+    std::string message;
+    [[nodiscard]] bool Succeeded() const noexcept { return status == MessageQueryStatus::kSucceeded; }
+    [[nodiscard]] bool Found() const noexcept { return Succeeded() && found; }
+};
+
+struct ListGroupDeliveryWorkResult {
+    MessageQueryStatus status{MessageQueryStatus::kStorageError};
+    std::vector<GroupDeliveryWorkRecord> records;
+    std::string message;
+    [[nodiscard]] bool Succeeded() const noexcept { return status == MessageQueryStatus::kSucceeded; }
+};
+
+struct GroupDeliveryMutationResult {
+    MessageMutationStatus status{MessageMutationStatus::kStorageError};
+    std::uint64_t affected_rows{0};
+    std::string message;
+    [[nodiscard]] bool Succeeded() const noexcept { return status == MessageMutationStatus::kSucceeded; }
+};
+
 struct UpdatePrivateMessagesResult {
     MessageMutationStatus status{
         MessageMutationStatus::kStorageError
@@ -476,6 +564,52 @@ public:
         std::uint64_t peer_user_id
     );
 
+    // M17-B1 group-message durable identity/read primitives.
+    FindGroupMessageResult FindGroupMessageById(
+        std::uint64_t message_id
+    );
+
+    FindGroupMessageResult FindGroupMessageByClientMessageId(
+        std::uint64_t from_user_id,
+        const std::string& client_message_id
+    );
+
+    FindGroupDeliveryResult FindGroupMessageDelivery(
+        std::uint64_t message_id,
+        std::uint64_t recipient_user_id
+    );
+
+    ListGroupDeliveryWorkResult ClaimGroupMessageDeliveries(
+        const std::string& lease_owner,
+        const std::string& lease_token,
+        std::size_t limit,
+        std::uint32_t lease_ms,
+        std::uint64_t message_id = 0
+    );
+
+    ListGroupDeliveryWorkResult ClaimGroupMessageDeliveriesForRecipient(
+        std::uint64_t recipient_user_id,
+        const std::string& lease_owner,
+        const std::string& lease_token,
+        std::size_t limit,
+        std::uint32_t lease_ms
+    );
+
+    GroupDeliveryMutationResult CompleteGroupMessageDeliveryAttempt(
+        std::uint64_t message_id,
+        std::uint64_t recipient_user_id,
+        const std::string& lease_token,
+        GroupDeliveryStatus next_status,
+        const std::string& gateway_id,
+        std::uint32_t retry_after_ms,
+        const std::string& error_code
+    );
+
+    GroupDeliveryMutationResult ConfirmGroupMessageDelivery(
+        std::uint64_t message_id,
+        std::uint64_t recipient_user_id
+    );
+
     /*
      * M16 Transactional Outbox composition primitives.
      *
@@ -501,6 +635,36 @@ public:
     );
 
     FindPrivateMessageResult FindPrivateMessageByClientMessageIdOnConnection(
+        MySqlConnection* connection,
+        std::uint64_t from_user_id,
+        const std::string& client_message_id
+    );
+
+    SaveGroupMessageResult SaveGroupMessageOnConnection(
+        MySqlConnection* connection,
+        std::uint64_t group_id,
+        std::uint64_t from_user_id,
+        const std::string& client_message_id,
+        std::uint32_t message_type,
+        const std::string& content,
+        std::uint64_t membership_epoch,
+        std::uint64_t member_version,
+        std::uint32_t authorized_role
+    );
+
+    GroupDeliveryMutationResult InsertGroupMessageDeliveriesOnConnection(
+        MySqlConnection* connection,
+        std::uint64_t message_id,
+        std::uint64_t group_id,
+        const std::vector<std::uint64_t>& recipient_user_ids
+    );
+
+    FindGroupMessageResult FindGroupMessageByIdOnConnection(
+        MySqlConnection* connection,
+        std::uint64_t message_id
+    );
+
+    FindGroupMessageResult FindGroupMessageByClientMessageIdOnConnection(
         MySqlConnection* connection,
         std::uint64_t from_user_id,
         const std::string& client_message_id

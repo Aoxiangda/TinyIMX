@@ -42,8 +42,11 @@ HEAD="$(git rev-parse HEAD)"
 echo "branch=$BRANCH"
 echo "head=$HEAD"
 
-[[ "$BRANCH" == "feature/m17-group-domain-foundation-v1" ]] \
-    || fail "unexpected branch: $BRANCH"
+# Retained acceptance is intentionally branch-agnostic.
+# M17-A correctness is determined by the functional, security,
+# persistence, discovery and TCP E2E gates below, not by the
+# historical development branch name.
+echo "retained_branch_policy=branch-agnostic"
 
 git diff --check
 pass "git diff --check"

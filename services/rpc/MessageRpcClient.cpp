@@ -74,6 +74,77 @@ std::optional<MessageRpcRecord> ToRpcRecord(
     return target;
 }
 
+
+
+std::optional<GroupMessageRpcRecord> ToRpcRecord(
+    const tinyimx::message::v1::GroupMessageRecord& source
+) {
+    GroupMessageRpcRecord target;
+    target.message_id = source.message_id();
+    target.client_message_id = source.client_message_id();
+    target.group_id = source.group_id();
+    target.from_user_id = source.from_user_id();
+    target.message_type = source.message_type();
+    target.content = source.content();
+    target.membership_epoch = source.membership_epoch();
+    target.member_version = source.member_version();
+    target.authorized_role = source.authorized_role();
+    target.created_at = source.created_at();
+    if (target.message_id == 0 || target.client_message_id.empty() ||
+        target.group_id == 0 || target.from_user_id == 0 ||
+        target.message_type < 1 || target.message_type > 3 ||
+        target.membership_epoch == 0 || target.member_version == 0 ||
+        target.authorized_role < 1 || target.authorized_role > 3 ||
+        target.created_at.empty()) {
+        return std::nullopt;
+    }
+    return target;
+}
+
+std::optional<GroupDeliveryRpcState> FromProtoGroupDeliveryState(
+    tinyimx::message::v1::GroupMessageDeliveryState state
+) {
+    switch (state) {
+        case tinyimx::message::v1::GROUP_MESSAGE_DELIVERY_STATE_PENDING:
+            return GroupDeliveryRpcState::kPending;
+        case tinyimx::message::v1::GROUP_MESSAGE_DELIVERY_STATE_DEFERRED_OFFLINE:
+            return GroupDeliveryRpcState::kDeferredOffline;
+        case tinyimx::message::v1::GROUP_MESSAGE_DELIVERY_STATE_DELIVERED:
+            return GroupDeliveryRpcState::kDelivered;
+        default:
+            return std::nullopt;
+    }
+}
+
+std::optional<GroupDeliveryWorkRpcRecord> ToRpcRecord(
+    const tinyimx::message::v1::GroupDeliveryWorkItem& source
+) {
+    const auto message = ToRpcRecord(source.message());
+    const auto state = FromProtoGroupDeliveryState(source.delivery().delivery_state());
+    if (!message.has_value() || !state.has_value()) return std::nullopt;
+    GroupDeliveryWorkRpcRecord out;
+    out.message = *message;
+    const auto& d = source.delivery();
+    out.delivery.message_id = d.message_id();
+    out.delivery.group_id = d.group_id();
+    out.delivery.recipient_user_id = d.recipient_user_id();
+    out.delivery.delivery_state = *state;
+    out.delivery.attempt_count = d.attempt_count();
+    out.delivery.last_gateway_id = d.last_gateway_id();
+    out.delivery.lease_owner = d.lease_owner();
+    out.delivery.lease_token = d.lease_token();
+    out.delivery.lease_until = d.lease_until();
+    out.delivery.next_retry_at = d.next_retry_at();
+    out.delivery.last_error_code = d.last_error_code();
+    out.delivery.created_at = d.created_at();
+    out.delivery.updated_at = d.updated_at();
+    out.delivery.delivered_at = d.delivered_at();
+    if (out.delivery.message_id == 0 || out.delivery.recipient_user_id == 0 ||
+        out.delivery.message_id != out.message.message_id ||
+        out.delivery.group_id != out.message.group_id) return std::nullopt;
+    return out;
+}
+
 std::optional<ConversationRpcRecord> ToRpcRecord(
     const tinyimx::message::v1::ConversationRecord& source
 ) {
@@ -296,6 +367,277 @@ MessageRpcClient::PersistPrivateMessage(
     }
 
     return PersistPrivateMessageRpcCallResult::Success(std::move(output));
+}
+
+
+
+PersistGroupMessageRpcCallResult
+MessageRpcClient::PersistGroupMessage(
+    const PersistGroupMessageRpcRequest& request,
+    const RpcCallOptions& options
+) const {
+    if (request.from_user_id == 0 || request.group_id == 0 ||
+        request.client_message_id.empty() || request.client_message_id.size() > 64 ||
+        request.message_type < 1 || request.message_type > 3 ||
+        request.content.empty()) {
+        return PersistGroupMessageRpcCallResult::Failure(
+            RpcErrorCode::kInvalidArgument,
+            "invalid MessageService PersistGroupMessage request",
+            false);
+    }
+    if (options.remaining_timeout <= std::chrono::milliseconds::zero()) {
+        return PersistGroupMessageRpcCallResult::Failure(
+            RpcErrorCode::kDeadlineExceeded,
+            "PersistGroupMessage remaining RPC budget is exhausted",
+            false);
+    }
+    if (!endpoint_provider_) {
+        return PersistGroupMessageRpcCallResult::Failure(
+            RpcErrorCode::kUnavailable,
+            "MessageService endpoint provider is not configured",
+            false);
+    }
+    const auto endpoint = endpoint_provider_->Resolve(ServiceKind::kMessage);
+    if (!endpoint.has_value() || endpoint->target.empty()) {
+        return PersistGroupMessageRpcCallResult::Failure(
+            RpcErrorCode::kUnavailable,
+            "MessageService endpoint is unavailable",
+            false);
+    }
+    auto stub = GetOrCreateStub(*endpoint);
+    if (!stub) {
+        return PersistGroupMessageRpcCallResult::Failure(
+            RpcErrorCode::kUnavailable,
+            "MessageService gRPC stub could not be created",
+            false);
+    }
+
+    tinyimx::message::v1::PersistGroupMessageRequest proto_request;
+    FillMeta(options, proto_request.mutable_meta());
+    proto_request.set_from_user_id(request.from_user_id);
+    proto_request.set_group_id(request.group_id);
+    proto_request.set_client_message_id(request.client_message_id);
+    proto_request.set_message_type(request.message_type);
+    proto_request.set_content(request.content);
+
+    tinyimx::message::v1::PersistGroupMessageResponse proto_response;
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + options.remaining_timeout);
+    const grpc::Status grpc_status = stub->PersistGroupMessage(
+        &context, proto_request, &proto_response);
+    if (!grpc_status.ok()) {
+        const RpcStatus mapped = MapGrpcStatus(grpc_status);
+        return PersistGroupMessageRpcCallResult::Failure(
+            mapped.code, mapped.message, true);
+    }
+
+    PersistGroupMessageRpcResponse output;
+    switch (proto_response.result()) {
+        case tinyimx::message::v1::PERSIST_GROUP_MESSAGE_RESULT_CREATED:
+            output.outcome = PersistGroupMessageRpcOutcome::kCreated;
+            break;
+        case tinyimx::message::v1::PERSIST_GROUP_MESSAGE_RESULT_REUSED:
+            output.outcome = PersistGroupMessageRpcOutcome::kReused;
+            break;
+        case tinyimx::message::v1::PERSIST_GROUP_MESSAGE_RESULT_IDEMPOTENCY_CONFLICT:
+            output.outcome = PersistGroupMessageRpcOutcome::kIdempotencyConflict;
+            break;
+        case tinyimx::message::v1::PERSIST_GROUP_MESSAGE_RESULT_UNSPECIFIED:
+        default:
+            return PersistGroupMessageRpcCallResult::Failure(
+                RpcErrorCode::kDataLoss,
+                "MessageService returned unspecified group persistence result",
+                true);
+    }
+    output.message_id = proto_response.message_id();
+    output.message = proto_response.message();
+    const auto record = ToRpcRecord(proto_response.record());
+    if (!record.has_value() || output.message_id == 0 ||
+        record->message_id != output.message_id ||
+        record->from_user_id != request.from_user_id ||
+        record->client_message_id != request.client_message_id) {
+        return PersistGroupMessageRpcCallResult::Failure(
+            RpcErrorCode::kDataLoss,
+            "MessageService returned invalid group-message persistence identity",
+            true);
+    }
+    output.record = *record;
+    if (output.Accepted()) {
+        if (record->group_id != request.group_id ||
+            record->message_type != request.message_type ||
+            record->content != request.content) {
+            return PersistGroupMessageRpcCallResult::Failure(
+                RpcErrorCode::kDataLoss,
+                "MessageService returned inconsistent accepted group-message record",
+                true);
+        }
+    } else {
+        const bool differs = record->group_id != request.group_id ||
+                             record->message_type != request.message_type ||
+                             record->content != request.content;
+        if (!differs) {
+            return PersistGroupMessageRpcCallResult::Failure(
+                RpcErrorCode::kDataLoss,
+                "MessageService returned false group-message idempotency conflict",
+                true);
+        }
+    }
+    return PersistGroupMessageRpcCallResult::Success(std::move(output));
+}
+
+RpcResult<GetGroupMessageDeliveryRpcResponse>
+MessageRpcClient::GetGroupMessageDelivery(
+    const GetGroupMessageDeliveryRpcRequest& request,
+    const RpcCallOptions& options
+) const {
+    if (request.message_id == 0 || request.recipient_user_id == 0)
+        return RpcResult<GetGroupMessageDeliveryRpcResponse>::Failure(RpcErrorCode::kInvalidArgument, "invalid GetGroupMessageDelivery request");
+    if (options.remaining_timeout <= std::chrono::milliseconds::zero())
+        return RpcResult<GetGroupMessageDeliveryRpcResponse>::Failure(RpcErrorCode::kDeadlineExceeded, "GetGroupMessageDelivery RPC budget exhausted");
+    if (!endpoint_provider_) return RpcResult<GetGroupMessageDeliveryRpcResponse>::Failure(RpcErrorCode::kUnavailable, "MessageService endpoint provider is not configured");
+    const auto endpoint = endpoint_provider_->Resolve(ServiceKind::kMessage);
+    if (!endpoint || endpoint->target.empty()) return RpcResult<GetGroupMessageDeliveryRpcResponse>::Failure(RpcErrorCode::kUnavailable, "MessageService endpoint is unavailable");
+    auto stub = GetOrCreateStub(*endpoint);
+    if (!stub) return RpcResult<GetGroupMessageDeliveryRpcResponse>::Failure(RpcErrorCode::kUnavailable, "MessageService gRPC stub could not be created");
+    tinyimx::message::v1::GetGroupMessageDeliveryRequest in;
+    FillMeta(options, in.mutable_meta()); in.set_message_id(request.message_id); in.set_recipient_user_id(request.recipient_user_id);
+    tinyimx::message::v1::GetGroupMessageDeliveryResponse out;
+    grpc::ClientContext context; context.set_deadline(std::chrono::system_clock::now()+options.remaining_timeout);
+    const auto status = stub->GetGroupMessageDelivery(&context, in, &out);
+    if (!status.ok()) { const auto mapped=MapGrpcStatus(status); return RpcResult<GetGroupMessageDeliveryRpcResponse>::Failure(mapped.code,mapped.message); }
+    const auto work = ToRpcRecord(out.work());
+    if (!work || work->delivery.message_id != request.message_id || work->delivery.recipient_user_id != request.recipient_user_id)
+        return RpcResult<GetGroupMessageDeliveryRpcResponse>::Failure(RpcErrorCode::kDataLoss,"MessageService returned invalid group delivery");
+    GetGroupMessageDeliveryRpcResponse response; response.work=*work;
+    return RpcResult<GetGroupMessageDeliveryRpcResponse>::Success(std::move(response));
+}
+
+RpcResult<ClaimGroupMessageDeliveriesRpcResponse>
+MessageRpcClient::ClaimGroupMessageDeliveries(
+    const ClaimGroupMessageDeliveriesRpcRequest& request,
+    const RpcCallOptions& options
+) const {
+    if (request.lease_owner.empty() || request.lease_token.empty() || request.limit==0 || request.limit>256 || request.lease_ms<100 || request.lease_ms>60000)
+        return RpcResult<ClaimGroupMessageDeliveriesRpcResponse>::Failure(RpcErrorCode::kInvalidArgument,"invalid ClaimGroupMessageDeliveries request");
+    if (options.remaining_timeout <= std::chrono::milliseconds::zero())
+        return RpcResult<ClaimGroupMessageDeliveriesRpcResponse>::Failure(RpcErrorCode::kDeadlineExceeded,"ClaimGroupMessageDeliveries RPC budget exhausted");
+    if (!endpoint_provider_) return RpcResult<ClaimGroupMessageDeliveriesRpcResponse>::Failure(RpcErrorCode::kUnavailable,"MessageService endpoint provider is not configured");
+    const auto endpoint=endpoint_provider_->Resolve(ServiceKind::kMessage);
+    if(!endpoint||endpoint->target.empty()) return RpcResult<ClaimGroupMessageDeliveriesRpcResponse>::Failure(RpcErrorCode::kUnavailable,"MessageService endpoint is unavailable");
+    auto stub=GetOrCreateStub(*endpoint); if(!stub) return RpcResult<ClaimGroupMessageDeliveriesRpcResponse>::Failure(RpcErrorCode::kUnavailable,"MessageService gRPC stub could not be created");
+    tinyimx::message::v1::ClaimGroupMessageDeliveriesRequest in; FillMeta(options,in.mutable_meta());
+    in.set_lease_owner(request.lease_owner); in.set_lease_token(request.lease_token); in.set_limit(request.limit); in.set_lease_ms(request.lease_ms); in.set_message_id(request.message_id);
+    tinyimx::message::v1::ClaimGroupMessageDeliveriesResponse out; grpc::ClientContext context; context.set_deadline(std::chrono::system_clock::now()+options.remaining_timeout);
+    const auto status=stub->ClaimGroupMessageDeliveries(&context,in,&out); if(!status.ok()){const auto mapped=MapGrpcStatus(status);return RpcResult<ClaimGroupMessageDeliveriesRpcResponse>::Failure(mapped.code,mapped.message);}
+    ClaimGroupMessageDeliveriesRpcResponse response; response.work_items.reserve(static_cast<std::size_t>(out.work_items_size()));
+    for(const auto& item:out.work_items()){const auto work=ToRpcRecord(item); if(!work || work->delivery.lease_token!=request.lease_token) return RpcResult<ClaimGroupMessageDeliveriesRpcResponse>::Failure(RpcErrorCode::kDataLoss,"MessageService returned invalid claimed group delivery"); response.work_items.push_back(*work);}
+    return RpcResult<ClaimGroupMessageDeliveriesRpcResponse>::Success(std::move(response));
+}
+
+RpcResult<ClaimGroupMessageDeliveriesRpcResponse>
+MessageRpcClient::ClaimGroupMessageDeliveriesForRecipient(
+    const ClaimGroupMessageDeliveriesForRecipientRpcRequest& request,
+    const RpcCallOptions& options
+) const {
+    if (request.recipient_user_id == 0 || request.lease_owner.empty() ||
+        request.lease_token.empty() || request.lease_owner.size() > 128 ||
+        request.lease_token.size() > 128 || request.limit == 0 ||
+        request.limit > 256 || request.lease_ms < 100 ||
+        request.lease_ms > 60000) {
+        return RpcResult<ClaimGroupMessageDeliveriesRpcResponse>::Failure(
+            RpcErrorCode::kInvalidArgument,
+            "invalid ClaimGroupMessageDeliveriesForRecipient request");
+    }
+    if (options.remaining_timeout <= std::chrono::milliseconds::zero()) {
+        return RpcResult<ClaimGroupMessageDeliveriesRpcResponse>::Failure(
+            RpcErrorCode::kDeadlineExceeded,
+            "ClaimGroupMessageDeliveriesForRecipient RPC budget exhausted");
+    }
+    if (!endpoint_provider_) {
+        return RpcResult<ClaimGroupMessageDeliveriesRpcResponse>::Failure(
+            RpcErrorCode::kUnavailable,
+            "MessageService endpoint provider is not configured");
+    }
+    const auto endpoint = endpoint_provider_->Resolve(ServiceKind::kMessage);
+    if (!endpoint || endpoint->target.empty()) {
+        return RpcResult<ClaimGroupMessageDeliveriesRpcResponse>::Failure(
+            RpcErrorCode::kUnavailable,
+            "MessageService endpoint is unavailable");
+    }
+    auto stub = GetOrCreateStub(*endpoint);
+    if (!stub) {
+        return RpcResult<ClaimGroupMessageDeliveriesRpcResponse>::Failure(
+            RpcErrorCode::kUnavailable,
+            "MessageService gRPC stub could not be created");
+    }
+
+    tinyimx::message::v1::ClaimGroupMessageDeliveriesForRecipientRequest in;
+    FillMeta(options, in.mutable_meta());
+    in.set_recipient_user_id(request.recipient_user_id);
+    in.set_lease_owner(request.lease_owner);
+    in.set_lease_token(request.lease_token);
+    in.set_limit(request.limit);
+    in.set_lease_ms(request.lease_ms);
+
+    tinyimx::message::v1::ClaimGroupMessageDeliveriesResponse out;
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + options.remaining_timeout);
+    const auto status = stub->ClaimGroupMessageDeliveriesForRecipient(
+        &context, in, &out);
+    if (!status.ok()) {
+        const auto mapped = MapGrpcStatus(status);
+        return RpcResult<ClaimGroupMessageDeliveriesRpcResponse>::Failure(
+            mapped.code, mapped.message);
+    }
+
+    ClaimGroupMessageDeliveriesRpcResponse response;
+    response.work_items.reserve(static_cast<std::size_t>(out.work_items_size()));
+    std::uint64_t previous_message_id = 0;
+    for (const auto& item : out.work_items()) {
+        const auto work = ToRpcRecord(item);
+        if (!work ||
+            work->delivery.recipient_user_id != request.recipient_user_id ||
+            work->delivery.delivery_state != GroupDeliveryRpcState::kDeferredOffline ||
+            work->delivery.lease_owner != request.lease_owner ||
+            work->delivery.lease_token != request.lease_token ||
+            work->message.message_id == 0 ||
+            work->message.message_id <= previous_message_id) {
+            return RpcResult<ClaimGroupMessageDeliveriesRpcResponse>::Failure(
+                RpcErrorCode::kDataLoss,
+                "MessageService returned invalid recipient replay claim");
+        }
+        previous_message_id = work->message.message_id;
+        response.work_items.push_back(*work);
+    }
+    return RpcResult<ClaimGroupMessageDeliveriesRpcResponse>::Success(
+        std::move(response));
+}
+
+MessageMutationRpcCallResult MessageRpcClient::CompleteGroupMessageDeliveryAttempt(
+    const CompleteGroupMessageDeliveryAttemptRpcRequest& request,
+    const RpcCallOptions& options
+) const {
+    if(request.message_id==0||request.recipient_user_id==0||request.lease_token.empty()) return MessageMutationRpcCallResult::Failure(RpcErrorCode::kInvalidArgument,"invalid CompleteGroupMessageDeliveryAttempt request",false);
+    if(options.remaining_timeout<=std::chrono::milliseconds::zero()) return MessageMutationRpcCallResult::Failure(RpcErrorCode::kDeadlineExceeded,"CompleteGroupMessageDeliveryAttempt RPC budget exhausted",false);
+    if(!endpoint_provider_) return MessageMutationRpcCallResult::Failure(RpcErrorCode::kUnavailable,"MessageService endpoint provider is not configured",false);
+    const auto endpoint=endpoint_provider_->Resolve(ServiceKind::kMessage); if(!endpoint||endpoint->target.empty()) return MessageMutationRpcCallResult::Failure(RpcErrorCode::kUnavailable,"MessageService endpoint is unavailable",false);
+    auto stub=GetOrCreateStub(*endpoint); if(!stub) return MessageMutationRpcCallResult::Failure(RpcErrorCode::kUnavailable,"MessageService gRPC stub could not be created",false);
+    tinyimx::message::v1::CompleteGroupMessageDeliveryAttemptRequest in; FillMeta(options,in.mutable_meta()); in.set_message_id(request.message_id); in.set_recipient_user_id(request.recipient_user_id); in.set_lease_token(request.lease_token); in.set_gateway_id(request.gateway_id); in.set_retry_after_ms(request.retry_after_ms); in.set_error_code(request.error_code);
+    switch(request.outcome){case GroupDeliveryAttemptRpcOutcome::kSubmitted:in.set_outcome(tinyimx::message::v1::GROUP_DELIVERY_ATTEMPT_OUTCOME_SUBMITTED);break;case GroupDeliveryAttemptRpcOutcome::kOffline:in.set_outcome(tinyimx::message::v1::GROUP_DELIVERY_ATTEMPT_OUTCOME_OFFLINE);break;case GroupDeliveryAttemptRpcOutcome::kRetryableFailure:in.set_outcome(tinyimx::message::v1::GROUP_DELIVERY_ATTEMPT_OUTCOME_RETRYABLE_FAILURE);break;}
+    tinyimx::message::v1::MessageMutationResponse out; grpc::ClientContext context; context.set_deadline(std::chrono::system_clock::now()+options.remaining_timeout); const auto status=stub->CompleteGroupMessageDeliveryAttempt(&context,in,&out); if(!status.ok()){const auto mapped=MapGrpcStatus(status); return MessageMutationRpcCallResult::Failure(mapped.code,mapped.message,true);} MessageMutationRpcResponse response; response.affected_rows=out.affected_rows(); return MessageMutationRpcCallResult::Success(std::move(response));
+}
+
+MessageMutationRpcCallResult MessageRpcClient::ConfirmGroupMessageDelivery(
+    const ConfirmGroupMessageDeliveryRpcRequest& request,
+    const RpcCallOptions& options
+) const {
+    if(request.message_id==0||request.recipient_user_id==0) return MessageMutationRpcCallResult::Failure(RpcErrorCode::kInvalidArgument,"invalid ConfirmGroupMessageDelivery request",false);
+    if(options.remaining_timeout<=std::chrono::milliseconds::zero()) return MessageMutationRpcCallResult::Failure(RpcErrorCode::kDeadlineExceeded,"ConfirmGroupMessageDelivery RPC budget exhausted",false);
+    if(!endpoint_provider_) return MessageMutationRpcCallResult::Failure(RpcErrorCode::kUnavailable,"MessageService endpoint provider is not configured",false);
+    const auto endpoint=endpoint_provider_->Resolve(ServiceKind::kMessage); if(!endpoint||endpoint->target.empty()) return MessageMutationRpcCallResult::Failure(RpcErrorCode::kUnavailable,"MessageService endpoint is unavailable",false);
+    auto stub=GetOrCreateStub(*endpoint); if(!stub) return MessageMutationRpcCallResult::Failure(RpcErrorCode::kUnavailable,"MessageService gRPC stub could not be created",false);
+    tinyimx::message::v1::ConfirmGroupMessageDeliveryRequest in; FillMeta(options,in.mutable_meta()); in.set_message_id(request.message_id); in.set_recipient_user_id(request.recipient_user_id);
+    tinyimx::message::v1::MessageMutationResponse out; grpc::ClientContext context; context.set_deadline(std::chrono::system_clock::now()+options.remaining_timeout); const auto status=stub->ConfirmGroupMessageDelivery(&context,in,&out); if(!status.ok()){const auto mapped=MapGrpcStatus(status); return MessageMutationRpcCallResult::Failure(mapped.code,mapped.message,true);} MessageMutationRpcResponse response; response.affected_rows=out.affected_rows(); return MessageMutationRpcCallResult::Success(std::move(response));
 }
 
 RpcResult<GetPrivateMessageRpcResponse>

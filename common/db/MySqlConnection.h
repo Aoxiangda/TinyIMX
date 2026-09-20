@@ -49,6 +49,12 @@ namespace tinyimx {
 
             bool BeginTransaction();
 
+            // Begin a read-only REPEATABLE READ transaction with an eager
+            // consistent snapshot. Use this when several reads must describe
+            // one logical point-in-time view (for example group send
+            // authorization + recipient snapshot).
+            bool BeginConsistentReadTransaction();
+
             bool Commit();
 
             bool Rollback();

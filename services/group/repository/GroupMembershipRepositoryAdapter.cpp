@@ -1288,7 +1288,7 @@ GroupSendPermissionResult GroupRepositoryAdapter::CheckGroupSendPermission(
         return result;
     }
     auto connection = pool_->Acquire();
-    if (!connection || !connection->BeginTransaction()) {
+    if (!connection || !connection->BeginConsistentReadTransaction()) {
         result.status = GroupApplicationStatus::kStorageError;
         result.message = "CheckGroupSendPermission failed to begin consistent-read transaction";
         return result;
@@ -1385,6 +1385,131 @@ GroupSendPermissionResult GroupRepositoryAdapter::CheckGroupSendPermission(
     result.allowed = permission_->CanSend(*member_view, mute.value);
     result.message = result.allowed ? "group send permission granted"
                                     : "group send permission denied by active mute";
+    return result;
+}
+
+GroupSendPreparationResult GroupRepositoryAdapter::PrepareGroupMessageSend(
+    std::uint64_t actor_user_id,
+    std::uint64_t group_id
+) {
+    GroupSendPreparationResult result;
+    if (repository_ == nullptr || pool_ == nullptr || permission_ == nullptr) {
+        result.status = GroupApplicationStatus::kStorageError;
+        result.message = "group repository adapter dependencies are unavailable";
+        return result;
+    }
+    auto connection = pool_->Acquire();
+    if (!connection || !connection->BeginConsistentReadTransaction()) {
+        result.status = GroupApplicationStatus::kStorageError;
+        result.message = "PrepareGroupMessageSend failed to begin consistent-read transaction";
+        return result;
+    }
+    const auto group = repository_->FindGroupByIdOnConnection(connection.operator->(), group_id, false);
+    if (!group.Succeeded()) {
+        Rollback(connection.operator->());
+        result.status = MapStorageStatus(group.status);
+        result.message = group.message;
+        return result;
+    }
+    if (!group.found) {
+        Rollback(connection.operator->());
+        result.status = GroupApplicationStatus::kNotFound;
+        result.message = "group not found";
+        return result;
+    }
+    const auto group_view = ToGroupView(group.record);
+    if (!group_view.has_value()) {
+        Rollback(connection.operator->());
+        result.status = GroupApplicationStatus::kInvalidRecord;
+        result.message = "invalid group record";
+        return result;
+    }
+    result.member_version = group_view->member_version;
+    if (group_view->status != GroupStatus::kActive) {
+        if (!CommitReadOnly(connection.operator->())) {
+            result.status = GroupApplicationStatus::kStorageError;
+            result.message = "PrepareGroupMessageSend read-only commit failed";
+            return result;
+        }
+        result.status = GroupApplicationStatus::kSucceeded;
+        result.allowed = false;
+        result.message = "group is not active";
+        return result;
+    }
+    const auto member = repository_->FindMemberOnConnection(
+        connection.operator->(), group_id, actor_user_id, false);
+    if (!member.Succeeded()) {
+        Rollback(connection.operator->());
+        result.status = MapStorageStatus(member.status);
+        result.message = member.message;
+        return result;
+    }
+    if (!member.found) {
+        if (!CommitReadOnly(connection.operator->())) {
+            result.status = GroupApplicationStatus::kStorageError;
+            result.message = "PrepareGroupMessageSend read-only commit failed";
+            return result;
+        }
+        result.status = GroupApplicationStatus::kSucceeded;
+        result.allowed = false;
+        result.message = "user is not a group member";
+        return result;
+    }
+    const auto member_view = ToMemberView(member.record);
+    if (!member_view.has_value()) {
+        Rollback(connection.operator->());
+        result.status = GroupApplicationStatus::kInvalidRecord;
+        result.message = "invalid membership record";
+        return result;
+    }
+    result.role = member_view->role;
+    result.membership_epoch = member_view->membership_epoch;
+    if (member_view->status != GroupMemberStatus::kActive) {
+        if (!CommitReadOnly(connection.operator->())) {
+            result.status = GroupApplicationStatus::kStorageError;
+            result.message = "PrepareGroupMessageSend read-only commit failed";
+            return result;
+        }
+        result.status = GroupApplicationStatus::kSucceeded;
+        result.allowed = false;
+        result.message = "membership is not active";
+        return result;
+    }
+    const auto mute = repository_->IsMemberMuteActiveOnConnection(
+        connection.operator->(), group_id, actor_user_id);
+    if (!mute.Succeeded()) {
+        Rollback(connection.operator->());
+        result.status = MapStorageStatus(mute.status);
+        result.message = mute.message;
+        return result;
+    }
+    result.allowed = permission_->CanSend(*member_view, mute.value);
+    if (!result.allowed) {
+        if (!CommitReadOnly(connection.operator->())) {
+            result.status = GroupApplicationStatus::kStorageError;
+            result.message = "PrepareGroupMessageSend read-only commit failed";
+            return result;
+        }
+        result.status = GroupApplicationStatus::kSucceeded;
+        result.message = "group send permission denied by active mute";
+        return result;
+    }
+    const auto recipients = repository_->ListActiveRecipientUserIdsOnConnection(
+        connection.operator->(), group_id, actor_user_id, group_view->max_members);
+    if (!recipients.Succeeded()) {
+        Rollback(connection.operator->());
+        result.status = MapStorageStatus(recipients.status);
+        result.message = recipients.message;
+        return result;
+    }
+    if (!CommitReadOnly(connection.operator->())) {
+        result.status = GroupApplicationStatus::kStorageError;
+        result.message = "PrepareGroupMessageSend consistent-read commit failed";
+        return result;
+    }
+    result.status = GroupApplicationStatus::kSucceeded;
+    result.recipient_user_ids = recipients.user_ids;
+    result.message = "group send authorization and recipient snapshot prepared";
     return result;
 }
 

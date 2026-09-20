@@ -70,6 +70,10 @@ public:
         std::uint64_t actor_user_id,
         std::uint64_t group_id
     ) override;
+    [[nodiscard]] GroupSendPreparationResult PrepareGroupMessageSend(
+        std::uint64_t actor_user_id,
+        std::uint64_t group_id
+    ) override;
 
 private:
     tinyimx::GroupRepository* repository_{nullptr};

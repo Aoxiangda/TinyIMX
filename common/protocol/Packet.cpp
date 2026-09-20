@@ -94,11 +94,19 @@ std::string MessageTypeToString(MessageType type) {
         case MessageType::kListGroupMembersResponse: return "list_group_members_response";
         case MessageType::kListMyGroupsRequest: return "list_my_groups_request";
         case MessageType::kListMyGroupsResponse: return "list_my_groups_response";
+        case MessageType::kGroupMessageSendRequest: return "group_message_send_request";
+        case MessageType::kGroupMessageSendResponse: return "group_message_send_response";
+        case MessageType::kGroupMessageDelivery: return "group_message_delivery";
+        case MessageType::kGroupMessageDeliveryAck: return "group_message_delivery_ack";
 
         case MessageType::kGatewayForwardChatRequest:
             return "gateway_forward_chat_request";
         case MessageType::kGatewayForwardChatResponse:
             return "gateway_forward_chat_response";
+        case MessageType::kGatewayForwardGroupMessageRequest:
+            return "gateway_forward_group_message_request";
+        case MessageType::kGatewayForwardGroupMessageResponse:
+            return "gateway_forward_group_message_response";
 
         case MessageType::kHeartbeat:
             return "heartbeat";
@@ -174,9 +182,15 @@ bool IsKnownMessageType(MessageType type) {
         case MessageType::kListGroupMembersResponse:
         case MessageType::kListMyGroupsRequest:
         case MessageType::kListMyGroupsResponse:
+        case MessageType::kGroupMessageSendRequest:
+        case MessageType::kGroupMessageSendResponse:
+        case MessageType::kGroupMessageDelivery:
+        case MessageType::kGroupMessageDeliveryAck:
 
         case MessageType::kGatewayForwardChatRequest:
         case MessageType::kGatewayForwardChatResponse:
+        case MessageType::kGatewayForwardGroupMessageRequest:
+        case MessageType::kGatewayForwardGroupMessageResponse:
 
         case MessageType::kHeartbeat:
         case MessageType::kError:
@@ -193,6 +207,10 @@ bool IsGatewayInternalMessageType(MessageType type) {
 
         case MessageType::
             kGatewayForwardChatResponse:
+        case MessageType::
+            kGatewayForwardGroupMessageRequest:
+        case MessageType::
+            kGatewayForwardGroupMessageResponse:
             return true;
 
         default:

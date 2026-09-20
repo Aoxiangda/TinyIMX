@@ -32,23 +32,12 @@ public:
     std::uint64_t last_permission_group{0};
 
     tinyimx::group::GroupRepositoryMutationResult CreateGroup(
-        const tinyimx::group::CreateGroupCommand& c) override {
-            last_create=c;
-            return mutation_result;
-        }
-
+        const tinyimx::group::CreateGroupCommand& c) override { last_create=c; return mutation_result; }
     tinyimx::group::GroupRepositoryGetResult GetGroup(std::uint64_t a, std::uint64_t g) override {
-        last_get_actor=a;
-        last_get_group=g;
-        return get_result;
+        last_get_actor=a; last_get_group=g; return get_result;
     }
-
     tinyimx::group::GroupRepositoryMutationResult UpdateGroup(
-        const tinyimx::group::UpdateGroupCommand& c) override {
-            last_update=c;
-            return mutation_result;
-    }
-
+        const tinyimx::group::UpdateGroupCommand& c) override { last_update=c; return mutation_result; }
     tinyimx::group::GroupRepositoryMutationResult DisbandGroup(
         const tinyimx::group::DisbandGroupCommand& c) override { last_disband=c; return mutation_result; }
     tinyimx::group::GroupRepositoryMutationResult JoinGroup(
@@ -72,6 +61,19 @@ public:
     tinyimx::group::GroupSendPermissionResult CheckGroupSendPermission(
         std::uint64_t a, std::uint64_t g) override {
         last_permission_actor=a; last_permission_group=g; return permission_result;
+    }
+    tinyimx::group::GroupSendPreparationResult PrepareGroupMessageSend(
+        std::uint64_t a, std::uint64_t g) override {
+        tinyimx::group::GroupSendPreparationResult out;
+        out.status = permission_result.status;
+        out.allowed = permission_result.allowed;
+        out.role = permission_result.role;
+        out.membership_epoch = permission_result.membership_epoch;
+        out.member_version = permission_result.member_version;
+        if (out.allowed) out.recipient_user_ids = {8, 9};
+        out.message = permission_result.message;
+        last_permission_actor=a; last_permission_group=g;
+        return out;
     }
 };
 

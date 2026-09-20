@@ -192,6 +192,28 @@ ForwardChat(
 }
 
 
+
+bool GatewayPeerTransport::ForwardGroupMessage(
+    std::uint64_t message_id,
+    std::uint64_t recipient_user_id,
+    ForwardGroupMessageCallback callback
+) {
+    if (message_id == 0 || recipient_user_id == 0 ||
+        !running_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    const auto self = weak_from_this().lock();
+    if (!self || loop_ == nullptr) return false;
+    loop_->RunInLoop([
+        self, message_id, recipient_user_id,
+        callback = std::move(callback)
+    ]() mutable {
+        self->ForwardGroupMessageInLoop(
+            message_id, recipient_user_id, std::move(callback));
+    });
+    return true;
+}
+
 bool GatewayPeerTransport::
 IsRunning() const noexcept {
     return running_.load(
@@ -355,9 +377,17 @@ StopInLoop() {
             kStopped,
         "gateway peer transport stopped"
     );
+    FailAllPendingGroup(
+        GatewayPeerTransportStatus::kStopped,
+        "gateway peer transport stopped"
+    );
     FailQueuedForwards(
         GatewayPeerTransportStatus::
             kStopped,
+        "gateway peer transport stopped"
+    );
+    FailQueuedGroupForwards(
+        GatewayPeerTransportStatus::kStopped,
         "gateway peer transport stopped"
     );
     connected_.store(
@@ -400,10 +430,18 @@ void GatewayPeerTransport::HandleConnection(
                 kDisconnected,
             "gateway peer connection closed"
         );
+        FailAllPendingGroup(
+            GatewayPeerTransportStatus::kDisconnected,
+            "gateway peer connection closed"
+        );
 
         FailQueuedForwards(
             GatewayPeerTransportStatus::
                 kDisconnected,
+            "gateway peer connection closed"
+        );
+        FailQueuedGroupForwards(
+            GatewayPeerTransportStatus::kDisconnected,
             "gateway peer connection closed"
         );
     }
@@ -424,6 +462,7 @@ void GatewayPeerTransport::HandleConnection(
 
     if (connected) {
         FlushQueuedForwards();
+        FlushQueuedGroupForwards();
     }
 }
 
@@ -469,6 +508,10 @@ HandleMessage(
                 kProtocolError,
             decode_result.error_message
         );
+        FailAllPendingGroup(
+            GatewayPeerTransportStatus::kProtocolError,
+            decode_result.error_message
+        );
 
         if (connection) {
             connection->ForceClose();
@@ -490,6 +533,11 @@ HandleMessage(
                 packet
             );
 
+            continue;
+        }
+
+        if (packet.type == MessageType::kGatewayForwardGroupMessageResponse) {
+            HandleForwardGroupMessageResponse(packet);
             continue;
         }
 
@@ -530,6 +578,10 @@ HandleConnectError(
         ) +
             std::strerror(error_number)
     );
+    FailQueuedGroupForwards(
+        GatewayPeerTransportStatus::kNotConnected,
+        std::string("gateway peer connect failed: ") + std::strerror(error_number)
+    );
     LOG_WARN(
         "gateway peer transport "
         "connect failed"
@@ -552,6 +604,81 @@ HandleConnectError(
     }
 }
 
+
+
+void GatewayPeerTransport::ForwardGroupMessageInLoop(
+    std::uint64_t message_id,
+    std::uint64_t recipient_user_id,
+    ForwardGroupMessageCallback callback
+) {
+    auto fail = [&](GatewayPeerTransportStatus status, const std::string& message) {
+        if (!callback) return;
+        GatewayGroupPeerTransportResult result;
+        result.status = status;
+        result.error_message = message;
+        callback(std::move(result));
+    };
+
+    if (!running_.load(std::memory_order_acquire)) {
+        fail(GatewayPeerTransportStatus::kNotRunning, "gateway peer transport is not running");
+        return;
+    }
+    if (!connected_.load(std::memory_order_acquire) || !tcp_client_) {
+        queued_group_forwards_.push_back({message_id, recipient_user_id, std::move(callback)});
+        return;
+    }
+    const TcpConnectionPtr connection = tcp_client_->Connection();
+    if (!connection || !connection->IsConnected()) {
+        queued_group_forwards_.push_back({message_id, recipient_user_id, std::move(callback)});
+        return;
+    }
+
+    GatewayForwardGroupMessageRequest request;
+    request.message_id = message_id;
+    request.recipient_user_id = recipient_user_id;
+    request.source_gateway_id = options_.local_gateway_id;
+    request.source_lease_token = options_.local_lease_token;
+
+    std::string body;
+    std::string error;
+    if (!SerializeGatewayForwardGroupMessageRequest(request, &body, &error)) {
+        fail(GatewayPeerTransportStatus::kInvalidArgument, error);
+        return;
+    }
+    const std::uint32_t sequence = NextSequence();
+    if (sequence == 0) {
+        fail(GatewayPeerTransportStatus::kProtocolError, "unable to allocate gateway peer sequence");
+        return;
+    }
+    Packet packet;
+    packet.type = MessageType::kGatewayForwardGroupMessageRequest;
+    packet.seq = sequence;
+    packet.body = std::move(body);
+    Buffer output;
+    if (!codec_.Encode(packet, &output, &error)) {
+        fail(GatewayPeerTransportStatus::kEncodeError, error);
+        return;
+    }
+    const std::weak_ptr<GatewayPeerTransport> weak_self = weak_from_this();
+    const TimerId timeout_timer = loop_->RunAfter(
+        options_.request_timeout,
+        [weak_self, sequence]() {
+            if (auto self = weak_self.lock()) self->HandleGroupRequestTimeout(sequence);
+        });
+    PendingGroupRequest pending;
+    pending.callback = std::move(callback);
+    pending.timeout_timer = timeout_timer;
+    pending_group_requests_.emplace(sequence, std::move(pending));
+    pending_count_.store(
+        pending_requests_.size() + pending_group_requests_.size(),
+        std::memory_order_release);
+    connection->Send(output.RetrieveAllAsString());
+    LOG_INFO("gateway peer group request sent"
+             << ", remote_gateway=" << options_.remote_gateway_id
+             << ", seq=" << sequence
+             << ", message_id=" << message_id
+             << ", recipient=" << recipient_user_id);
+}
 
 void GatewayPeerTransport::
 ForwardChatInLoop(
@@ -801,7 +928,7 @@ ForwardChatInLoop(
     );
 
     pending_count_.store(
-        pending_requests_.size(),
+        pending_requests_.size() + pending_group_requests_.size(),
         std::memory_order_release
     );
 
@@ -826,6 +953,40 @@ ForwardChatInLoop(
     );
 }
 
+
+
+void GatewayPeerTransport::HandleForwardGroupMessageResponse(const Packet& packet) {
+    const auto it = pending_group_requests_.find(packet.seq);
+    if (it == pending_group_requests_.end()) {
+        LOG_WARN("gateway peer received unknown group response"
+                 << ", remote_gateway=" << options_.remote_gateway_id
+                 << ", seq=" << packet.seq);
+        return;
+    }
+    PendingGroupRequest pending = std::move(it->second);
+    pending_group_requests_.erase(it);
+    pending_count_.store(
+        pending_requests_.size() + pending_group_requests_.size(),
+        std::memory_order_release);
+    if (pending.timeout_timer.IsValid()) loop_->Cancel(pending.timeout_timer);
+    GatewayForwardGroupMessageResponse response;
+    std::string error;
+    if (!DeserializeGatewayForwardGroupMessageResponse(packet.body, &response, &error)) {
+        if (pending.callback) {
+            GatewayGroupPeerTransportResult result;
+            result.status = GatewayPeerTransportStatus::kProtocolError;
+            result.error_message = error;
+            pending.callback(std::move(result));
+        }
+        return;
+    }
+    if (pending.callback) {
+        GatewayGroupPeerTransportResult result;
+        result.status = GatewayPeerTransportStatus::kOk;
+        result.response = std::move(response);
+        pending.callback(std::move(result));
+    }
+}
 
 void GatewayPeerTransport::
 HandleForwardChatResponse(
@@ -862,7 +1023,7 @@ HandleForwardChatResponse(
     );
 
     pending_count_.store(
-        pending_requests_.size(),
+        pending_requests_.size() + pending_group_requests_.size(),
         std::memory_order_release
     );
 
@@ -945,7 +1106,7 @@ void GatewayPeerTransport::HandleRequestTimeout(
     );
 
     pending_count_.store(
-        pending_requests_.size(),
+        pending_requests_.size() + pending_group_requests_.size(),
         std::memory_order_release
     );
 
@@ -973,6 +1134,40 @@ void GatewayPeerTransport::HandleRequestTimeout(
     }
 }
 
+
+
+void GatewayPeerTransport::HandleGroupRequestTimeout(std::uint32_t sequence) {
+    const auto it = pending_group_requests_.find(sequence);
+    if (it == pending_group_requests_.end()) return;
+    auto callback = std::move(it->second.callback);
+    pending_group_requests_.erase(it);
+    pending_count_.store(
+        pending_requests_.size() + pending_group_requests_.size(),
+        std::memory_order_release);
+    if (callback) {
+        GatewayGroupPeerTransportResult result;
+        result.status = GatewayPeerTransportStatus::kRequestTimeout;
+        result.error_message = "gateway peer group request timeout";
+        callback(std::move(result));
+    }
+}
+
+void GatewayPeerTransport::FailAllPendingGroup(
+    GatewayPeerTransportStatus status,
+    const std::string& error_message
+) {
+    auto pending = std::move(pending_group_requests_);
+    pending_group_requests_.clear();
+    pending_count_.store(pending_requests_.size(), std::memory_order_release);
+    for (auto& item : pending) {
+        if (item.second.timeout_timer.IsValid()) loop_->Cancel(item.second.timeout_timer);
+        if (!item.second.callback) continue;
+        GatewayGroupPeerTransportResult result;
+        result.status = status;
+        result.error_message = error_message;
+        item.second.callback(std::move(result));
+    }
+}
 
 void GatewayPeerTransport::
 FailAllPending(
@@ -1106,6 +1301,37 @@ FailQueuedForwards(
 }
 
 
+
+void GatewayPeerTransport::FlushQueuedGroupForwards() {
+    auto queued = std::move(queued_group_forwards_);
+    queued_group_forwards_.clear();
+    while (!queued.empty()) {
+        auto request = std::move(queued.front());
+        queued.pop_front();
+        ForwardGroupMessageInLoop(
+            request.message_id,
+            request.recipient_user_id,
+            std::move(request.callback));
+    }
+}
+
+void GatewayPeerTransport::FailQueuedGroupForwards(
+    GatewayPeerTransportStatus status,
+    const std::string& error_message
+) {
+    auto queued = std::move(queued_group_forwards_);
+    queued_group_forwards_.clear();
+    while (!queued.empty()) {
+        auto request = std::move(queued.front());
+        queued.pop_front();
+        if (!request.callback) continue;
+        GatewayGroupPeerTransportResult result;
+        result.status = status;
+        result.error_message = error_message;
+        request.callback(std::move(result));
+    }
+}
+
 std::uint32_t
 GatewayPeerTransport::
 NextSequence() {
@@ -1137,7 +1363,8 @@ NextSequence() {
             pending_requests_.find(
                 candidate
             ) ==
-            pending_requests_.end()
+            pending_requests_.end() &&
+            pending_group_requests_.find(candidate) == pending_group_requests_.end()
         ) {
             return candidate;
         }

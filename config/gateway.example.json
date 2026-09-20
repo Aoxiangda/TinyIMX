@@ -99,6 +99,7 @@
     "owner": "gateway",
     "shadow_mode": false,
     "consumer_group": "tinyimx-unread-projector-v1",
+    "consumer_request_timeout_ms": 30000,
     "batch_size": 16,
     "invisible_duration_ms": 30000,
     "await_duration_ms": 5000,

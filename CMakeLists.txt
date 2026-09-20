@@ -355,6 +355,8 @@ add_library(tinyimx_protocol
     common/protocol/Packet.cpp
     common/protocol/ProtocolCodec.cpp
     common/protocol/GatewayPeerProtocol.cpp
+    common/protocol/GatewayGroupPeerProtocol.cpp
+    common/protocol/GroupMessageDeliveryProtocol.cpp
     common/protocol/ClientChatProtocol.cpp
 )
 
@@ -386,6 +388,8 @@ add_executable(protocol_tests
     tests/protocol/gateway_peer_protocol_test.cpp
     tests/protocol/client_chat_protocol_test.cpp
     tests/protocol/group_control_protocol_test.cpp
+    tests/protocol/group_message_protocol_test.cpp
+    tests/protocol/group_message_delivery_protocol_test.cpp
 )
 
 target_link_libraries(protocol_tests PRIVATE
@@ -434,6 +438,7 @@ add_library(tinyimx_gateway
     gateway/GatewayRouteResolver.cpp
     gateway/GatewayPeerTransport.cpp
     gateway/GatewayPeerTransportManager.cpp
+    gateway/GroupFanoutCoordinator.cpp
     gateway/MessageDeliveryDeduplicator.cpp
     gateway/ReceiverDeliveryTracker.cpp
 )
@@ -538,6 +543,8 @@ add_executable(gateway_tests
     tests/gateway/gateway_peer_transport_test.cpp
     tests/gateway/message_delivery_deduplicator_test.cpp
     tests/gateway/receiver_delivery_tracker_test.cpp
+    tests/gateway/group_fanout_coordinator_test.cpp
+    tests/gateway/group_peer_delivery_test.cpp
 )
 
 target_link_libraries(gateway_tests PRIVATE
@@ -1048,6 +1055,49 @@ add_executable(gateway_group_client_demo
 
 target_link_libraries(gateway_group_client_demo PRIVATE
     tinyimx_net
+    tinyimx_protocol
+    nlohmann_json::nlohmann_json
+)
+
+add_executable(gateway_group_message_client_demo
+    examples/gateway_group_message_client_demo.cpp
+)
+
+target_link_libraries(gateway_group_message_client_demo PRIVATE
+    tinyimx_net
+    tinyimx_protocol
+    nlohmann_json::nlohmann_json
+)
+
+
+add_executable(gateway_group_fanout_e2e_client
+    examples/gateway_group_fanout_e2e_client.cpp
+)
+
+target_compile_features(gateway_group_fanout_e2e_client PRIVATE cxx_std_20)
+
+target_link_libraries(gateway_group_fanout_e2e_client PRIVATE
+    tinyimx_protocol
+)
+
+add_executable(gateway_group_fanout_fault_e2e_client
+    examples/gateway_group_fanout_fault_e2e_client.cpp
+)
+
+target_compile_features(gateway_group_fanout_fault_e2e_client PRIVATE cxx_std_20)
+
+target_link_libraries(gateway_group_fanout_fault_e2e_client PRIVATE
+    tinyimx_protocol
+    nlohmann_json::nlohmann_json
+)
+
+add_executable(gateway_group_offline_replay_e2e_client
+    examples/gateway_group_offline_replay_e2e_client.cpp
+)
+
+target_compile_features(gateway_group_offline_replay_e2e_client PRIVATE cxx_std_20)
+
+target_link_libraries(gateway_group_offline_replay_e2e_client PRIVATE
     tinyimx_protocol
     nlohmann_json::nlohmann_json
 )

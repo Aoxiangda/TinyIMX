@@ -244,4 +244,27 @@ grpc::Status GroupServiceImpl::CheckGroupSendPermission(grpc::ServerContext* c, 
     return grpc::Status::OK;
 }
 
+grpc::Status GroupServiceImpl::PrepareGroupMessageSend(
+    grpc::ServerContext* c,
+    const tinyimx::group::v1::PrepareGroupMessageSendRequest* r,
+    tinyimx::group::v1::PrepareGroupMessageSendResponse* o
+) {
+    if (InvalidRpcArgs(c, r, o)) {
+        return {grpc::StatusCode::INVALID_ARGUMENT, "invalid PrepareGroupMessageSend RPC arguments"};
+    }
+    if (!application_service_) {
+        return {grpc::StatusCode::UNAVAILABLE, "GroupService application service is unavailable"};
+    }
+    const auto result = application_service_->PrepareGroupMessageSend(
+        r->actor_user_id(), r->group_id());
+    if (!result.Succeeded()) return MapApplicationFailure(result.status, result.message);
+    o->set_allowed(result.allowed);
+    o->set_role(ToProtoRole(result.role));
+    o->set_membership_epoch(result.membership_epoch);
+    o->set_member_version(result.member_version);
+    for (const auto user_id : result.recipient_user_ids) o->add_recipient_user_ids(user_id);
+    o->set_message(result.message);
+    return grpc::Status::OK;
+}
+
 }  // namespace tinyimx::group

@@ -108,6 +108,15 @@ public:
         r.allowed=it->status==tinyimx::group::GroupMemberStatus::kActive && it->muted_until.empty() && stored.status==tinyimx::group::GroupStatus::kActive;
         r.message=r.allowed?"allowed":"denied"; return r;
     }
+    tinyimx::group::GroupSendPreparationResult PrepareGroupMessageSend(std::uint64_t a,std::uint64_t g) override {
+        const auto permission=CheckGroupSendPermission(a,g);
+        tinyimx::group::GroupSendPreparationResult r;
+        r.status=permission.status; r.allowed=permission.allowed; r.role=permission.role;
+        r.membership_epoch=permission.membership_epoch; r.member_version=permission.member_version;
+        r.message=permission.message;
+        if(r.allowed){ for(const auto& m:members){ if(m.user_id!=a && m.status==tinyimx::group::GroupMemberStatus::kActive) r.recipient_user_ids.push_back(m.user_id); } }
+        return r;
+    }
 
     std::vector<tinyimx::group::GroupMemberView>::iterator FindMember(std::uint64_t id){
         return std::find_if(members.begin(),members.end(),[&](const auto& m){return m.user_id==id;});

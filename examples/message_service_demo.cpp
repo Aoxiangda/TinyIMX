@@ -5,6 +5,11 @@
 #include "services/registry/zookeeper/ServiceInstance.h"
 #include "services/registry/zookeeper/ZooKeeperClient.h"
 #include "services/registry/zookeeper/ZooKeeperServiceRegistrar.h"
+#include "services/registry/zookeeper/ZooKeeperServiceDiscovery.h"
+#include "services/rpc/GroupRpcClient.h"
+#include "services/rpc/ServiceEndpointProvider.h"
+#include "services/rpc/StaticServiceEndpointProvider.h"
+#include "services/rpc/ZooKeeperServiceEndpointProvider.h"
 #include "services/message/application/MessageApplicationService.h"
 #include "services/message/repository/MessageRepositoryAdapter.h"
 #include "services/message/server/MessageServiceServer.h"
@@ -116,8 +121,99 @@ int main(int argc, char* argv[]) {
     tinyimx::message::MessageApplicationService application_service(
         &repository_adapter
     );
+
+    std::shared_ptr<
+        tinyimx::registry::zookeeper::ZooKeeperClient
+    > rpc_zookeeper_client;
+    std::shared_ptr<
+        tinyimx::registry::zookeeper::ZooKeeperServiceDiscovery
+    > rpc_service_discovery;
+    std::shared_ptr<const tinyimx::rpc::ServiceEndpointProvider>
+        rpc_endpoint_provider;
+    std::unique_ptr<tinyimx::rpc::GroupRpcClient> group_rpc_client;
+
+    const auto& discovery_config = config.ServiceDiscovery();
+    if (discovery_config.provider == "zookeeper") {
+        rpc_zookeeper_client = std::make_shared<
+            tinyimx::registry::zookeeper::ZooKeeperClient
+        >();
+        if (!rpc_zookeeper_client->Start(config.ZooKeeper())) {
+            LOG_ERROR(
+                "MessageService GroupService discovery client start failed"
+                << ", error=" << rpc_zookeeper_client->LastError()
+            );
+            mysql_pool.Shutdown();
+            tinyimx::Logger::Instance().Shutdown();
+            return 1;
+        }
+
+        rpc_service_discovery = std::make_shared<
+            tinyimx::registry::zookeeper::ZooKeeperServiceDiscovery
+        >(
+            rpc_zookeeper_client,
+            config.ZooKeeper().service_root,
+            discovery_config
+        );
+        if (!rpc_service_discovery->Start(
+                std::chrono::milliseconds(
+                    discovery_config.initial_sync_timeout_ms
+                )
+            )) {
+            LOG_ERROR(
+                "MessageService GroupService discovery initial sync failed"
+                << ", error=" << rpc_service_discovery->LastError()
+            );
+            rpc_service_discovery->Stop();
+            rpc_zookeeper_client->Stop();
+            mysql_pool.Shutdown();
+            tinyimx::Logger::Instance().Shutdown();
+            return 1;
+        }
+
+        rpc_endpoint_provider = std::make_shared<
+            tinyimx::rpc::ZooKeeperServiceEndpointProvider
+        >(rpc_service_discovery, discovery_config);
+        group_rpc_client = std::make_unique<tinyimx::rpc::GroupRpcClient>(
+            rpc_endpoint_provider
+        );
+
+        LOG_INFO(
+            "MessageService GroupService RPC enabled"
+            << ", provider=zookeeper"
+            << ", root=" << config.ZooKeeper().service_root
+        );
+    } else {
+        const char* group_target_env =
+            std::getenv("TINYIMX_GROUP_RPC_TARGET");
+        const std::string group_target =
+            group_target_env != nullptr
+                ? std::string(group_target_env)
+                : std::string{};
+
+        if (!group_target.empty()) {
+            rpc_endpoint_provider = std::make_shared<
+                tinyimx::rpc::StaticServiceEndpointProvider
+            >(std::string{}, std::string{}, std::string{}, group_target);
+            group_rpc_client = std::make_unique<tinyimx::rpc::GroupRpcClient>(
+                rpc_endpoint_provider
+            );
+            LOG_INFO(
+                "MessageService GroupService RPC enabled"
+                << ", provider=static"
+                << ", target=" << group_target
+            );
+        } else {
+            LOG_WARN(
+                "MessageService GroupService RPC disabled: "
+                "TINYIMX_GROUP_RPC_TARGET is not set; "
+                "new group messages will fail closed"
+            );
+        }
+    }
+
     tinyimx::message::MessageServiceImpl service_impl(
-        &application_service
+        &application_service,
+        group_rpc_client.get()
     );
     tinyimx::message::MessageServiceServer server(&service_impl);
 
@@ -129,6 +225,12 @@ int main(int argc, char* argv[]) {
             "MessageService start failed"
             << ", target=" << listen_target
         );
+        if (rpc_service_discovery != nullptr) {
+            rpc_service_discovery->Stop();
+        }
+        if (rpc_zookeeper_client != nullptr) {
+            rpc_zookeeper_client->Stop();
+        }
         mysql_pool.Shutdown();
         tinyimx::Logger::Instance().Shutdown();
         return 1;
@@ -245,6 +347,12 @@ int main(int argc, char* argv[]) {
     }
     if (zookeeper_client != nullptr) {
         zookeeper_client->Stop();
+    }
+    if (rpc_service_discovery != nullptr) {
+        rpc_service_discovery->Stop();
+    }
+    if (rpc_zookeeper_client != nullptr) {
+        rpc_zookeeper_client->Stop();
     }
 
     mysql_pool.Shutdown();

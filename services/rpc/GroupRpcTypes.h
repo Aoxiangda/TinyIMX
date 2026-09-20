@@ -166,6 +166,11 @@ struct CheckGroupSendPermissionRpcRequest {
     std::uint64_t group_id{0};
 };
 
+struct PrepareGroupMessageSendRpcRequest {
+    std::uint64_t actor_user_id{0};
+    std::uint64_t group_id{0};
+};
+
 struct GroupMutationRpcResponse {
     GroupRpcMutationOutcome outcome{GroupRpcMutationOutcome::kApplied};
     GroupRpcView group;
@@ -194,6 +199,15 @@ struct CheckGroupSendPermissionRpcResponse {
     GroupRpcRole role{GroupRpcRole::kMember};
     std::uint64_t membership_epoch{0};
     std::uint64_t member_version{0};
+    std::string message;
+};
+
+struct PrepareGroupMessageSendRpcResponse {
+    bool allowed{false};
+    GroupRpcRole role{GroupRpcRole::kMember};
+    std::uint64_t membership_epoch{0};
+    std::uint64_t member_version{0};
+    std::vector<std::uint64_t> recipient_user_ids;
     std::string message;
 };
 

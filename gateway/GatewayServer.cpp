@@ -12,10 +12,16 @@
 #include "services/cache/UnreadCountCache.h"
 #include "gateway/GatewayRouteResolver.h"
 #include "common/protocol/GatewayPeerProtocol.h"
+#include "common/protocol/GatewayGroupPeerProtocol.h"
+#include "common/protocol/GroupMessageDeliveryProtocol.h"
+#include "gateway/DeliveryIdentity.h"
 #include "gateway/GatewayPeerTransportManager.h"
 #include "common/protocol/ClientChatProtocol.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <utility>
 #include <vector>
 #include <nlohmann/json.hpp>
@@ -25,6 +31,11 @@
 namespace {
 
 using Json = nlohmann::json;
+
+constexpr std::uint32_t kGroupOfflineReplayPageSize = 100;
+constexpr std::uint32_t kGroupOfflineReplayLeaseMs = 10000;
+constexpr auto kGroupOfflineReplayProbeDelay =
+    std::chrono::milliseconds{kGroupOfflineReplayLeaseMs + 250};
 
 bool ParseJsonBody(const tinyimx::Packet& packet,
                    Json* body,
@@ -3168,12 +3179,20 @@ void GatewayServer::HandlePacket(const TcpConnectionPtr& connection,
                 packet);
             return;
 
+        case MessageType::kGroupMessageDeliveryAck:
+            HandleGroupMessageDeliveryAck(connection, packet);
+            return;
+
         case MessageType::
             kGatewayForwardChatRequest:
             HandleGatewayForwardChatRequest(
                 connection,
                 packet
             );
+            return;
+
+        case MessageType::kGatewayForwardGroupMessageRequest:
+            HandleGatewayForwardGroupMessageRequest(connection, packet);
             return;
 
         case MessageType::kReadRequest:
@@ -3241,6 +3260,10 @@ void GatewayServer::HandlePacket(const TcpConnectionPtr& connection,
             HandleGroupControlRequest(connection, packet);
             break;
 
+        case MessageType::kGroupMessageSendRequest:
+            HandleGroupMessageSend(connection, packet);
+            break;
+
         case MessageType::kHeartbeat:
             HandleHeartbeat(connection, packet);
             return;
@@ -3254,6 +3277,670 @@ void GatewayServer::HandlePacket(const TcpConnectionPtr& connection,
     }
 }
 
+
+
+bool GatewayServer::BuildGroupMessageDeliveryPacket(
+    const rpc::GroupDeliveryWorkRpcRecord& work,
+    Packet* packet,
+    std::string* error_message
+) {
+    auto set_error = [error_message](const std::string& value) {
+        if (error_message != nullptr) *error_message = value;
+    };
+    if (packet == nullptr || work.message.message_id == 0 ||
+        work.delivery.message_id != work.message.message_id ||
+        work.message.group_id == 0 ||
+        work.delivery.group_id != work.message.group_id ||
+        work.message.from_user_id == 0 ||
+        work.delivery.recipient_user_id == 0 ||
+        work.message.message_type < 1 || work.message.message_type > 3 ||
+        work.message.content.empty()) {
+        set_error("invalid group delivery durable record");
+        return false;
+    }
+
+    GroupMessageDelivery delivery;
+    delivery.message_id = work.message.message_id;
+    delivery.group_id = work.message.group_id;
+    delivery.from_user_id = work.message.from_user_id;
+    delivery.message_type = work.message.message_type;
+    delivery.content = work.message.content;
+    delivery.created_at = work.message.created_at;
+
+    std::string body;
+    if (!SerializeGroupMessageDelivery(delivery, &body, error_message)) {
+        return false;
+    }
+
+    packet->type = MessageType::kGroupMessageDelivery;
+    packet->seq = NextReceiverDeliverySeq();
+    packet->body = std::move(body);
+    if (packet->seq == 0) {
+        set_error("unable to allocate group delivery sequence");
+        return false;
+    }
+    if (error_message != nullptr) error_message->clear();
+    return true;
+}
+
+GatewayServer::ReceiverDeliverySubmitStatus GatewayServer::SubmitGroupMessageDelivery(
+    const TcpConnectionPtr& connection,
+    const rpc::GroupDeliveryWorkRpcRecord& work,
+    Packet* submitted_packet,
+    std::string* error_message
+) {
+    auto set_error = [error_message](const std::string& value) {
+        if (error_message != nullptr) *error_message = value;
+    };
+    if (!connection || !connection->IsConnected()) {
+        set_error("receiver connection unavailable");
+        return ReceiverDeliverySubmitStatus::kConnectionUnavailable;
+    }
+
+    Packet packet;
+    std::string build_error;
+    if (!BuildGroupMessageDeliveryPacket(work, &packet, &build_error)) {
+        set_error(build_error);
+        return ReceiverDeliverySubmitStatus::kBuildFailed;
+    }
+
+    Buffer output;
+    std::string encode_error;
+    if (!codec_.Encode(packet, &output, &encode_error)) {
+        set_error(encode_error);
+        return ReceiverDeliverySubmitStatus::kEncodeFailed;
+    }
+    if (!connection->IsConnected()) {
+        set_error("receiver connection became unavailable before attempt registration");
+        return ReceiverDeliverySubmitStatus::kConnectionUnavailable;
+    }
+
+    const DeliveryIdentity identity = GroupDeliveryIdentity(
+        work.message.message_id, work.delivery.recipient_user_id);
+    const auto registered = receiver_delivery_tracker_.RegisterAttempt(
+        identity, packet.seq);
+    if (registered == ReceiverDeliveryRegisterStatus::kAlreadyConfirmed) {
+        set_error("group delivery already receiver-confirmed");
+        return ReceiverDeliverySubmitStatus::kAlreadyConfirmed;
+    }
+    if (registered != ReceiverDeliveryRegisterStatus::kRegistered &&
+        registered != ReceiverDeliveryRegisterStatus::kRetryRegistered) {
+        set_error("group receiver delivery tracker rejected attempt");
+        return ReceiverDeliverySubmitStatus::kTrackerRejected;
+    }
+
+    connection->Send(output.RetrieveAllAsString());
+    if (submitted_packet != nullptr) *submitted_packet = packet;
+    if (error_message != nullptr) error_message->clear();
+    return ReceiverDeliverySubmitStatus::kSubmitted;
+}
+
+GatewayServer::ReceiverDeliverySubmitStatus
+GatewayServer::SubmitGroupMessageDeliveryRetry(
+    const TcpConnectionPtr& connection,
+    const rpc::GroupDeliveryWorkRpcRecord& work,
+    std::uint32_t timed_out_delivery_seq,
+    Packet* submitted_packet,
+    std::string* error_message
+) {
+    auto set_error = [error_message](const std::string& value) {
+        if (error_message != nullptr) *error_message = value;
+    };
+    if (!connection || !connection->IsConnected()) {
+        set_error("receiver connection unavailable");
+        return ReceiverDeliverySubmitStatus::kConnectionUnavailable;
+    }
+    if (timed_out_delivery_seq == 0) {
+        set_error("group retry timed-out sequence is invalid");
+        return ReceiverDeliverySubmitStatus::kBuildFailed;
+    }
+
+    Packet packet;
+    std::string build_error;
+    if (!BuildGroupMessageDeliveryPacket(work, &packet, &build_error)) {
+        set_error(build_error);
+        return ReceiverDeliverySubmitStatus::kBuildFailed;
+    }
+
+    Buffer output;
+    std::string encode_error;
+    if (!codec_.Encode(packet, &output, &encode_error)) {
+        set_error(encode_error);
+        return ReceiverDeliverySubmitStatus::kEncodeFailed;
+    }
+    if (!connection->IsConnected()) {
+        set_error("receiver connection became unavailable before retry registration");
+        return ReceiverDeliverySubmitStatus::kConnectionUnavailable;
+    }
+
+    const DeliveryIdentity identity = GroupDeliveryIdentity(
+        work.message.message_id, work.delivery.recipient_user_id);
+    const auto retry = receiver_delivery_tracker_.RegisterRetryAttempt(
+        identity,
+        timed_out_delivery_seq,
+        packet.seq,
+        options_.receiver_delivery_max_attempts);
+
+    switch (retry) {
+        case ReceiverDeliveryRetryRegisterStatus::kRetryRegistered:
+            break;
+        case ReceiverDeliveryRetryRegisterStatus::kAlreadyConfirmed:
+            return ReceiverDeliverySubmitStatus::kAlreadyConfirmed;
+        case ReceiverDeliveryRetryRegisterStatus::kStaleAttempt:
+            return ReceiverDeliverySubmitStatus::kStaleAttempt;
+        case ReceiverDeliveryRetryRegisterStatus::kAttemptLimitReached:
+            return ReceiverDeliverySubmitStatus::kAttemptLimitReached;
+        case ReceiverDeliveryRetryRegisterStatus::kReceiverMismatch:
+        case ReceiverDeliveryRetryRegisterStatus::kDuplicateAttempt:
+        case ReceiverDeliveryRetryRegisterStatus::kUnknownMessage:
+        case ReceiverDeliveryRetryRegisterStatus::kInvalidArgument:
+            set_error("group receiver delivery tracker rejected retry");
+            return ReceiverDeliverySubmitStatus::kTrackerRejected;
+    }
+
+    connection->Send(output.RetrieveAllAsString());
+    if (submitted_packet != nullptr) *submitted_packet = packet;
+    if (error_message != nullptr) error_message->clear();
+    return ReceiverDeliverySubmitStatus::kSubmitted;
+}
+
+bool GatewayServer::ScheduleGroupMessageDeliveryAckTimeout(
+    const TcpConnectionPtr& connection,
+    const rpc::GroupDeliveryWorkRpcRecord& work,
+    std::uint32_t delivery_seq
+) {
+    if (!connection || work.message.message_id == 0 ||
+        work.delivery.recipient_user_id == 0 || delivery_seq == 0 ||
+        options_.receiver_ack_timeout <= std::chrono::milliseconds::zero()) {
+        return false;
+    }
+    EventLoop* timer_loop = connection->GetLoop();
+    if (timer_loop == nullptr) return false;
+
+    const TimerId timer_id = timer_loop->RunAfter(
+        options_.receiver_ack_timeout,
+        [this, work, delivery_seq]() mutable {
+            HandleGroupMessageDeliveryAckTimeout(
+                std::move(work), delivery_seq);
+        });
+    if (!timer_id.IsValid()) {
+        LOG_ERROR("gateway failed to schedule group delivery ack timeout"
+                  << ", message_id=" << work.message.message_id
+                  << ", recipient=" << work.delivery.recipient_user_id
+                  << ", delivery_seq=" << delivery_seq);
+        return false;
+    }
+    return true;
+}
+
+void GatewayServer::HandleGroupMessageDeliveryAckTimeout(
+    rpc::GroupDeliveryWorkRpcRecord work,
+    std::uint32_t timed_out_delivery_seq
+) {
+    if (work.message.message_id == 0 ||
+        work.delivery.recipient_user_id == 0 ||
+        timed_out_delivery_seq == 0) {
+        return;
+    }
+
+    const DeliveryIdentity identity = GroupDeliveryIdentity(
+        work.message.message_id, work.delivery.recipient_user_id);
+    ReceiverDeliverySnapshot snapshot;
+    if (!receiver_delivery_tracker_.GetSnapshot(identity, &snapshot) ||
+        snapshot.confirmed ||
+        snapshot.current_delivery_seq != timed_out_delivery_seq) {
+        return;
+    }
+
+    const UserId recipient = work.delivery.recipient_user_id;
+    const TcpConnectionPtr connection = session_manager_.FindConnection(recipient);
+    if (!connection || !connection->IsConnected()) {
+        LOG_INFO("gateway group ack-timeout retry paused: receiver offline"
+                 << ", message_id=" << work.message.message_id
+                 << ", recipient=" << recipient
+                 << ", delivery_seq=" << timed_out_delivery_seq);
+        return;
+    }
+
+    Packet retry_packet;
+    std::string retry_error;
+    const auto status = SubmitGroupMessageDeliveryRetry(
+        connection, work, timed_out_delivery_seq, &retry_packet, &retry_error);
+    if (status == ReceiverDeliverySubmitStatus::kSubmitted) {
+        LOG_WARN("gateway group ack timeout triggered fresh-seq retry"
+                 << ", message_id=" << work.message.message_id
+                 << ", recipient=" << recipient
+                 << ", old_delivery_seq=" << timed_out_delivery_seq
+                 << ", new_delivery_seq=" << retry_packet.seq);
+        ScheduleGroupMessageDeliveryAckTimeout(
+            connection, work, retry_packet.seq);
+        return;
+    }
+    if (status == ReceiverDeliverySubmitStatus::kAlreadyConfirmed ||
+        status == ReceiverDeliverySubmitStatus::kStaleAttempt) {
+        return;
+    }
+    if (status == ReceiverDeliverySubmitStatus::kAttemptLimitReached) {
+        LOG_WARN("gateway group receiver retry attempt limit reached"
+                 << ", message_id=" << work.message.message_id
+                 << ", recipient=" << recipient
+                 << ", max_attempts=" << options_.receiver_delivery_max_attempts);
+        // The durable row intentionally remains DEFERRED_OFFLINE. Once its
+        // replay lease expires, a bounded probe can reclaim it without turning
+        // TCP send success into durable delivery truth.
+        ScheduleGroupOfflineReplayProbe(recipient, connection);
+        return;
+    }
+    if (status == ReceiverDeliverySubmitStatus::kConnectionUnavailable) {
+        return;
+    }
+    LOG_ERROR("gateway group ack-timeout retry failed"
+              << ", message_id=" << work.message.message_id
+              << ", recipient=" << recipient
+              << ", delivery_seq=" << timed_out_delivery_seq
+              << ", status=" << static_cast<int>(status)
+              << ", error=" << retry_error);
+}
+
+GroupFanoutDispatchResult GatewayServer::DispatchGroupFanoutDelivery(
+    const rpc::GroupDeliveryWorkRpcRecord& work
+) {
+    GroupFanoutDispatchResult result;
+    const std::uint64_t message_id = work.message.message_id;
+    const UserId recipient = work.delivery.recipient_user_id;
+    if (message_id == 0 || recipient == 0 || work.message.group_id == 0) {
+        result.error_code = "invalid_durable_delivery";
+        return result;
+    }
+    if (work.delivery.delivery_state == rpc::GroupDeliveryRpcState::kDelivered) {
+        result.status = GroupFanoutDispatchStatus::kAlreadyDelivered;
+        result.gateway_id = options_.gateway_id;
+        return result;
+    }
+
+    GatewayRouteResult route;
+    bool have_route = false;
+    if (HasGatewayRouteResolver()) {
+        route = gateway_route_resolver_->Resolve(recipient);
+        have_route = true;
+    } else {
+        const auto local = session_manager_.FindConnection(recipient);
+        if (local && local->IsConnected()) {
+            route.status = GatewayRouteStatus::kLocal;
+            have_route = true;
+        }
+    }
+
+    if (!have_route) {
+        result.error_code = "route_resolver_unavailable";
+        return result;
+    }
+    if (route.IsOffline()) {
+        result.status = GroupFanoutDispatchStatus::kOffline;
+        result.error_code = "recipient_offline";
+        return result;
+    }
+    if (route.IsLocal()) {
+        const auto connection = session_manager_.FindConnection(recipient);
+        if (!connection || !connection->IsConnected()) {
+            result.error_code = "local_route_stale";
+            return result;
+        }
+        const DeliveryIdentity identity = GroupDeliveryIdentity(message_id, recipient);
+        const auto ownership = message_delivery_deduplicator_.Begin(identity);
+        if (ownership == MessageDeliveryDedupBeginStatus::kAlreadyDelivered) {
+            result.status = GroupFanoutDispatchStatus::kSubmitted;
+            result.gateway_id = options_.gateway_id;
+            return result;
+        }
+        if (ownership != MessageDeliveryDedupBeginStatus::kAcquired) {
+            result.error_code = ownership == MessageDeliveryDedupBeginStatus::kAlreadyProcessing
+                ? "local_delivery_in_progress" : "local_delivery_identity_invalid";
+            return result;
+        }
+        Packet submitted;
+        std::string error;
+        const auto status = SubmitGroupMessageDelivery(connection, work, &submitted, &error);
+        if (status == ReceiverDeliverySubmitStatus::kSubmitted ||
+            status == ReceiverDeliverySubmitStatus::kAlreadyConfirmed) {
+            // B2 delivery is at-least-once until receiver ACK. The durable lease
+            // serializes a single coordinator attempt, while future ACK-timeout
+            // retries must be allowed to send a fresh delivery_seq. Therefore the
+            // in-memory deduplicator is only a transient concurrent-execution guard
+            // for group deliveries and is released after submission.
+            message_delivery_deduplicator_.Abort(identity);
+            result.status = status == ReceiverDeliverySubmitStatus::kAlreadyConfirmed
+                ? GroupFanoutDispatchStatus::kAlreadyDelivered
+                : GroupFanoutDispatchStatus::kSubmitted;
+            result.gateway_id = options_.gateway_id;
+            return result;
+        }
+        message_delivery_deduplicator_.Abort(identity);
+        result.error_code = error.empty() ? "local_delivery_submit_failed" : error;
+        return result;
+    }
+    if (route.IsRemote()) {
+        if (!route.remote_gateway.has_value() || !HasGatewayPeerTransportManager()) {
+            result.error_code = "remote_transport_unavailable";
+            return result;
+        }
+        const GatewayInstanceRecord remote = *route.remote_gateway;
+        const bool accepted = gateway_peer_transport_manager_->ForwardGroupMessage(
+            remote, message_id, recipient,
+            [message_id, recipient, remote_id = remote.gateway_id](GatewayGroupPeerTransportResult peer) {
+                if (!peer.Succeeded()) {
+                    LOG_WARN("gateway async group peer attempt failed"
+                             << ", message_id=" << message_id
+                             << ", recipient=" << recipient
+                             << ", remote_gateway=" << remote_id
+                             << ", error=" << peer.error_message);
+                    return;
+                }
+                LOG_INFO("gateway async group peer attempt completed"
+                         << ", message_id=" << message_id
+                         << ", recipient=" << recipient
+                         << ", remote_gateway=" << remote_id
+                         << ", status=" << GatewayForwardGroupMessageStatusToString(peer.response.status)
+                         << ", duplicate=" << peer.response.duplicate);
+            });
+        if (!accepted) {
+            result.error_code = "remote_submission_rejected";
+            return result;
+        }
+        result.status = GroupFanoutDispatchStatus::kSubmitted;
+        result.gateway_id = remote.gateway_id;
+        return result;
+    }
+
+    result.error_code = route.error_message.empty()
+        ? "route_resolution_failed"
+        : route.error_message;
+    return result;
+}
+
+void GatewayServer::HandleGroupMessageDeliveryAck(
+    const TcpConnectionPtr& connection, const Packet& packet
+) {
+    if (!connection || packet.seq == 0) return;
+    GroupMessageDeliveryAck ack;
+    std::string error;
+    if (!DeserializeGroupMessageDeliveryAck(packet.body, &ack, &error)) {
+        LOG_WARN("gateway rejected invalid group delivery ack"
+                 << ", seq=" << packet.seq << ", error=" << error);
+        return;
+    }
+    const auto session = session_manager_.FindSessionByConnection(connection);
+    if (!session.has_value() || !HasBusinessExecutor()) return;
+    const auto submit = SubmitSessionBusinessTask(
+        business_executor_, &session_manager_, connection, *session,
+        packet.seq, BusinessClock::now(), "gateway.group_delivery_ack",
+        BusinessCancellationPolicy::kMustRun,
+        static_cast<BusinessOrderingKey>(ack.message_id),
+        [this, connection, packet,
+         user_id = session->user_id, epoch = session->epoch]
+        (const BusinessExecutor::ExecutionContext& context) -> BusinessExecutor::Completion {
+            ScopedBusinessDispatchContext scope(connection, user_id, epoch);
+            ExecuteGroupMessageDeliveryAck(connection, packet, context.Request());
+            return {};
+        });
+    if (submit != BusinessSubmitStatus::kAccepted) {
+        LOG_WARN("gateway group delivery ack business task rejected"
+                 << ", message_id=" << ack.message_id);
+    }
+}
+
+void GatewayServer::ExecuteGroupMessageDeliveryAck(
+    const TcpConnectionPtr& connection,
+    const Packet& packet,
+    const BusinessRequestContext& business_request
+) {
+    GroupMessageDeliveryAck ack;
+    if (!DeserializeGroupMessageDeliveryAck(packet.body, &ack, nullptr)) return;
+    const auto receiver = ResolveBusinessUser(session_manager_, connection);
+    if (!receiver.has_value() || !HasMessageRpcClient()) return;
+
+    auto options = rpc::RpcCallOptions{};
+    const auto rpc_id = next_internal_rpc_id_.fetch_add(1, std::memory_order_relaxed);
+    options.request_id = options_.gateway_id + ":group-ack:req:" + std::to_string(rpc_id);
+    options.trace_id = options_.gateway_id + ":group-ack:trace:" + std::to_string(rpc_id);
+    options.caller_service = "gateway";
+    options.caller_instance = options_.gateway_id;
+    const auto remaining = business_request.RemainingTime();
+    options.remaining_timeout = remaining == std::chrono::milliseconds::max()
+        ? std::chrono::milliseconds{0} : remaining;
+
+    rpc::GetGroupMessageDeliveryRpcRequest get;
+    get.message_id = ack.message_id;
+    get.recipient_user_id = *receiver;
+    const auto durable = message_rpc_client_->GetGroupMessageDelivery(get, options);
+    if (!durable.ok()) {
+        LOG_WARN("gateway group ack durable validation failed"
+                 << ", message_id=" << ack.message_id
+                 << ", receiver=" << *receiver
+                 << ", error=" << durable.status.message);
+        return;
+    }
+    if (durable.value->work.delivery.recipient_user_id != *receiver) return;
+
+    const DeliveryIdentity identity = GroupDeliveryIdentity(ack.message_id, *receiver);
+    const auto tracker_status = receiver_delivery_tracker_.Acknowledge(identity, packet.seq);
+    if (tracker_status != ReceiverDeliveryAckStatus::kConfirmed &&
+        tracker_status != ReceiverDeliveryAckStatus::kDuplicate) {
+        // A durable recipient identity proves who may receive the message, but it
+        // does not prove that this connection actually observed this delivery_seq.
+        // After a Gateway restart an unknown ACK is therefore rejected; the durable
+        // PENDING row will be retried and produce a fresh, verifiable attempt.
+        LOG_WARN("gateway rejected group ack without delivery-attempt evidence"
+                 << ", message_id=" << ack.message_id
+                 << ", receiver=" << *receiver
+                 << ", seq=" << packet.seq
+                 << ", tracker_status=" << static_cast<int>(tracker_status));
+        return;
+    }
+    rpc::ConfirmGroupMessageDeliveryRpcRequest confirm;
+    confirm.message_id = ack.message_id;
+    confirm.recipient_user_id = *receiver;
+    const auto confirmed = message_rpc_client_->ConfirmGroupMessageDelivery(confirm, options);
+    if (!confirmed.ok()) {
+        LOG_WARN("gateway group delivery durable confirmation uncertain"
+                 << ", message_id=" << ack.message_id
+                 << ", receiver=" << *receiver
+                 << ", attempted=" << confirmed.attempted
+                 << ", error=" << confirmed.status.message);
+        return;
+    }
+    LOG_INFO("gateway group delivery receiver-confirmed"
+             << ", message_id=" << ack.message_id
+             << ", receiver=" << *receiver
+             << ", seq=" << packet.seq
+             << ", affected_rows=" << confirmed.value->affected_rows);
+}
+
+void GatewayServer::HandleGatewayForwardGroupMessageRequest(
+    const TcpConnectionPtr& connection, const Packet& packet
+) {
+    if (!connection) return;
+    GatewayForwardGroupMessageRequest request;
+    std::string error;
+    if (!DeserializeGatewayForwardGroupMessageRequest(packet.body, &request, &error)) {
+        GatewayForwardGroupMessageResponse response;
+        response.status = GatewayForwardGroupMessageStatus::kInvalidRequest;
+        response.message_id = 1;
+        response.recipient_user_id = 1;
+        response.target_gateway_id = options_.gateway_id;
+        response.error_message = error;
+        std::string body;
+        if (SerializeGatewayForwardGroupMessageResponse(response, &body, nullptr)) {
+            Packet out{MessageType::kGatewayForwardGroupMessageResponse, 0, packet.seq, std::move(body)};
+            SendPacket(connection, out);
+        }
+        return;
+    }
+    if (!HasBusinessExecutor()) return;
+    const auto submit = SubmitMustRunConnectionBusinessTask(
+        business_executor_, connection, packet.seq, BusinessClock::now(),
+        "gateway.peer_forward_group", static_cast<BusinessOrderingKey>(request.message_id),
+        [this, connection, packet](const BusinessExecutor::ExecutionContext& context)
+            -> BusinessExecutor::Completion {
+            ScopedBusinessDispatchContext scope(connection, 0, 0);
+            ExecuteGatewayForwardGroupMessageRequest(connection, packet, context.Request());
+            return {};
+        });
+    if (submit != BusinessSubmitStatus::kAccepted) {
+        LOG_WARN("gateway peer group business task rejected"
+                 << ", message_id=" << request.message_id);
+    }
+}
+
+void GatewayServer::ExecuteGatewayForwardGroupMessageRequest(
+    const TcpConnectionPtr& connection,
+    const Packet& packet,
+    const BusinessRequestContext& business_request
+) {
+    GatewayForwardGroupMessageRequest request;
+    if (!DeserializeGatewayForwardGroupMessageRequest(packet.body, &request, nullptr)) return;
+    GatewayForwardGroupMessageResponse response;
+    response.message_id = request.message_id;
+    response.recipient_user_id = request.recipient_user_id;
+    response.target_gateway_id = options_.gateway_id;
+    auto send_response = [&]() {
+        // M17-B2 fault seam: drop exactly the first successful peer submission
+        // response. The receiver-visible send side effect has already happened;
+        // the source must recover from durable delivery truth rather than creating
+        // another logical recipient row. Disabled by default.
+        static std::atomic<bool> first_submitted_response_dropped{false};
+        const char* drop_env = std::getenv(
+            "TINYIMX_FAULT_DROP_FIRST_GROUP_PEER_SUBMITTED_RESPONSE");
+        if (response.status == GatewayForwardGroupMessageStatus::kSubmitted &&
+            drop_env != nullptr && std::string(drop_env) == "1") {
+            bool expected = false;
+            if (first_submitted_response_dropped.compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel)) {
+                LOG_WARN("gateway group peer response dropped by fault injection"
+                         << ", message_id=" << response.message_id
+                         << ", recipient=" << response.recipient_user_id
+                         << ", peer_seq=" << packet.seq);
+                return;
+            }
+        }
+        std::string body;
+        if (!SerializeGatewayForwardGroupMessageResponse(response, &body, nullptr)) return;
+        Packet out;
+        out.type = MessageType::kGatewayForwardGroupMessageResponse;
+        out.seq = packet.seq;
+        out.body = std::move(body);
+        SendPacket(connection, out);
+    };
+
+    if (session_manager_.FindUserByConnection(connection).has_value()) {
+        response.status = GatewayForwardGroupMessageStatus::kUnauthorized;
+        response.error_message = "user session cannot send gateway internal request";
+        send_response();
+        return;
+    }
+    if (!gateway_peer_verify_callback_) {
+        response.status = GatewayForwardGroupMessageStatus::kInternalError;
+        response.error_message = "gateway peer verifier unavailable";
+        send_response();
+        return;
+    }
+    std::string verify_error;
+    if (!gateway_peer_verify_callback_(
+            request.source_gateway_id, request.source_lease_token, &verify_error)) {
+        response.status = GatewayForwardGroupMessageStatus::kUnauthorized;
+        response.error_message = verify_error.empty() ? "gateway peer unauthorized" : verify_error;
+        send_response();
+        return;
+    }
+    if (!HasMessageRpcClient()) {
+        response.status = GatewayForwardGroupMessageStatus::kInternalError;
+        response.error_message = "MessageService unavailable";
+        send_response();
+        return;
+    }
+
+    rpc::RpcCallOptions options;
+    const auto rpc_id = next_internal_rpc_id_.fetch_add(1, std::memory_order_relaxed);
+    options.request_id = options_.gateway_id + ":group-peer-validate:req:" + std::to_string(rpc_id);
+    options.trace_id = options_.gateway_id + ":group-peer-validate:trace:" + std::to_string(rpc_id);
+    options.caller_service = "gateway";
+    options.caller_instance = options_.gateway_id;
+    const auto remaining = business_request.RemainingTime();
+    options.remaining_timeout = remaining == std::chrono::milliseconds::max()
+        ? std::chrono::milliseconds{0} : remaining;
+    rpc::GetGroupMessageDeliveryRpcRequest get;
+    get.message_id = request.message_id;
+    get.recipient_user_id = request.recipient_user_id;
+    const auto durable = message_rpc_client_->GetGroupMessageDelivery(get, options);
+    if (!durable.ok()) {
+        response.status = durable.status.code == rpc::RpcErrorCode::kNotFound
+            ? GatewayForwardGroupMessageStatus::kInvalidRequest
+            : GatewayForwardGroupMessageStatus::kInternalError;
+        response.error_message = durable.status.message;
+        send_response();
+        return;
+    }
+    const auto& work = durable.value->work;
+    if (work.delivery.delivery_state == rpc::GroupDeliveryRpcState::kDelivered) {
+        response.status = GatewayForwardGroupMessageStatus::kAlreadyConfirmed;
+        response.duplicate = true;
+        send_response();
+        return;
+    }
+
+    const auto target = session_manager_.FindConnection(request.recipient_user_id);
+    if (!target || !target->IsConnected()) {
+        response.status = GatewayForwardGroupMessageStatus::kTargetNotConnected;
+        response.error_message = "target user has no active local session";
+        send_response();
+        return;
+    }
+    const DeliveryIdentity identity = GroupDeliveryIdentity(request.message_id, request.recipient_user_id);
+    const auto ownership = message_delivery_deduplicator_.Begin(identity);
+    if (ownership == MessageDeliveryDedupBeginStatus::kAlreadyDelivered) {
+        response.status = GatewayForwardGroupMessageStatus::kSubmitted;
+        response.duplicate = true;
+        send_response();
+        return;
+    }
+    if (ownership == MessageDeliveryDedupBeginStatus::kAlreadyProcessing) {
+        response.status = GatewayForwardGroupMessageStatus::kDuplicateInProgress;
+        response.duplicate = true;
+        send_response();
+        return;
+    }
+    if (ownership != MessageDeliveryDedupBeginStatus::kAcquired) {
+        response.status = GatewayForwardGroupMessageStatus::kInvalidRequest;
+        response.error_message = "invalid group delivery identity";
+        send_response();
+        return;
+    }
+    Packet submitted;
+    std::string error;
+    const auto status = SubmitGroupMessageDelivery(target, work, &submitted, &error);
+    if (status == ReceiverDeliverySubmitStatus::kAlreadyConfirmed) {
+        message_delivery_deduplicator_.Abort(identity);
+        response.status = GatewayForwardGroupMessageStatus::kAlreadyConfirmed;
+        response.duplicate = true;
+        send_response();
+        return;
+    }
+    if (status != ReceiverDeliverySubmitStatus::kSubmitted) {
+        message_delivery_deduplicator_.Abort(identity);
+        response.status = status == ReceiverDeliverySubmitStatus::kConnectionUnavailable
+            ? GatewayForwardGroupMessageStatus::kTargetNotConnected
+            : GatewayForwardGroupMessageStatus::kInternalError;
+        response.error_message = error;
+        send_response();
+        return;
+    }
+    // Release the transient peer-side execution guard after the send attempt.
+    // Durable PENDING + next_retry_at is the long-lived retry truth.
+    message_delivery_deduplicator_.Abort(identity);
+    response.status = GatewayForwardGroupMessageStatus::kSubmitted;
+    response.duplicate = false;
+    send_response();
+}
 
 void GatewayServer::HandleReceiverChatDeliveryAck(
     const TcpConnectionPtr& connection,
@@ -4059,6 +4746,11 @@ void GatewayServer::HandleLoginRequest(
                 // the already accepted Login operation.
                 if (HasMessageRpcClient()) {
                     PushPersistentOfflineMessages(user_id, connection);
+                    PushGroupOfflineMessages(user_id, connection);
+                    // A previous Gateway may still own an unexpired replay
+                    // lease. One bounded delayed probe closes that movement
+                    // window without polling Redis/MySQL forever.
+                    ScheduleGroupOfflineReplayProbe(user_id, connection);
                 } else {
                     LOG_WARN(
                         "gateway postponed durable offline replay: "
@@ -10484,6 +11176,298 @@ void GatewayServer::HandleGroupControlRequest(
     send_response(rejected);
 }
 
+void GatewayServer::HandleGroupMessageSend(
+    const TcpConnectionPtr& connection,
+    const Packet& packet
+) {
+    const BusinessTimePoint request_received_at = BusinessClock::now();
+
+    auto send_response = [this, connection, request_seq = packet.seq](
+        const Json& body
+    ) {
+        if (!connection || !connection->IsConnected()) {
+            return;
+        }
+        Packet response;
+        response.type = MessageType::kGroupMessageSendResponse;
+        response.seq = request_seq;
+        response.body = body.dump();
+        SendPacket(connection, response);
+    };
+
+    Json request_body;
+    std::string parse_error;
+    if (!ParseJsonBody(packet, &request_body, &parse_error) ||
+        !request_body.is_object()) {
+        send_response(Json{
+            {"success", false},
+            {"reason", "invalid_json"},
+            {"message", "invalid group message request json"},
+        });
+        return;
+    }
+
+    std::uint64_t group_id = 0;
+    std::string client_message_id;
+    std::string content;
+    std::uint32_t message_type = 0;
+    if (!JsonPositiveU64(request_body, "group_id", &group_id) ||
+        !JsonStringField(
+            request_body,
+            "client_message_id",
+            &client_message_id
+        ) ||
+        client_message_id.size() > 64 ||
+        !request_body.contains("message_type") ||
+        !JsonU32WithDefault(
+            request_body,
+            "message_type",
+            0,
+            1,
+            3,
+            &message_type
+        ) ||
+        !JsonStringField(request_body, "content", &content)) {
+        send_response(Json{
+            {"success", false},
+            {"reason", "invalid_group_message_request"},
+            {"message", "invalid group message fields"},
+        });
+        return;
+    }
+
+    const auto session_snapshot =
+        session_manager_.FindSessionByConnection(connection);
+    if (!session_snapshot.has_value()) {
+        send_response(Json{
+            {"success", false},
+            {"reason", "not_logged_in"},
+            {"message", "group message send rejected: not logged in"},
+        });
+        return;
+    }
+    if (!HasMessageRpcClient()) {
+        send_response(Json{
+            {"success", false},
+            {"reason", "message_service_unavailable"},
+            {"message", "message service unavailable"},
+        });
+        return;
+    }
+    if (!HasBusinessExecutor()) {
+        send_response(Json{
+            {"success", false},
+            {"reason", "business_runtime_unavailable"},
+            {"message", "business runtime unavailable"},
+        });
+        return;
+    }
+
+    // Sender identity is authoritative only from the authenticated Session.
+    // actor_user_id/from_user_id fields in client JSON are intentionally ignored.
+    const UserId actor_user_id = session_snapshot->user_id;
+    const std::uint64_t rpc_id =
+        next_internal_rpc_id_.fetch_add(1, std::memory_order_relaxed);
+    const std::string rpc_request_id =
+        options_.gateway_id + ":group-message:persist:req:" +
+        std::to_string(rpc_id);
+    const std::string trace_id =
+        options_.gateway_id + ":group-message-persist:trace:" +
+        std::to_string(rpc_id) + ":client-seq:" +
+        std::to_string(packet.seq);
+    const auto ordering_key = GroupOrderingKey(
+        MessageType::kGroupMessageSendRequest,
+        request_body
+    );
+
+    const BusinessSubmitStatus submit_status = SubmitSessionBusinessTask(
+        business_executor_,
+        &session_manager_,
+        connection,
+        *session_snapshot,
+        packet.seq,
+        request_received_at,
+        "gateway.group_message.persist.rpc",
+        BusinessCancellationPolicy::kCancelable,
+        ordering_key,
+        [
+            this,
+            connection,
+            request_seq = packet.seq,
+            actor_user_id,
+            group_id,
+            client_message_id,
+            message_type,
+            content = std::move(content),
+            rpc_request_id,
+            trace_id
+        ](const BusinessExecutor::ExecutionContext& context) mutable
+            -> BusinessExecutor::Completion {
+            if (context.CancellationRequested()) {
+                return {};
+            }
+
+            rpc::PersistGroupMessageRpcRequest rpc_request;
+            rpc_request.from_user_id = actor_user_id;
+            rpc_request.group_id = group_id;
+            rpc_request.client_message_id = client_message_id;
+            rpc_request.message_type = message_type;
+            rpc_request.content = content;
+
+            rpc::RpcCallOptions call_options;
+            call_options.request_id = rpc_request_id;
+            call_options.trace_id = trace_id;
+            call_options.caller_service = "gateway";
+            call_options.caller_instance = options_.gateway_id;
+            const auto remaining = context.Request().RemainingTime();
+            call_options.remaining_timeout =
+                remaining == std::chrono::milliseconds::max()
+                    ? std::chrono::milliseconds{0}
+                    : remaining;
+
+            auto rpc_result = message_rpc_client_->PersistGroupMessage(
+                rpc_request,
+                call_options
+            );
+
+            Json body;
+            body["group_id"] = group_id;
+            body["client_message_id"] = client_message_id;
+
+            if (!rpc_result.ok()) {
+                body["success"] = false;
+                using rpc::RpcErrorCode;
+                const bool uncertain =
+                    rpc_result.attempted &&
+                    (rpc_result.status.code == RpcErrorCode::kCancelled ||
+                     rpc_result.status.code == RpcErrorCode::kDeadlineExceeded ||
+                     rpc_result.status.code == RpcErrorCode::kUnavailable ||
+                     rpc_result.status.code == RpcErrorCode::kInternal ||
+                     rpc_result.status.code == RpcErrorCode::kUnknown);
+
+                if (uncertain) {
+                    body["reason"] = "group_message_persistence_uncertain";
+                    body["message"] =
+                        "group message persistence outcome is uncertain; "
+                        "retry the same client_message_id";
+                } else {
+                    switch (rpc_result.status.code) {
+                        case RpcErrorCode::kNotFound:
+                            body["reason"] = "group_not_found";
+                            body["message"] = "group not found";
+                            break;
+                        case RpcErrorCode::kPermissionDenied:
+                            body["reason"] = "group_send_permission_denied";
+                            body["message"] = "group send permission denied";
+                            break;
+                        case RpcErrorCode::kFailedPrecondition:
+                            body["reason"] = "group_not_active";
+                            body["message"] = "group is not active";
+                            break;
+                        case RpcErrorCode::kInvalidArgument:
+                            body["reason"] = "invalid_group_message_request";
+                            body["message"] = "invalid group message request";
+                            break;
+                        case RpcErrorCode::kResourceExhausted:
+                            body["reason"] = "message_service_overloaded";
+                            body["message"] = "message service overloaded";
+                            break;
+                        case RpcErrorCode::kDeadlineExceeded:
+                            body["reason"] = "message_service_timeout";
+                            body["message"] = "message service timeout";
+                            break;
+                        case RpcErrorCode::kUnavailable:
+                            body["reason"] = "message_service_unavailable";
+                            body["message"] = "message service unavailable";
+                            break;
+                        case RpcErrorCode::kDataLoss:
+                            body["reason"] = "message_service_invalid_response";
+                            body["message"] = "invalid message service response";
+                            break;
+                        default:
+                            body["reason"] = "message_service_internal_error";
+                            body["message"] = "message service request failed";
+                            break;
+                    }
+                }
+
+                LOG_WARN(
+                    "gateway group message persistence failed"
+                    << ", actor=" << actor_user_id
+                    << ", group_id=" << group_id
+                    << ", client_message_id=" << client_message_id
+                    << ", attempted=" << rpc_result.attempted
+                    << ", rpc_code="
+                    << static_cast<int>(rpc_result.status.code)
+                    << ", internal_message=" << rpc_result.status.message
+                );
+            } else if (rpc_result.value->Conflict()) {
+                body["success"] = false;
+                body["reason"] = "client_message_id_conflict";
+                body["message"] =
+                    "client_message_id already belongs to a different group message";
+                body["message_id"] = rpc_result.value->message_id;
+            } else {
+                body["success"] = true;
+                body["result"] = rpc_result.value->Created()
+                    ? "created"
+                    : "reused";
+                body["message_id"] = rpc_result.value->message_id;
+                body["message"] = rpc_result.value->Created()
+                    ? "group message accepted"
+                    : "group message safely reused from durable truth";
+            }
+
+            if (context.CancellationRequested()) {
+                return {};
+            }
+
+            return BusinessExecutor::Completion(
+                [this, connection, request_seq, body = std::move(body)]() mutable {
+                    if (!connection || !connection->IsConnected()) {
+                        return;
+                    }
+                    Packet response;
+                    response.type = MessageType::kGroupMessageSendResponse;
+                    response.seq = request_seq;
+                    response.body = body.dump();
+                    SendPacket(connection, response);
+                }
+            );
+        }
+    );
+
+    if (submit_status == BusinessSubmitStatus::kAccepted) {
+        return;
+    }
+
+    Json rejected{{"success", false}};
+    rejected["group_id"] = group_id;
+    rejected["client_message_id"] = client_message_id;
+    switch (submit_status) {
+        case BusinessSubmitStatus::kOverloaded:
+        case BusinessSubmitStatus::kHotKeyOverloaded:
+            rejected["reason"] = "business_runtime_overloaded";
+            rejected["message"] = "business runtime overloaded";
+            break;
+        case BusinessSubmitStatus::kDeadlineExpired:
+            rejected["reason"] = "business_deadline_expired";
+            rejected["message"] = "group message deadline expired";
+            break;
+        case BusinessSubmitStatus::kShuttingDown:
+            rejected["reason"] = "business_runtime_shutting_down";
+            rejected["message"] = "business runtime shutting down";
+            break;
+        case BusinessSubmitStatus::kInvalidArgument:
+            rejected["reason"] = "business_runtime_unavailable";
+            rejected["message"] = "business runtime unavailable";
+            break;
+        case BusinessSubmitStatus::kAccepted:
+            return;
+    }
+    send_response(rejected);
+}
+
 void GatewayServer::HandleHeartbeat(
     const TcpConnectionPtr& connection,
     const Packet& packet
@@ -10793,6 +11777,208 @@ void GatewayServer::PushPersistentOfflineMessages(
         LOG_WARN("gateway persistent offline replay task rejected"
                  << ", user_id=" << user_id
                  << ", status=" << BusinessSubmitStatusToString(status));
+    }
+}
+
+void GatewayServer::PushGroupOfflineMessages(
+    UserId user_id,
+    const TcpConnectionPtr& connection
+) {
+    if (user_id == 0 || !connection || !connection->IsConnected()) {
+        return;
+    }
+    if (!HasMessageRpcClient() || !HasBusinessExecutor()) {
+        LOG_WARN("gateway postponed group offline replay: dependency unavailable"
+                 << ", user_id=" << user_id
+                 << ", message_rpc=" << HasMessageRpcClient()
+                 << ", business_runtime=" << HasBusinessExecutor());
+        return;
+    }
+
+    const auto session = session_manager_.FindSessionByConnection(connection);
+    if (!session.has_value() || session->user_id != user_id) {
+        return;
+    }
+
+    const BusinessSubmitStatus status = SubmitSessionBusinessTask(
+        business_executor_,
+        &session_manager_,
+        connection,
+        *session,
+        0,
+        BusinessClock::now(),
+        "gateway.group_offline_replay",
+        BusinessCancellationPolicy::kCancelable,
+        static_cast<BusinessOrderingKey>(user_id),
+        [this, user_id, connection, dispatch_epoch = session->epoch](
+            const BusinessExecutor::ExecutionContext& context
+        ) -> BusinessExecutor::Completion {
+            ScopedBusinessDispatchContext dispatch_scope(
+                connection, user_id, dispatch_epoch);
+            ExecuteGroupOfflineReplay(
+                user_id, connection, context.Request());
+            return {};
+        });
+
+    if (status != BusinessSubmitStatus::kAccepted) {
+        LOG_WARN("gateway group offline replay task rejected"
+                 << ", user_id=" << user_id
+                 << ", status=" << BusinessSubmitStatusToString(status));
+    }
+}
+
+void GatewayServer::ScheduleGroupOfflineReplayProbe(
+    UserId user_id,
+    const TcpConnectionPtr& connection
+) {
+    if (user_id == 0 || !connection || !connection->IsConnected()) {
+        return;
+    }
+    EventLoop* timer_loop = connection->GetLoop();
+    if (timer_loop == nullptr) return;
+
+    const TimerId timer_id = timer_loop->RunAfter(
+        kGroupOfflineReplayProbeDelay,
+        [this, user_id, connection]() {
+            const TcpConnectionPtr active = session_manager_.FindConnection(user_id);
+            if (!active || active != connection || !active->IsConnected()) {
+                return;
+            }
+            PushGroupOfflineMessages(user_id, connection);
+        });
+    if (!timer_id.IsValid()) {
+        LOG_WARN("gateway unable to schedule group replay lease-expiry probe"
+                 << ", user_id=" << user_id);
+    }
+}
+
+void GatewayServer::ExecuteGroupOfflineReplay(
+    UserId user_id,
+    const TcpConnectionPtr& connection,
+    const BusinessRequestContext& business_request
+) {
+    if (user_id == 0 || !connection || !connection->IsConnected() ||
+        !HasMessageRpcClient()) {
+        return;
+    }
+
+    std::size_t total_claimed = 0;
+    std::size_t batch_index = 0;
+
+    auto session_is_current = [&]() {
+        const TcpConnectionPtr active = session_manager_.FindConnection(user_id);
+        return active && active == connection && active->IsConnected();
+    };
+
+    auto make_options = [&](const char* operation) {
+        rpc::RpcCallOptions options;
+        const std::uint64_t rpc_id = next_internal_rpc_id_.fetch_add(
+            1, std::memory_order_relaxed);
+        options.request_id = options_.gateway_id + ":message:" + operation +
+            ":req:" + std::to_string(rpc_id);
+        options.trace_id = options_.gateway_id + ":group-replay:trace:" +
+            std::to_string(rpc_id) + ":user:" + std::to_string(user_id);
+        options.caller_service = "gateway";
+        options.caller_instance = options_.gateway_id;
+        const auto remaining = business_request.RemainingTime();
+        options.remaining_timeout =
+            remaining == std::chrono::milliseconds::max()
+                ? std::chrono::milliseconds{5000}
+                : remaining;
+        return options;
+    };
+
+    while (session_is_current() && !business_request.DeadlineExpired()) {
+        ++batch_index;
+        const std::uint64_t lease_id = next_internal_rpc_id_.fetch_add(
+            1, std::memory_order_relaxed);
+
+        rpc::ClaimGroupMessageDeliveriesForRecipientRpcRequest claim;
+        claim.recipient_user_id = user_id;
+        claim.lease_owner = options_.gateway_id;
+        claim.lease_token = options_.gateway_id + ":group-replay:" +
+            std::to_string(user_id) + ":" + std::to_string(lease_id);
+        claim.limit = kGroupOfflineReplayPageSize;
+        claim.lease_ms = kGroupOfflineReplayLeaseMs;
+
+        const auto claimed =
+            message_rpc_client_->ClaimGroupMessageDeliveriesForRecipient(
+                claim, make_options("claim-group-replay"));
+        if (!claimed.ok()) {
+            LOG_WARN("gateway group offline replay claim failed"
+                     << ", user_id=" << user_id
+                     << ", batch_index=" << batch_index
+                     << ", error=" << claimed.status.message);
+            return;
+        }
+        if (claimed.value->work_items.empty()) {
+            break;
+        }
+
+        for (const auto& work : claimed.value->work_items) {
+            if (!session_is_current() || business_request.DeadlineExpired()) {
+                LOG_INFO("gateway group offline replay stopped: session/deadline stale"
+                         << ", user_id=" << user_id
+                         << ", batch_index=" << batch_index);
+                return;
+            }
+
+            Packet submitted;
+            std::string submit_error;
+            const auto status = SubmitGroupMessageDelivery(
+                connection, work, &submitted, &submit_error);
+
+            if (status == ReceiverDeliverySubmitStatus::kSubmitted) {
+                ++total_claimed;
+                if (!ScheduleGroupMessageDeliveryAckTimeout(
+                        connection, work, submitted.seq)) {
+                    LOG_WARN("gateway group offline replay submitted without ack timer"
+                             << ", user_id=" << user_id
+                             << ", message_id=" << work.message.message_id
+                             << ", delivery_seq=" << submitted.seq);
+                }
+                LOG_INFO("gateway submitted group offline replay"
+                         << ", user_id=" << user_id
+                         << ", message_id=" << work.message.message_id
+                         << ", delivery_seq=" << submitted.seq
+                         << ", batch_index=" << batch_index);
+                continue;
+            }
+
+            if (status == ReceiverDeliverySubmitStatus::kAlreadyConfirmed) {
+                rpc::ConfirmGroupMessageDeliveryRpcRequest repair;
+                repair.message_id = work.message.message_id;
+                repair.recipient_user_id = user_id;
+                const auto repaired = message_rpc_client_->ConfirmGroupMessageDelivery(
+                    repair, make_options("repair-group-replay"));
+                if (!repaired.ok()) {
+                    LOG_WARN("gateway group replay durable confirmation repair failed"
+                             << ", user_id=" << user_id
+                             << ", message_id=" << work.message.message_id
+                             << ", attempted=" << repaired.attempted
+                             << ", error=" << repaired.status.message);
+                }
+                continue;
+            }
+
+            if (status == ReceiverDeliverySubmitStatus::kConnectionUnavailable) {
+                return;
+            }
+
+            LOG_WARN("gateway group offline replay submission failed"
+                     << ", user_id=" << user_id
+                     << ", message_id=" << work.message.message_id
+                     << ", status=" << static_cast<int>(status)
+                     << ", error=" << submit_error
+                     << ", batch_index=" << batch_index);
+        }
+    }
+
+    if (total_claimed != 0) {
+        LOG_INFO("gateway group offline replay batch completed"
+                 << ", user_id=" << user_id
+                 << ", total_submitted=" << total_claimed
+                 << ", batches=" << batch_index);
     }
 }
 

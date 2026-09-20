@@ -111,6 +111,152 @@ struct PersistPrivateMessageRpcCallResult {
     }
 };
 
+
+
+enum class PersistGroupMessageRpcOutcome {
+    kCreated = 0,
+    kReused,
+    kIdempotencyConflict,
+};
+
+struct GroupMessageRpcRecord {
+    std::uint64_t message_id{0};
+    std::string client_message_id;
+    std::uint64_t group_id{0};
+    std::uint64_t from_user_id{0};
+    std::uint32_t message_type{0};
+    std::string content;
+    std::uint64_t membership_epoch{0};
+    std::uint64_t member_version{0};
+    std::uint32_t authorized_role{0};
+    std::string created_at;
+};
+
+struct PersistGroupMessageRpcRequest {
+    std::uint64_t from_user_id{0};
+    std::uint64_t group_id{0};
+    std::string client_message_id;
+    std::uint32_t message_type{0};
+    std::string content;
+};
+
+struct PersistGroupMessageRpcResponse {
+    PersistGroupMessageRpcOutcome outcome{PersistGroupMessageRpcOutcome::kCreated};
+    std::uint64_t message_id{0};
+    GroupMessageRpcRecord record;
+    std::string message;
+    [[nodiscard]] bool Accepted() const noexcept {
+        return outcome == PersistGroupMessageRpcOutcome::kCreated ||
+               outcome == PersistGroupMessageRpcOutcome::kReused;
+    }
+    [[nodiscard]] bool Created() const noexcept {
+        return outcome == PersistGroupMessageRpcOutcome::kCreated;
+    }
+    [[nodiscard]] bool Reused() const noexcept {
+        return outcome == PersistGroupMessageRpcOutcome::kReused;
+    }
+    [[nodiscard]] bool Conflict() const noexcept {
+        return outcome == PersistGroupMessageRpcOutcome::kIdempotencyConflict;
+    }
+};
+
+struct PersistGroupMessageRpcCallResult {
+    RpcStatus status;
+    std::optional<PersistGroupMessageRpcResponse> value;
+    bool attempted{false};
+    [[nodiscard]] bool ok() const noexcept { return status.ok() && value.has_value(); }
+    static PersistGroupMessageRpcCallResult Success(PersistGroupMessageRpcResponse response) {
+        PersistGroupMessageRpcCallResult output;
+        output.status = RpcStatus::Ok();
+        output.value = std::move(response);
+        output.attempted = true;
+        return output;
+    }
+    static PersistGroupMessageRpcCallResult Failure(
+        RpcErrorCode code, std::string message, bool call_attempted
+    ) {
+        PersistGroupMessageRpcCallResult output;
+        output.status.code = code;
+        output.status.message = std::move(message);
+        output.attempted = call_attempted;
+        return output;
+    }
+};
+
+enum class GroupDeliveryRpcState : std::uint32_t {
+    kPending = 1,
+    kDeferredOffline = 2,
+    kDelivered = 3,
+};
+
+enum class GroupDeliveryAttemptRpcOutcome : std::uint32_t {
+    kSubmitted = 1,
+    kOffline = 2,
+    kRetryableFailure = 3,
+};
+
+struct GroupDeliveryRpcRecord {
+    std::uint64_t message_id{0};
+    std::uint64_t group_id{0};
+    std::uint64_t recipient_user_id{0};
+    GroupDeliveryRpcState delivery_state{GroupDeliveryRpcState::kPending};
+    std::uint32_t attempt_count{0};
+    std::string last_gateway_id;
+    std::string lease_owner;
+    std::string lease_token;
+    std::string lease_until;
+    std::string next_retry_at;
+    std::string last_error_code;
+    std::string created_at;
+    std::string updated_at;
+    std::string delivered_at;
+};
+
+struct GroupDeliveryWorkRpcRecord {
+    GroupMessageRpcRecord message;
+    GroupDeliveryRpcRecord delivery;
+};
+
+struct GetGroupMessageDeliveryRpcRequest {
+    std::uint64_t message_id{0};
+    std::uint64_t recipient_user_id{0};
+};
+struct GetGroupMessageDeliveryRpcResponse { GroupDeliveryWorkRpcRecord work; };
+
+struct ClaimGroupMessageDeliveriesRpcRequest {
+    std::string lease_owner;
+    std::string lease_token;
+    std::uint32_t limit{0};
+    std::uint32_t lease_ms{0};
+    std::uint64_t message_id{0};
+};
+struct ClaimGroupMessageDeliveriesRpcResponse {
+    std::vector<GroupDeliveryWorkRpcRecord> work_items;
+};
+
+struct ClaimGroupMessageDeliveriesForRecipientRpcRequest {
+    std::uint64_t recipient_user_id{0};
+    std::string lease_owner;
+    std::string lease_token;
+    std::uint32_t limit{0};
+    std::uint32_t lease_ms{0};
+};
+
+struct CompleteGroupMessageDeliveryAttemptRpcRequest {
+    std::uint64_t message_id{0};
+    std::uint64_t recipient_user_id{0};
+    std::string lease_token;
+    GroupDeliveryAttemptRpcOutcome outcome{GroupDeliveryAttemptRpcOutcome::kRetryableFailure};
+    std::string gateway_id;
+    std::uint32_t retry_after_ms{0};
+    std::string error_code;
+};
+
+struct ConfirmGroupMessageDeliveryRpcRequest {
+    std::uint64_t message_id{0};
+    std::uint64_t recipient_user_id{0};
+};
+
 struct GetPrivateMessageRpcRequest {
     std::uint64_t message_id{0};
 };

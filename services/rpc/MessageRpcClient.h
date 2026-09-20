@@ -33,6 +33,23 @@ public:
         const RpcCallOptions& options
     ) const;
 
+    [[nodiscard]] PersistGroupMessageRpcCallResult PersistGroupMessage(
+        const PersistGroupMessageRpcRequest& request,
+        const RpcCallOptions& options
+    ) const;
+
+    [[nodiscard]] RpcResult<GetGroupMessageDeliveryRpcResponse> GetGroupMessageDelivery(
+        const GetGroupMessageDeliveryRpcRequest&, const RpcCallOptions&) const;
+    [[nodiscard]] RpcResult<ClaimGroupMessageDeliveriesRpcResponse> ClaimGroupMessageDeliveries(
+        const ClaimGroupMessageDeliveriesRpcRequest&, const RpcCallOptions&) const;
+    [[nodiscard]] RpcResult<ClaimGroupMessageDeliveriesRpcResponse> ClaimGroupMessageDeliveriesForRecipient(
+        const ClaimGroupMessageDeliveriesForRecipientRpcRequest&,
+        const RpcCallOptions&) const;
+    [[nodiscard]] MessageMutationRpcCallResult CompleteGroupMessageDeliveryAttempt(
+        const CompleteGroupMessageDeliveryAttemptRpcRequest&, const RpcCallOptions&) const;
+    [[nodiscard]] MessageMutationRpcCallResult ConfirmGroupMessageDelivery(
+        const ConfirmGroupMessageDeliveryRpcRequest&, const RpcCallOptions&) const;
+
     [[nodiscard]] RpcResult<GetPrivateMessageRpcResponse> GetPrivateMessage(
         const GetPrivateMessageRpcRequest& request,
         const RpcCallOptions& options

@@ -1,5 +1,6 @@
 #include "services/repository/MessageRepository.h"
 
+#include <algorithm>
 #include "common/logging/LogMacros.h"
 
 #include <sstream>
@@ -31,6 +32,96 @@ std::string JoinMessageIds(
     }
 
     return oss.str();
+}
+
+
+bool BuildGroupMessageRecord(
+    const std::vector<std::string>& row,
+    GroupMessageRecord* record
+) {
+    if (record == nullptr || row.size() != 10) {
+        return false;
+    }
+    try {
+        record->message_id = ToUInt64(row[0]);
+        record->client_message_id = row[1];
+        record->group_id = ToUInt64(row[2]);
+        record->from_user_id = ToUInt64(row[3]);
+        record->message_type = ToUInt32(row[4]);
+        record->content = row[5];
+        record->membership_epoch = ToUInt64(row[6]);
+        record->member_version = ToUInt64(row[7]);
+        record->authorized_role = ToUInt32(row[8]);
+        record->created_at = row[9];
+    } catch (...) {
+        return false;
+    }
+    return record->message_id != 0 &&
+           record->group_id != 0 &&
+           record->from_user_id != 0 &&
+           !record->client_message_id.empty() &&
+           record->message_type >= 1 && record->message_type <= 3 &&
+           record->membership_epoch != 0 &&
+           record->member_version != 0 &&
+           record->authorized_role >= 1 && record->authorized_role <= 3 &&
+           !record->created_at.empty();
+}
+
+
+bool BuildGroupDeliveryWorkRecord(
+    const std::vector<std::string>& row,
+    GroupDeliveryWorkRecord* record
+) {
+    if (record == nullptr || row.size() != 24) return false;
+    try {
+        record->delivery.message_id = ToUInt64(row[0]);
+        record->delivery.group_id = ToUInt64(row[1]);
+        record->delivery.recipient_user_id = ToUInt64(row[2]);
+        const auto status = ToUInt32(row[3]);
+        if (status < 1 || status > 3) return false;
+        record->delivery.delivery_status = static_cast<GroupDeliveryStatus>(status);
+        record->delivery.attempt_count = ToUInt32(row[4]);
+        record->delivery.last_gateway_id = row[5];
+        record->delivery.lease_owner = row[6];
+        record->delivery.lease_token = row[7];
+        record->delivery.lease_until = row[8];
+        record->delivery.next_retry_at = row[9];
+        record->delivery.last_error_code = row[10];
+        record->delivery.created_at = row[11];
+        record->delivery.updated_at = row[12];
+        record->delivery.delivered_at = row[13];
+
+        record->message.message_id = ToUInt64(row[14]);
+        record->message.client_message_id = row[15];
+        record->message.group_id = ToUInt64(row[16]);
+        record->message.from_user_id = ToUInt64(row[17]);
+        record->message.message_type = ToUInt32(row[18]);
+        record->message.content = row[19];
+        record->message.membership_epoch = ToUInt64(row[20]);
+        record->message.member_version = ToUInt64(row[21]);
+        record->message.authorized_role = ToUInt32(row[22]);
+        record->message.created_at = row[23];
+    } catch (...) {
+        return false;
+    }
+    return record->delivery.message_id != 0 &&
+           record->delivery.group_id != 0 &&
+           record->delivery.recipient_user_id != 0 &&
+           record->message.message_id == record->delivery.message_id &&
+           record->message.group_id == record->delivery.group_id &&
+           record->message.from_user_id != 0 &&
+           record->message.membership_epoch != 0 &&
+           record->message.member_version != 0;
+}
+
+std::string GroupDeliverySelectColumns() {
+    return
+        "d.message_id, d.group_id, d.recipient_user_id, d.delivery_status, "
+        "d.attempt_count, IFNULL(d.last_gateway_id,''), IFNULL(d.lease_owner,''), "
+        "IFNULL(d.lease_token,''), IFNULL(d.lease_until,''), d.next_retry_at, "
+        "IFNULL(d.last_error_code,''), d.created_at, d.updated_at, IFNULL(d.delivered_at,''), "
+        "m.message_id, m.client_message_id, m.group_id, m.from_user_id, m.message_type, "
+        "m.content, m.membership_epoch, m.member_version, m.authorized_role, m.created_at ";
 }
 
 }  // namespace
@@ -2042,6 +2133,537 @@ MessageRepository::MarkReadByDialog(
         << result.affected_rows
     );
 
+    return result;
+}
+
+
+
+FindGroupMessageResult MessageRepository::FindGroupMessageById(
+    std::uint64_t message_id
+) {
+    FindGroupMessageResult result;
+    if (message_id == 0 || pool_ == nullptr) {
+        result.status = message_id == 0
+            ? MessageQueryStatus::kInvalidArgument
+            : MessageQueryStatus::kStorageError;
+        result.message = "group message find failed: invalid input or pool unavailable";
+        return result;
+    }
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        result.status = MessageQueryStatus::kStorageError;
+        result.message = "group message find failed: acquire connection failed";
+        return result;
+    }
+    return FindGroupMessageByIdOnConnection(connection.operator->(), message_id);
+}
+
+FindGroupMessageResult MessageRepository::FindGroupMessageByClientMessageId(
+    std::uint64_t from_user_id,
+    const std::string& client_message_id
+) {
+    FindGroupMessageResult result;
+    if (from_user_id == 0 || client_message_id.empty() ||
+        client_message_id.size() > 64 || pool_ == nullptr) {
+        result.status = pool_ == nullptr
+            ? MessageQueryStatus::kStorageError
+            : MessageQueryStatus::kInvalidArgument;
+        result.message = "group message idempotency find failed: invalid input or pool unavailable";
+        return result;
+    }
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        result.status = MessageQueryStatus::kStorageError;
+        result.message = "group message idempotency find failed: acquire connection failed";
+        return result;
+    }
+    return FindGroupMessageByClientMessageIdOnConnection(
+        connection.operator->(), from_user_id, client_message_id);
+}
+
+
+GroupDeliveryMutationResult MessageRepository::InsertGroupMessageDeliveriesOnConnection(
+    MySqlConnection* connection,
+    std::uint64_t message_id,
+    std::uint64_t group_id,
+    const std::vector<std::uint64_t>& recipient_user_ids
+) {
+    GroupDeliveryMutationResult result;
+    if (connection == nullptr || !connection->IsConnected() || !connection->InTransaction() ||
+        message_id == 0 || group_id == 0 || recipient_user_ids.size() > 5000) {
+        result.status = MessageMutationStatus::kInvalidArgument;
+        result.message = "invalid group delivery insert arguments";
+        return result;
+    }
+    if (recipient_user_ids.empty()) {
+        result.status = MessageMutationStatus::kSucceeded;
+        result.message = "group message has no recipients";
+        return result;
+    }
+    constexpr std::size_t kBatchSize = 256;
+    std::uint64_t inserted = 0;
+    for (std::size_t begin = 0; begin < recipient_user_ids.size(); begin += kBatchSize) {
+        const std::size_t end = std::min(begin + kBatchSize, recipient_user_ids.size());
+        std::ostringstream sql;
+        sql << "INSERT INTO im_group_message_deliveries "
+               "(message_id, recipient_user_id, group_id, delivery_status, attempt_count, next_retry_at) VALUES ";
+        for (std::size_t i = begin; i < end; ++i) {
+            if (recipient_user_ids[i] == 0) {
+                result.status = MessageMutationStatus::kInvalidArgument;
+                result.message = "group delivery recipient is zero";
+                return result;
+            }
+            if (i != begin) sql << ',';
+            sql << '(' << message_id << ',' << recipient_user_ids[i] << ',' << group_id
+                << ",1,0,NOW(3))";
+        }
+        if (!connection->Execute(sql.str())) {
+            result.status = MessageMutationStatus::kStorageError;
+            result.message = "group delivery batch insert failed: " + connection->LastError();
+            return result;
+        }
+        inserted += connection->AffectedRows();
+    }
+    result.status = MessageMutationStatus::kSucceeded;
+    result.affected_rows = inserted;
+    result.message = "group delivery recipients inserted";
+    return result;
+}
+
+FindGroupDeliveryResult MessageRepository::FindGroupMessageDelivery(
+    std::uint64_t message_id,
+    std::uint64_t recipient_user_id
+) {
+    FindGroupDeliveryResult result;
+    if (pool_ == nullptr || message_id == 0 || recipient_user_id == 0) {
+        result.status = MessageQueryStatus::kInvalidArgument;
+        result.message = "invalid group delivery lookup arguments";
+        return result;
+    }
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        result.status = MessageQueryStatus::kStorageError;
+        result.message = "group delivery lookup failed to acquire connection";
+        return result;
+    }
+    MySqlQueryResult query;
+    const std::string sql = "SELECT " + GroupDeliverySelectColumns() +
+        "FROM im_group_message_deliveries d JOIN im_group_messages m ON m.message_id=d.message_id "
+        "WHERE d.message_id=" + std::to_string(message_id) +
+        " AND d.recipient_user_id=" + std::to_string(recipient_user_id) + " LIMIT 1";
+    if (!connection->Query(sql, &query)) {
+        result.status = MessageQueryStatus::kStorageError;
+        result.message = "group delivery lookup failed: " + connection->LastError();
+        return result;
+    }
+    if (query.rows.empty()) {
+        result.status = MessageQueryStatus::kSucceeded;
+        result.found = false;
+        result.message = "group delivery not found";
+        return result;
+    }
+    if (query.rows.size() != 1 || !BuildGroupDeliveryWorkRecord(query.rows.front(), &result.record)) {
+        result.status = MessageQueryStatus::kInvalidRecord;
+        result.message = "group delivery lookup returned invalid record";
+        return result;
+    }
+    result.status = MessageQueryStatus::kSucceeded;
+    result.found = true;
+    result.message = "group delivery found";
+    return result;
+}
+
+ListGroupDeliveryWorkResult MessageRepository::ClaimGroupMessageDeliveries(
+    const std::string& lease_owner,
+    const std::string& lease_token,
+    std::size_t limit,
+    std::uint32_t lease_ms,
+    std::uint64_t message_id
+) {
+    ListGroupDeliveryWorkResult result;
+    if (pool_ == nullptr || lease_owner.empty() || lease_token.empty() ||
+        lease_owner.size() > 128 || lease_token.size() > 128 || limit == 0 || limit > 256 ||
+        lease_ms < 100 || lease_ms > 60000) {
+        result.status = MessageQueryStatus::kInvalidArgument;
+        result.message = "invalid group delivery claim arguments";
+        return result;
+    }
+    auto connection = pool_->Acquire();
+    if (!connection || !connection->BeginTransaction()) {
+        result.status = MessageQueryStatus::kStorageError;
+        result.message = "group delivery claim failed to begin transaction";
+        return result;
+    }
+    const auto rollback = [&] { if (connection->InTransaction()) connection->Rollback(); };
+    MySqlQueryResult query;
+    std::string sql = "SELECT " + GroupDeliverySelectColumns() +
+        "FROM im_group_message_deliveries d JOIN im_group_messages m ON m.message_id=d.message_id "
+        "WHERE d.delivery_status=1 AND d.next_retry_at<=NOW(3) "
+        "AND (d.lease_until IS NULL OR d.lease_until<=NOW(3)) ";
+    if (message_id != 0) sql += "AND d.message_id=" + std::to_string(message_id) + " ";
+    sql += "ORDER BY d.message_id ASC,d.recipient_user_id ASC LIMIT " + std::to_string(limit) +
+           " FOR UPDATE SKIP LOCKED";
+    if (!connection->Query(sql, &query)) {
+        rollback();
+        result.status = MessageQueryStatus::kStorageError;
+        result.message = "group delivery claim select failed: " + connection->LastError();
+        return result;
+    }
+    result.records.reserve(query.rows.size());
+    for (const auto& row : query.rows) {
+        GroupDeliveryWorkRecord work;
+        if (!BuildGroupDeliveryWorkRecord(row, &work)) {
+            rollback();
+            result.status = MessageQueryStatus::kInvalidRecord;
+            result.records.clear();
+            result.message = "group delivery claim returned invalid row";
+            return result;
+        }
+        const std::string update =
+            "UPDATE im_group_message_deliveries SET lease_owner='" + connection->EscapeString(lease_owner) +
+            "', lease_token='" + connection->EscapeString(lease_token) +
+            "', lease_until=DATE_ADD(NOW(3), INTERVAL " + std::to_string(static_cast<std::uint64_t>(lease_ms) * 1000ULL) +
+            " MICROSECOND), attempt_count=attempt_count+1 WHERE message_id=" +
+            std::to_string(work.delivery.message_id) + " AND recipient_user_id=" +
+            std::to_string(work.delivery.recipient_user_id) + " AND delivery_status=1";
+        if (!connection->Execute(update) || connection->AffectedRows() != 1) {
+            rollback();
+            result.status = MessageQueryStatus::kStorageError;
+            result.records.clear();
+            result.message = "group delivery claim update failed: " + connection->LastError();
+            return result;
+        }
+        ++work.delivery.attempt_count;
+        work.delivery.lease_owner = lease_owner;
+        work.delivery.lease_token = lease_token;
+        result.records.push_back(std::move(work));
+    }
+    if (!connection->Commit()) {
+        rollback();
+        result.status = MessageQueryStatus::kStorageError;
+        result.records.clear();
+        result.message = "group delivery claim commit failed: " + connection->LastError();
+        return result;
+    }
+    result.status = MessageQueryStatus::kSucceeded;
+    result.message = "group deliveries claimed";
+    return result;
+}
+
+ListGroupDeliveryWorkResult MessageRepository::ClaimGroupMessageDeliveriesForRecipient(
+    std::uint64_t recipient_user_id,
+    const std::string& lease_owner,
+    const std::string& lease_token,
+    std::size_t limit,
+    std::uint32_t lease_ms
+) {
+    ListGroupDeliveryWorkResult result;
+    if (pool_ == nullptr || recipient_user_id == 0 || lease_owner.empty() ||
+        lease_token.empty() || lease_owner.size() > 128 || lease_token.size() > 128 ||
+        limit == 0 || limit > 256 || lease_ms < 100 || lease_ms > 60000) {
+        result.status = MessageQueryStatus::kInvalidArgument;
+        result.message = "invalid recipient group delivery claim arguments";
+        return result;
+    }
+
+    auto connection = pool_->Acquire();
+    if (!connection || !connection->BeginTransaction()) {
+        result.status = MessageQueryStatus::kStorageError;
+        result.message = "recipient group delivery claim failed to begin transaction";
+        return result;
+    }
+    const auto rollback = [&] {
+        if (connection->InTransaction()) connection->Rollback();
+    };
+
+    MySqlQueryResult query;
+    const std::string sql =
+        "SELECT " + GroupDeliverySelectColumns() +
+        "FROM im_group_message_deliveries d "
+        "JOIN im_group_messages m ON m.message_id=d.message_id "
+        "WHERE d.recipient_user_id=" + std::to_string(recipient_user_id) +
+        " AND d.delivery_status=2 "
+        "AND d.next_retry_at<=NOW(3) "
+        "AND (d.lease_until IS NULL OR d.lease_until<=NOW(3)) "
+        "ORDER BY d.message_id ASC LIMIT " + std::to_string(limit) +
+        " FOR UPDATE SKIP LOCKED";
+
+    if (!connection->Query(sql, &query)) {
+        rollback();
+        result.status = MessageQueryStatus::kStorageError;
+        result.message = "recipient group delivery claim select failed: " +
+            connection->LastError();
+        return result;
+    }
+
+    result.records.reserve(query.rows.size());
+    for (const auto& row : query.rows) {
+        GroupDeliveryWorkRecord work;
+        if (!BuildGroupDeliveryWorkRecord(row, &work) ||
+            work.delivery.recipient_user_id != recipient_user_id ||
+            work.delivery.delivery_status != GroupDeliveryStatus::kDeferredOffline) {
+            rollback();
+            result.status = MessageQueryStatus::kInvalidRecord;
+            result.records.clear();
+            result.message = "recipient group delivery claim returned invalid row";
+            return result;
+        }
+
+        const std::string update =
+            "UPDATE im_group_message_deliveries SET lease_owner='" +
+            connection->EscapeString(lease_owner) +
+            "', lease_token='" + connection->EscapeString(lease_token) +
+            "', lease_until=DATE_ADD(NOW(3), INTERVAL " +
+            std::to_string(static_cast<std::uint64_t>(lease_ms) * 1000ULL) +
+            " MICROSECOND), attempt_count=attempt_count+1 "
+            "WHERE message_id=" + std::to_string(work.delivery.message_id) +
+            " AND recipient_user_id=" + std::to_string(recipient_user_id) +
+            " AND delivery_status=2 "
+            "AND (lease_until IS NULL OR lease_until<=NOW(3))";
+
+        if (!connection->Execute(update) || connection->AffectedRows() != 1) {
+            rollback();
+            result.status = MessageQueryStatus::kStorageError;
+            result.records.clear();
+            result.message = "recipient group delivery claim update failed: " +
+                connection->LastError();
+            return result;
+        }
+
+        ++work.delivery.attempt_count;
+        work.delivery.lease_owner = lease_owner;
+        work.delivery.lease_token = lease_token;
+        result.records.push_back(std::move(work));
+    }
+
+    if (!connection->Commit()) {
+        rollback();
+        result.status = MessageQueryStatus::kStorageError;
+        result.records.clear();
+        result.message = "recipient group delivery claim commit failed: " +
+            connection->LastError();
+        return result;
+    }
+
+    result.status = MessageQueryStatus::kSucceeded;
+    result.message = "recipient deferred group deliveries claimed";
+    return result;
+}
+
+GroupDeliveryMutationResult MessageRepository::CompleteGroupMessageDeliveryAttempt(
+    std::uint64_t message_id,
+    std::uint64_t recipient_user_id,
+    const std::string& lease_token,
+    GroupDeliveryStatus next_status,
+    const std::string& gateway_id,
+    std::uint32_t retry_after_ms,
+    const std::string& error_code
+) {
+    GroupDeliveryMutationResult result;
+    if (pool_ == nullptr || message_id == 0 || recipient_user_id == 0 || lease_token.empty() ||
+        lease_token.size() > 128 || gateway_id.size() > 128 || error_code.size() > 128 ||
+        (next_status != GroupDeliveryStatus::kPending && next_status != GroupDeliveryStatus::kDeferredOffline) ||
+        retry_after_ms > 600000) {
+        result.status = MessageMutationStatus::kInvalidArgument;
+        result.message = "invalid group delivery completion arguments";
+        return result;
+    }
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        result.status = MessageMutationStatus::kStorageError;
+        result.message = "group delivery completion failed to acquire connection";
+        return result;
+    }
+    const auto status = static_cast<std::uint32_t>(next_status);
+    const std::string sql =
+        "UPDATE im_group_message_deliveries SET delivery_status=" + std::to_string(status) +
+        ", last_gateway_id=" + (gateway_id.empty() ? "NULL" : "'" + connection->EscapeString(gateway_id) + "'") +
+        ", last_error_code=" + (error_code.empty() ? "NULL" : "'" + connection->EscapeString(error_code) + "'") +
+        ", lease_owner=NULL, lease_token=NULL, lease_until=NULL, next_retry_at=DATE_ADD(NOW(3), INTERVAL " +
+        std::to_string(static_cast<std::uint64_t>(retry_after_ms) * 1000ULL) +
+        " MICROSECOND) WHERE message_id=" + std::to_string(message_id) +
+        " AND recipient_user_id=" + std::to_string(recipient_user_id) +
+        " AND lease_token='" + connection->EscapeString(lease_token) + "' AND delivery_status=1";
+    if (!connection->Execute(sql)) {
+        result.status = MessageMutationStatus::kStorageError;
+        result.message = "group delivery completion failed: " + connection->LastError();
+        return result;
+    }
+    result.status = MessageMutationStatus::kSucceeded;
+    result.affected_rows = connection->AffectedRows();
+    result.message = "group delivery attempt completed";
+    return result;
+}
+
+GroupDeliveryMutationResult MessageRepository::ConfirmGroupMessageDelivery(
+    std::uint64_t message_id,
+    std::uint64_t recipient_user_id
+) {
+    GroupDeliveryMutationResult result;
+    if (pool_ == nullptr || message_id == 0 || recipient_user_id == 0) {
+        result.status = MessageMutationStatus::kInvalidArgument;
+        result.message = "invalid group delivery confirmation arguments";
+        return result;
+    }
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        result.status = MessageMutationStatus::kStorageError;
+        result.message = "group delivery confirmation failed to acquire connection";
+        return result;
+    }
+    const std::string sql =
+        "UPDATE im_group_message_deliveries SET delivery_status=3, delivered_at=COALESCE(delivered_at,NOW(3)), "
+        "lease_owner=NULL, lease_token=NULL, lease_until=NULL, last_error_code=NULL "
+        "WHERE message_id=" + std::to_string(message_id) + " AND recipient_user_id=" +
+        std::to_string(recipient_user_id) + " AND delivery_status<>3";
+    if (!connection->Execute(sql)) {
+        result.status = MessageMutationStatus::kStorageError;
+        result.message = "group delivery confirmation failed: " + connection->LastError();
+        return result;
+    }
+    result.status = MessageMutationStatus::kSucceeded;
+    result.affected_rows = connection->AffectedRows();
+    result.message = "group delivery confirmed";
+    return result;
+}
+
+SaveGroupMessageResult MessageRepository::SaveGroupMessageOnConnection(
+    MySqlConnection* connection,
+    std::uint64_t group_id,
+    std::uint64_t from_user_id,
+    const std::string& client_message_id,
+    std::uint32_t message_type,
+    const std::string& content,
+    std::uint64_t membership_epoch,
+    std::uint64_t member_version,
+    std::uint32_t authorized_role
+) {
+    SaveGroupMessageResult result;
+    if (connection == nullptr || !connection->IsConnected()) {
+        result.status = MessageMutationStatus::kStorageError;
+        result.message = "group message save failed: connection unavailable";
+        return result;
+    }
+    if (group_id == 0 || from_user_id == 0 || client_message_id.empty() ||
+        client_message_id.size() > 64 || message_type < 1 || message_type > 3 ||
+        content.empty() || membership_epoch == 0 || member_version == 0 ||
+        authorized_role < 1 || authorized_role > 3) {
+        result.status = MessageMutationStatus::kInvalidArgument;
+        result.message = "group message save failed: invalid durable identity";
+        return result;
+    }
+    const std::string sql =
+        "INSERT INTO im_group_messages ("
+        "client_message_id, group_id, from_user_id, message_type, content, "
+        "membership_epoch, member_version, authorized_role) VALUES ('" +
+        connection->EscapeString(client_message_id) + "', " +
+        std::to_string(group_id) + ", " +
+        std::to_string(from_user_id) + ", " +
+        std::to_string(message_type) + ", '" +
+        connection->EscapeString(content) + "', " +
+        std::to_string(membership_epoch) + ", " +
+        std::to_string(member_version) + ", " +
+        std::to_string(authorized_role) + ")";
+    if (!connection->Execute(sql)) {
+        result.status = MessageMutationStatus::kStorageError;
+        result.message = connection->LastError();
+        if (result.message.empty()) result.message = "group message insert failed";
+        return result;
+    }
+    result.message_id = connection->LastInsertId();
+    if (result.message_id == 0) {
+        result.status = MessageMutationStatus::kStorageError;
+        result.message = "group message insert returned invalid id";
+        return result;
+    }
+    result.status = MessageMutationStatus::kSucceeded;
+    result.message = "group message saved on caller transaction";
+    return result;
+}
+
+FindGroupMessageResult MessageRepository::FindGroupMessageByIdOnConnection(
+    MySqlConnection* connection,
+    std::uint64_t message_id
+) {
+    FindGroupMessageResult result;
+    if (message_id == 0) {
+        result.status = MessageQueryStatus::kInvalidArgument;
+        result.message = "group message find failed: invalid message id";
+        return result;
+    }
+    if (connection == nullptr || !connection->IsConnected()) {
+        result.status = MessageQueryStatus::kStorageError;
+        result.message = "group message find failed: connection unavailable";
+        return result;
+    }
+    const std::string sql =
+        "SELECT message_id, client_message_id, group_id, from_user_id, "
+        "message_type, content, membership_epoch, member_version, "
+        "authorized_role, created_at FROM im_group_messages WHERE message_id = " +
+        std::to_string(message_id) + " LIMIT 1";
+    MySqlQueryResult rows;
+    if (!connection->Query(sql, &rows)) {
+        result.status = MessageQueryStatus::kStorageError;
+        result.message = connection->LastError();
+        return result;
+    }
+    if (rows.rows.empty()) {
+        result.status = MessageQueryStatus::kSucceeded;
+        result.message = "group message not found";
+        return result;
+    }
+    if (rows.rows.size() != 1 || !BuildGroupMessageRecord(rows.rows.front(), &result.record)) {
+        result.status = MessageQueryStatus::kInvalidRecord;
+        result.message = "group message find returned invalid record";
+        return result;
+    }
+    result.status = MessageQueryStatus::kSucceeded;
+    result.found = true;
+    result.message = "group message found";
+    return result;
+}
+
+FindGroupMessageResult MessageRepository::FindGroupMessageByClientMessageIdOnConnection(
+    MySqlConnection* connection,
+    std::uint64_t from_user_id,
+    const std::string& client_message_id
+) {
+    FindGroupMessageResult result;
+    if (from_user_id == 0 || client_message_id.empty() || client_message_id.size() > 64) {
+        result.status = MessageQueryStatus::kInvalidArgument;
+        result.message = "group message idempotency find failed: invalid argument";
+        return result;
+    }
+    if (connection == nullptr || !connection->IsConnected()) {
+        result.status = MessageQueryStatus::kStorageError;
+        result.message = "group message idempotency find failed: connection unavailable";
+        return result;
+    }
+    const std::string sql =
+        "SELECT message_id, client_message_id, group_id, from_user_id, "
+        "message_type, content, membership_epoch, member_version, "
+        "authorized_role, created_at FROM im_group_messages WHERE from_user_id = " +
+        std::to_string(from_user_id) + " AND client_message_id = '" +
+        connection->EscapeString(client_message_id) + "' LIMIT 2";
+    MySqlQueryResult rows;
+    if (!connection->Query(sql, &rows)) {
+        result.status = MessageQueryStatus::kStorageError;
+        result.message = connection->LastError();
+        return result;
+    }
+    if (rows.rows.empty()) {
+        result.status = MessageQueryStatus::kSucceeded;
+        result.message = "group message not found";
+        return result;
+    }
+    if (rows.rows.size() != 1 || !BuildGroupMessageRecord(rows.rows.front(), &result.record)) {
+        result.status = MessageQueryStatus::kInvalidRecord;
+        result.message = "group message idempotency find returned invalid record";
+        return result;
+    }
+    result.status = MessageQueryStatus::kSucceeded;
+    result.found = true;
+    result.message = "group message found";
     return result;
 }
 

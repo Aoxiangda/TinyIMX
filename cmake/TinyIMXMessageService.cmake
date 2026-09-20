@@ -111,6 +111,7 @@ target_compile_features(tinyimx_message_grpc PUBLIC cxx_std_20)
 target_link_libraries(tinyimx_message_grpc PUBLIC
   tinyimx_message_core
   tinyimx_rpc_proto
+  tinyimx_rpc_client
   gRPC::grpc++
 )
 
@@ -127,6 +128,7 @@ target_link_libraries(message_service_demo PRIVATE
   tinyimx_repository
   tinyimx_message_grpc
   tinyimx_service_registry
+  tinyimx_zookeeper_endpoint_provider
 )
 
 add_executable(message_application_service_tests
@@ -228,6 +230,36 @@ add_executable(message_outbox_integration_tests
 target_compile_features(message_outbox_integration_tests PRIVATE cxx_std_20)
 
 target_link_libraries(message_outbox_integration_tests PRIVATE
+  tinyimx_config
+  tinyimx_logging
+  tinyimx_db
+  tinyimx_repository
+  tinyimx_message_core
+  tinyimx_outbox
+)
+
+add_executable(group_message_durable_write_integration_tests
+  tests/message/group_message_durable_write_integration_test.cpp
+)
+
+target_compile_features(group_message_durable_write_integration_tests PRIVATE cxx_std_20)
+
+target_link_libraries(group_message_durable_write_integration_tests PRIVATE
+  tinyimx_config
+  tinyimx_logging
+  tinyimx_db
+  tinyimx_repository
+  tinyimx_message_core
+  tinyimx_outbox
+)
+
+add_executable(group_message_fanout_integration_tests
+  tests/message/group_message_fanout_integration_test.cpp
+)
+
+target_compile_features(group_message_fanout_integration_tests PRIVATE cxx_std_20)
+
+target_link_libraries(group_message_fanout_integration_tests PRIVATE
   tinyimx_config
   tinyimx_logging
   tinyimx_db

@@ -40,6 +40,10 @@ public:
         std::uint64_t actor_user_id,
         std::uint64_t group_id
     );
+    [[nodiscard]] PrepareGroupMessageSendApplicationResult PrepareGroupMessageSend(
+        std::uint64_t actor_user_id,
+        std::uint64_t group_id
+    );
 
 private:
     GroupRepositoryPort* repository_{nullptr};  // non-owning

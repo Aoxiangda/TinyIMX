@@ -78,6 +78,52 @@ MessageView ToView(tinyimx::PrivateMessageRecord record) {
     return view;
 }
 
+
+
+GroupMessageView ToView(tinyimx::GroupMessageRecord record) {
+    GroupMessageView view;
+    view.message_id = record.message_id;
+    view.client_message_id = std::move(record.client_message_id);
+    view.group_id = record.group_id;
+    view.from_user_id = record.from_user_id;
+    view.message_type = record.message_type;
+    view.content = std::move(record.content);
+    view.membership_epoch = record.membership_epoch;
+    view.member_version = record.member_version;
+    view.authorized_role = record.authorized_role;
+    view.created_at = std::move(record.created_at);
+    return view;
+}
+
+GroupDeliveryState MapGroupDeliveryState(tinyimx::GroupDeliveryStatus status) {
+    switch (status) {
+        case tinyimx::GroupDeliveryStatus::kPending: return GroupDeliveryState::kPending;
+        case tinyimx::GroupDeliveryStatus::kDeferredOffline: return GroupDeliveryState::kDeferredOffline;
+        case tinyimx::GroupDeliveryStatus::kDelivered: return GroupDeliveryState::kDelivered;
+    }
+    return GroupDeliveryState::kPending;
+}
+
+GroupDeliveryWorkItem ToView(tinyimx::GroupDeliveryWorkRecord record) {
+    GroupDeliveryWorkItem view;
+    view.message = ToView(std::move(record.message));
+    view.delivery.message_id = record.delivery.message_id;
+    view.delivery.group_id = record.delivery.group_id;
+    view.delivery.recipient_user_id = record.delivery.recipient_user_id;
+    view.delivery.delivery_state = MapGroupDeliveryState(record.delivery.delivery_status);
+    view.delivery.attempt_count = record.delivery.attempt_count;
+    view.delivery.last_gateway_id = std::move(record.delivery.last_gateway_id);
+    view.delivery.lease_owner = std::move(record.delivery.lease_owner);
+    view.delivery.lease_token = std::move(record.delivery.lease_token);
+    view.delivery.lease_until = std::move(record.delivery.lease_until);
+    view.delivery.next_retry_at = std::move(record.delivery.next_retry_at);
+    view.delivery.last_error_code = std::move(record.delivery.last_error_code);
+    view.delivery.created_at = std::move(record.delivery.created_at);
+    view.delivery.updated_at = std::move(record.delivery.updated_at);
+    view.delivery.delivered_at = std::move(record.delivery.delivered_at);
+    return view;
+}
+
 ConversationView ToView(tinyimx::ConversationRecord record) {
     ConversationView view;
     view.peer_user_id = record.peer_user_id;
@@ -348,6 +394,329 @@ MessageRepositoryAdapter::PersistPrivateMessage(
     output.message_id = created.record.message_id;
     output.record = created_view;
     output.message = "private message and outbox event committed";
+    return output;
+}
+
+
+
+MessageRepositoryGroupGetResult
+MessageRepositoryAdapter::FindGroupMessageByClientMessageId(
+    std::uint64_t from_user_id,
+    const std::string& client_message_id
+) {
+    MessageRepositoryGroupGetResult output;
+    if (repository_ == nullptr) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "message repository is unavailable";
+        return output;
+    }
+    const auto result = repository_->FindGroupMessageByClientMessageId(
+        from_user_id, client_message_id);
+    output.status = MapStatus(result.status);
+    output.found = result.found;
+    if (result.found) output.record = ToView(result.record);
+    output.message = result.message;
+    return output;
+}
+
+MessageRepositoryGroupPersistResult
+MessageRepositoryAdapter::PersistAuthorizedGroupMessage(
+    std::uint64_t from_user_id,
+    std::uint64_t group_id,
+    const std::string& client_message_id,
+    std::uint32_t message_type,
+    const std::string& content,
+    std::uint64_t membership_epoch,
+    std::uint64_t member_version,
+    std::uint32_t authorized_role
+) {
+    return PersistAuthorizedGroupMessage(
+        from_user_id, group_id, client_message_id, message_type, content,
+        membership_epoch, member_version, authorized_role, {});
+}
+
+MessageRepositoryGroupPersistResult
+MessageRepositoryAdapter::PersistAuthorizedGroupMessage(
+    std::uint64_t from_user_id,
+    std::uint64_t group_id,
+    const std::string& client_message_id,
+    std::uint32_t message_type,
+    const std::string& content,
+    std::uint64_t membership_epoch,
+    std::uint64_t member_version,
+    std::uint32_t authorized_role,
+    const std::vector<std::uint64_t>& recipient_user_ids
+) {
+    MessageRepositoryGroupPersistResult output;
+    if (repository_ == nullptr || pool_ == nullptr || outbox_ == nullptr) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "group message transactional persistence is unavailable";
+        return output;
+    }
+    if (from_user_id == 0 || group_id == 0 || client_message_id.empty() ||
+        client_message_id.size() > 64 || message_type < 1 || message_type > 3 ||
+        content.empty() || membership_epoch == 0 || member_version == 0 ||
+        authorized_role < 1 || authorized_role > 3) {
+        output.status = MessageApplicationStatus::kInvalidArgument;
+        output.message = "invalid authorized group message";
+        return output;
+    }
+    if (recipient_user_ids.size() > 5000) {
+        output.status = MessageApplicationStatus::kInvalidArgument;
+        output.message = "group recipient snapshot exceeds supported size";
+        return output;
+    }
+    std::uint64_t previous_recipient = 0;
+    for (const auto recipient : recipient_user_ids) {
+        if (recipient == 0 || recipient == from_user_id || recipient <= previous_recipient) {
+            output.status = MessageApplicationStatus::kInvalidArgument;
+            output.message = "group recipient snapshot must be sorted unique and exclude sender";
+            return output;
+        }
+        previous_recipient = recipient;
+    }
+
+    const auto same_identity = [&](const tinyimx::GroupMessageRecord& record) {
+        return record.message_id != 0 &&
+               record.client_message_id == client_message_id &&
+               record.from_user_id == from_user_id &&
+               record.group_id == group_id &&
+               record.message_type == message_type &&
+               record.content == content;
+    };
+
+    const auto set_existing = [&](const tinyimx::GroupMessageRecord& record) {
+        output.status = MessageApplicationStatus::kSucceeded;
+        output.message_id = record.message_id;
+        output.record = ToView(record);
+        if (same_identity(record)) {
+            output.outcome = PersistGroupMessageOutcome::kReused;
+            output.message = "existing group message reused";
+        } else {
+            output.outcome = PersistGroupMessageOutcome::kIdempotencyConflict;
+            output.message = "client_message_id already belongs to a different group message";
+        }
+    };
+
+    const auto precheck = repository_->FindGroupMessageByClientMessageId(
+        from_user_id, client_message_id);
+    if (!precheck.Succeeded()) {
+        output.status = MapStatus(precheck.status);
+        output.message = "group message precheck failed: " + precheck.message;
+        return output;
+    }
+    if (precheck.Found()) {
+        set_existing(precheck.record);
+        return output;
+    }
+
+    if (pre_insert_hook_for_test_) pre_insert_hook_for_test_();
+
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "group message acquire failed";
+        return output;
+    }
+    if (!connection->BeginTransaction()) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "group message begin failed: " + connection->LastError();
+        return output;
+    }
+
+    const auto saved = repository_->SaveGroupMessageOnConnection(
+        connection.operator->(), group_id, from_user_id, client_message_id,
+        message_type, content, membership_epoch, member_version, authorized_role);
+    if (!saved.Succeeded()) {
+        const std::string insert_error = saved.message;
+        if (connection->InTransaction()) connection->Rollback();
+        connection.Reset();
+        const auto recovered = repository_->FindGroupMessageByClientMessageId(
+            from_user_id, client_message_id);
+        if (recovered.Succeeded() && recovered.Found()) {
+            set_existing(recovered.record);
+            return output;
+        }
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = insert_error.empty() ? "group message insert failed" : insert_error;
+        return output;
+    }
+
+    const auto created = repository_->FindGroupMessageByIdOnConnection(
+        connection.operator->(), saved.message_id);
+    if (!created.Succeeded() || !created.Found() || !same_identity(created.record) ||
+        created.record.membership_epoch != membership_epoch ||
+        created.record.member_version != member_version ||
+        created.record.authorized_role != authorized_role) {
+        if (connection->InTransaction()) connection->Rollback();
+        output.status = created.Succeeded()
+            ? MessageApplicationStatus::kInvalidRecord
+            : MapStatus(created.status);
+        output.message = "group message post-insert verification failed";
+        return output;
+    }
+
+    const GroupMessageView created_view = ToView(created.record);
+    const auto delivery_insert = repository_->InsertGroupMessageDeliveriesOnConnection(
+        connection.operator->(), created.record.message_id, group_id, recipient_user_ids);
+    if (!delivery_insert.Succeeded() ||
+        delivery_insert.affected_rows != recipient_user_ids.size()) {
+        if (connection->InTransaction()) connection->Rollback();
+        output.status = delivery_insert.Succeeded()
+            ? MessageApplicationStatus::kInvalidRecord
+            : MapStatus(delivery_insert.status);
+        output.message = delivery_insert.Succeeded()
+            ? "group delivery recipient count mismatch"
+            : "group delivery insert failed: " + delivery_insert.message;
+        return output;
+    }
+
+    const auto event_spec = MessageEventFactory::GroupMessageCreated(created_view);
+    const auto outbox_result = outbox_->InsertOnConnection(
+        connection.operator->(), event_spec.event, event_spec.topic,
+        event_spec.tag, event_spec.message_key);
+    if (!outbox_result.success) {
+        if (connection->InTransaction()) connection->Rollback();
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "group message outbox insert failed: " + outbox_result.message;
+        return output;
+    }
+
+    if (!connection->Commit()) {
+        const std::string commit_error = connection->LastError();
+        if (connection->InTransaction()) connection->Rollback();
+        connection.Reset();
+        const auto recovered = repository_->FindGroupMessageByClientMessageId(
+            from_user_id, client_message_id);
+        if (recovered.Succeeded() && recovered.Found()) {
+            set_existing(recovered.record);
+            output.message = same_identity(recovered.record)
+                ? "commit outcome recovered as existing group message"
+                : "commit outcome recovered as group-message idempotency conflict";
+            return output;
+        }
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "group message commit failed";
+        if (!commit_error.empty()) output.message += ": " + commit_error;
+        return output;
+    }
+
+    output.status = MessageApplicationStatus::kSucceeded;
+    output.outcome = PersistGroupMessageOutcome::kCreated;
+    output.message_id = created.record.message_id;
+    output.record = created_view;
+    output.message = "group message, recipient snapshot, and outbox event committed";
+    return output;
+}
+
+MessageRepositoryGroupDeliveryGetResult
+MessageRepositoryAdapter::GetGroupMessageDelivery(
+    std::uint64_t message_id,
+    std::uint64_t recipient_user_id
+) {
+    MessageRepositoryGroupDeliveryGetResult output;
+    if (repository_ == nullptr) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "message repository is unavailable";
+        return output;
+    }
+    auto result = repository_->FindGroupMessageDelivery(message_id, recipient_user_id);
+    output.status = MapStatus(result.status);
+    output.found = result.found;
+    output.message = std::move(result.message);
+    if (result.found) output.record = ToView(std::move(result.record));
+    return output;
+}
+
+MessageRepositoryGroupDeliveryListResult
+MessageRepositoryAdapter::ClaimGroupMessageDeliveries(
+    const std::string& lease_owner,
+    const std::string& lease_token,
+    std::size_t limit,
+    std::uint32_t lease_ms,
+    std::uint64_t message_id
+) {
+    MessageRepositoryGroupDeliveryListResult output;
+    if (repository_ == nullptr) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "message repository is unavailable";
+        return output;
+    }
+    auto result = repository_->ClaimGroupMessageDeliveries(
+        lease_owner, lease_token, limit, lease_ms, message_id);
+    output.status = MapStatus(result.status);
+    output.message = std::move(result.message);
+    if (!result.Succeeded()) return output;
+    output.records.reserve(result.records.size());
+    for (auto& item : result.records) output.records.push_back(ToView(std::move(item)));
+    return output;
+}
+
+MessageRepositoryGroupDeliveryListResult
+MessageRepositoryAdapter::ClaimGroupMessageDeliveriesForRecipient(
+    std::uint64_t recipient_user_id,
+    const std::string& lease_owner,
+    const std::string& lease_token,
+    std::size_t limit,
+    std::uint32_t lease_ms
+) {
+    MessageRepositoryGroupDeliveryListResult output;
+    if (repository_ == nullptr) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "message repository is unavailable";
+        return output;
+    }
+    auto result = repository_->ClaimGroupMessageDeliveriesForRecipient(
+        recipient_user_id, lease_owner, lease_token, limit, lease_ms);
+    output.status = MapStatus(result.status);
+    output.message = std::move(result.message);
+    if (!result.Succeeded()) return output;
+    output.records.reserve(result.records.size());
+    for (auto& item : result.records) {
+        output.records.push_back(ToView(std::move(item)));
+    }
+    return output;
+}
+
+MessageRepositoryMutationResult
+MessageRepositoryAdapter::CompleteGroupMessageDeliveryAttempt(
+    std::uint64_t message_id,
+    std::uint64_t recipient_user_id,
+    const std::string& lease_token,
+    GroupDeliveryAttemptOutcome outcome,
+    const std::string& gateway_id,
+    std::uint32_t retry_after_ms,
+    const std::string& error_code
+) {
+    tinyimx::GroupDeliveryStatus next = tinyimx::GroupDeliveryStatus::kPending;
+    switch (outcome) {
+        case GroupDeliveryAttemptOutcome::kSubmitted:
+        case GroupDeliveryAttemptOutcome::kRetryableFailure:
+            next = tinyimx::GroupDeliveryStatus::kPending;
+            break;
+        case GroupDeliveryAttemptOutcome::kOffline:
+            next = tinyimx::GroupDeliveryStatus::kDeferredOffline;
+            break;
+    }
+    const auto result = repository_->CompleteGroupMessageDeliveryAttempt(
+        message_id, recipient_user_id, lease_token, next, gateway_id, retry_after_ms, error_code);
+    MessageRepositoryMutationResult output;
+    output.status = MapStatus(result.status);
+    output.affected_rows = result.affected_rows;
+    output.message = result.message;
+    return output;
+}
+
+MessageRepositoryMutationResult
+MessageRepositoryAdapter::ConfirmGroupMessageDelivery(
+    std::uint64_t message_id,
+    std::uint64_t recipient_user_id
+) {
+    const auto result = repository_->ConfirmGroupMessageDelivery(message_id, recipient_user_id);
+    MessageRepositoryMutationResult output;
+    output.status = MapStatus(result.status);
+    output.affected_rows = result.affected_rows;
+    output.message = result.message;
     return output;
 }
 

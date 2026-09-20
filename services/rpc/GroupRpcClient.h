@@ -36,6 +36,7 @@ public:
     [[nodiscard]] RpcResult<ListGroupMembersRpcResponse> ListGroupMembers(const ListGroupMembersRpcRequest&, const RpcCallOptions&) const;
     [[nodiscard]] RpcResult<ListMyGroupsRpcResponse> ListMyGroups(const ListMyGroupsRpcRequest&, const RpcCallOptions&) const;
     [[nodiscard]] RpcResult<CheckGroupSendPermissionRpcResponse> CheckGroupSendPermission(const CheckGroupSendPermissionRpcRequest&, const RpcCallOptions&) const;
+    [[nodiscard]] RpcResult<PrepareGroupMessageSendRpcResponse> PrepareGroupMessageSend(const PrepareGroupMessageSendRpcRequest&, const RpcCallOptions&) const;
 
     [[nodiscard]] std::size_t CachedTargetCountForTest() const;
     [[nodiscard]] std::uint64_t StubCreationCountForTest() const;

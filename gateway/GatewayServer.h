@@ -35,9 +35,23 @@ class SocialRpcClient;
 class UserRpcClient;
 class MessageRpcClient;
 class GroupRpcClient;
+struct GroupDeliveryWorkRpcRecord;
 }
 
 struct GatewayForwardChatResponse;
+
+enum class GroupFanoutDispatchStatus {
+    kSubmitted = 0,
+    kOffline,
+    kAlreadyDelivered,
+    kRetryableFailure
+};
+
+struct GroupFanoutDispatchResult {
+    GroupFanoutDispatchStatus status{GroupFanoutDispatchStatus::kRetryableFailure};
+    std::string gateway_id;
+    std::string error_code;
+};
 /*
     struct GatewayServerOptions {
         std::string name{"tinyimx-gateway"};
@@ -164,6 +178,12 @@ public:
     bool SendPacket(const TcpConnectionPtr& connection,
                     const Packet& packet);
 
+    // M17-B2 durable fanout entry. Safe to call from the coordinator worker;
+    // TcpConnection/peer manager marshal network work onto their EventLoops.
+    GroupFanoutDispatchResult DispatchGroupFanoutDelivery(
+        const rpc::GroupDeliveryWorkRpcRecord& work
+    );
+
     const std::string& Name() const;
     const InetAddress& ListenAddress() const;
     std::size_t ConnectionCount() const;
@@ -263,6 +283,20 @@ private:
         const BusinessRequestContext& business_request
     );
 
+    void HandleGroupMessageDeliveryAck(
+        const TcpConnectionPtr& connection, const Packet& packet);
+    void ExecuteGroupMessageDeliveryAck(
+        const TcpConnectionPtr& connection,
+        const Packet& packet,
+        const BusinessRequestContext& business_request);
+
+    void HandleGatewayForwardGroupMessageRequest(
+        const TcpConnectionPtr& connection, const Packet& packet);
+    void ExecuteGatewayForwardGroupMessageRequest(
+        const TcpConnectionPtr& connection,
+        const Packet& packet,
+        const BusinessRequestContext& business_request);
+
     void HandleGatewayForwardChatRequest(const TcpConnectionPtr& connection,
                                          const Packet& packet);
     void ExecuteGatewayForwardChatRequest(
@@ -312,6 +346,11 @@ private:
     );
 
     void HandleGroupControlRequest(
+        const TcpConnectionPtr& connection,
+        const Packet& packet
+    );
+
+    void HandleGroupMessageSend(
         const TcpConnectionPtr& connection,
         const Packet& packet
     );
@@ -450,6 +489,38 @@ private:
             std::string* error_message = nullptr
         );
 
+    bool BuildGroupMessageDeliveryPacket(
+        const rpc::GroupDeliveryWorkRpcRecord& work,
+        Packet* packet,
+        std::string* error_message = nullptr
+    );
+
+    ReceiverDeliverySubmitStatus SubmitGroupMessageDelivery(
+        const TcpConnectionPtr& connection,
+        const rpc::GroupDeliveryWorkRpcRecord& work,
+        Packet* submitted_packet = nullptr,
+        std::string* error_message = nullptr
+    );
+
+    ReceiverDeliverySubmitStatus SubmitGroupMessageDeliveryRetry(
+        const TcpConnectionPtr& connection,
+        const rpc::GroupDeliveryWorkRpcRecord& work,
+        std::uint32_t timed_out_delivery_seq,
+        Packet* submitted_packet = nullptr,
+        std::string* error_message = nullptr
+    );
+
+    bool ScheduleGroupMessageDeliveryAckTimeout(
+        const TcpConnectionPtr& connection,
+        const rpc::GroupDeliveryWorkRpcRecord& work,
+        std::uint32_t delivery_seq
+    );
+
+    void HandleGroupMessageDeliveryAckTimeout(
+        rpc::GroupDeliveryWorkRpcRecord work,
+        std::uint32_t timed_out_delivery_seq
+    );
+
 
     /*
     * 为一次已经真实提交的Receiver Delivery
@@ -529,6 +600,20 @@ private:
         UserId user_id,
         const TcpConnectionPtr& connection,
         const BusinessRequestContext& business_request
+    );
+
+    void PushGroupOfflineMessages(
+        UserId user_id,
+        const TcpConnectionPtr& connection
+    );
+    void ExecuteGroupOfflineReplay(
+        UserId user_id,
+        const TcpConnectionPtr& connection,
+        const BusinessRequestContext& business_request
+    );
+    void ScheduleGroupOfflineReplayProbe(
+        UserId user_id,
+        const TcpConnectionPtr& connection
     );
 
     bool HasBusinessExecutor() const;

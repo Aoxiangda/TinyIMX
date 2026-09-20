@@ -188,6 +188,14 @@ int main() {
   using tinyimx::message::v1::ListHistoryRequest;
   using tinyimx::message::v1::ListHistoryResponse;
   using tinyimx::message::v1::MessageRecord;
+  using tinyimx::message::v1::GroupMessageRecord;
+  using tinyimx::message::v1::PersistGroupMessageRequest;
+  using tinyimx::message::v1::PersistGroupMessageResponse;
+  using tinyimx::message::v1::GetGroupMessageDeliveryRequest;
+  using tinyimx::message::v1::ClaimGroupMessageDeliveriesRequest;
+  using tinyimx::message::v1::ClaimGroupMessageDeliveriesForRecipientRequest;
+  using tinyimx::message::v1::CompleteGroupMessageDeliveryAttemptRequest;
+  using tinyimx::message::v1::ConfirmGroupMessageDeliveryRequest;
   using tinyimx::message::v1::MessageService;
 
   static_assert(std::is_class_v<MessageService>);
@@ -270,6 +278,91 @@ int main() {
              message_conversation_response.conversations(0).peer_user_id() == 10002,
          "ListConversationsResponse typed fields work");
 
+  PersistGroupMessageRequest group_message_request;
+  *group_message_request.mutable_meta() = meta;
+  group_message_request.set_from_user_id(10001);
+  group_message_request.set_group_id(47);
+  group_message_request.set_client_message_id("m17b1-contract");
+  group_message_request.set_message_type(1);
+  group_message_request.set_content("hello-group");
+
+  const auto* persist_group_descriptor = PersistGroupMessageRequest::descriptor();
+  Expect(FindField(persist_group_descriptor, "meta") != nullptr &&
+             FindField(persist_group_descriptor, "meta")->number() == 1,
+         "PersistGroupMessageRequest.meta field number frozen at 1");
+  Expect(FindField(persist_group_descriptor, "from_user_id") != nullptr &&
+             FindField(persist_group_descriptor, "from_user_id")->number() == 2,
+         "PersistGroupMessageRequest.from_user_id field number frozen at 2");
+  Expect(FindField(persist_group_descriptor, "group_id") != nullptr &&
+             FindField(persist_group_descriptor, "group_id")->number() == 3,
+         "PersistGroupMessageRequest.group_id field number frozen at 3");
+  Expect(FindField(persist_group_descriptor, "client_message_id") != nullptr &&
+             FindField(persist_group_descriptor, "client_message_id")->number() == 4,
+         "PersistGroupMessageRequest.client_message_id field number frozen at 4");
+  Expect(FindField(persist_group_descriptor, "message_type") != nullptr &&
+             FindField(persist_group_descriptor, "message_type")->number() == 5,
+         "PersistGroupMessageRequest.message_type field number frozen at 5");
+  Expect(FindField(persist_group_descriptor, "content") != nullptr &&
+             FindField(persist_group_descriptor, "content")->number() == 6,
+         "PersistGroupMessageRequest.content field number frozen at 6");
+
+  PersistGroupMessageResponse group_message_response;
+  group_message_response.set_result(
+      tinyimx::message::v1::PERSIST_GROUP_MESSAGE_RESULT_CREATED);
+  group_message_response.set_message_id(9001);
+  GroupMessageRecord* group_message_record = group_message_response.mutable_record();
+  group_message_record->set_message_id(9001);
+  group_message_record->set_client_message_id("m17b1-contract");
+  group_message_record->set_group_id(47);
+  group_message_record->set_from_user_id(10001);
+  group_message_record->set_message_type(1);
+  group_message_record->set_content("hello-group");
+  group_message_record->set_membership_epoch(1);
+  group_message_record->set_member_version(4);
+  group_message_record->set_authorized_role(1);
+  group_message_record->set_created_at("2026-09-18 10:00:00");
+  Expect(group_message_response.record().group_id() == 47 &&
+             group_message_response.record().member_version() == 4,
+         "PersistGroupMessageResponse typed durable authorization snapshot works");
+
+  const auto* group_delivery_get = GetGroupMessageDeliveryRequest::descriptor();
+  Expect(FindField(group_delivery_get, "message_id") != nullptr &&
+             FindField(group_delivery_get, "message_id")->number() == 2 &&
+             FindField(group_delivery_get, "recipient_user_id") != nullptr &&
+             FindField(group_delivery_get, "recipient_user_id")->number() == 3,
+         "M17-B2 GetGroupMessageDelivery durable identity frozen");
+  const auto* group_delivery_claim = ClaimGroupMessageDeliveriesRequest::descriptor();
+  Expect(FindField(group_delivery_claim, "lease_owner") != nullptr &&
+             FindField(group_delivery_claim, "lease_owner")->number() == 2 &&
+             FindField(group_delivery_claim, "message_id") != nullptr &&
+             FindField(group_delivery_claim, "message_id")->number() == 6,
+         "M17-B2 claim lease contract frozen");
+  const auto* group_replay_claim =
+      ClaimGroupMessageDeliveriesForRecipientRequest::descriptor();
+  Expect(FindField(group_replay_claim, "meta") != nullptr &&
+             FindField(group_replay_claim, "meta")->number() == 1 &&
+             FindField(group_replay_claim, "recipient_user_id") != nullptr &&
+             FindField(group_replay_claim, "recipient_user_id")->number() == 2 &&
+             FindField(group_replay_claim, "lease_owner") != nullptr &&
+             FindField(group_replay_claim, "lease_owner")->number() == 3 &&
+             FindField(group_replay_claim, "lease_token") != nullptr &&
+             FindField(group_replay_claim, "lease_token")->number() == 4 &&
+             FindField(group_replay_claim, "limit") != nullptr &&
+             FindField(group_replay_claim, "limit")->number() == 5 &&
+             FindField(group_replay_claim, "lease_ms") != nullptr &&
+             FindField(group_replay_claim, "lease_ms")->number() == 6,
+         "M17-B3 recipient replay claim contract frozen");
+  const auto* group_delivery_complete = CompleteGroupMessageDeliveryAttemptRequest::descriptor();
+  Expect(FindField(group_delivery_complete, "lease_token") != nullptr &&
+             FindField(group_delivery_complete, "lease_token")->number() == 4 &&
+             FindField(group_delivery_complete, "outcome") != nullptr &&
+             FindField(group_delivery_complete, "outcome")->number() == 5,
+         "M17-B2 attempt completion contract frozen");
+  const auto* group_delivery_confirm = ConfirmGroupMessageDeliveryRequest::descriptor();
+  Expect(FindField(group_delivery_confirm, "recipient_user_id") != nullptr &&
+             FindField(group_delivery_confirm, "recipient_user_id")->number() == 3,
+         "M17-B2 receiver confirmation authority field frozen");
+
   using tinyimx::message::v1::GetPrivateMessageRequest;
   using tinyimx::message::v1::CountPendingRequest;
   using tinyimx::message::v1::ListPendingAfterRequest;
@@ -345,11 +438,16 @@ int main() {
   const auto* message_service =
       message_file == nullptr ? nullptr :
       message_file->FindServiceByName("MessageService");
-  Expect(message_service != nullptr && message_service->method_count() == 9,
-         "MessageService method count frozen at 9");
+  Expect(message_service != nullptr && message_service->method_count() == 15,
+         "MessageService method count frozen at 15 after M17-B3");
 
   const char* const expected_message_methods[] = {
       "PersistPrivateMessage",
+      "PersistGroupMessage",
+      "GetGroupMessageDelivery",
+      "ClaimGroupMessageDeliveries",
+      "CompleteGroupMessageDeliveryAttempt",
+      "ConfirmGroupMessageDelivery",
       "GetPrivateMessage",
       "ListHistory",
       "ListConversations",
@@ -358,9 +456,10 @@ int main() {
       "ConfirmReceiver",
       "ConfirmReceiverBatch",
       "MarkDialogRead",
+      "ClaimGroupMessageDeliveriesForRecipient",
   };
   if (message_service != nullptr) {
-    for (int i = 0; i < message_service->method_count() && i < 9; ++i) {
+    for (int i = 0; i < message_service->method_count() && i < 15; ++i) {
       const std::string label =
           std::string("MessageService method frozen: ") +
           expected_message_methods[i];
@@ -429,8 +528,8 @@ int main() {
   const auto* group_service =
       google::protobuf::DescriptorPool::generated_pool()->FindServiceByName(
           "tinyimx.group.v1.GroupService");
-  Expect(group_service != nullptr && group_service->method_count() == 14,
-         "GroupService 14-method M17-A contract frozen");
+  Expect(group_service != nullptr && group_service->method_count() == 15,
+         "GroupService 15-method M17-B2 contract frozen");
   static const char* kExpectedGroupMethods[] = {
       "CreateGroup",
       "GetGroup",
@@ -446,9 +545,10 @@ int main() {
       "ListGroupMembers",
       "ListMyGroups",
       "CheckGroupSendPermission",
+      "PrepareGroupMessageSend",
   };
   if (group_service != nullptr) {
-    for (int i = 0; i < group_service->method_count() && i < 14; ++i) {
+    for (int i = 0; i < group_service->method_count() && i < 15; ++i) {
       const std::string label =
           std::string("GroupService method frozen: ") + kExpectedGroupMethods[i];
       Expect(group_service->method(i)->name() == kExpectedGroupMethods[i],
@@ -466,6 +566,11 @@ int main() {
   Expect(FindField(check_send_descriptor, "member_version") != nullptr &&
              FindField(check_send_descriptor, "member_version")->number() == 4,
          "CheckGroupSendPermissionResponse.member_version frozen at 4");
+  const auto* prepare_send_descriptor =
+      tinyimx::group::v1::PrepareGroupMessageSendResponse::descriptor();
+  Expect(FindField(prepare_send_descriptor, "recipient_user_ids") != nullptr &&
+             FindField(prepare_send_descriptor, "recipient_user_ids")->number() == 5,
+         "PrepareGroupMessageSendResponse.recipient_user_ids frozen at 5");
   std::cout << "total_failed=" << g_failed << '\n';
 
   return g_failed == 0 ? 0 : 1;

@@ -374,4 +374,22 @@ CheckGroupSendPermissionApplicationResult GroupApplicationService::CheckGroupSen
     return repository_->CheckGroupSendPermission(actor_user_id, group_id);
 }
 
+PrepareGroupMessageSendApplicationResult GroupApplicationService::PrepareGroupMessageSend(
+    std::uint64_t actor_user_id,
+    std::uint64_t group_id
+) {
+    PrepareGroupMessageSendApplicationResult result;
+    if (actor_user_id == 0 || group_id == 0) {
+        result.status = GroupApplicationStatus::kInvalidArgument;
+        result.message = "invalid PrepareGroupMessageSend application request";
+        return result;
+    }
+    if (repository_ == nullptr) {
+        result.status = GroupApplicationStatus::kStorageError;
+        result.message = "group repository port is unavailable";
+        return result;
+    }
+    return repository_->PrepareGroupMessageSend(actor_user_id, group_id);
+}
+
 }  // namespace tinyimx::group

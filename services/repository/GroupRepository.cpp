@@ -5,6 +5,7 @@
 #include <exception>
 #include <sstream>
 #include <string>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -852,6 +853,54 @@ GroupMemberListStorageResult GroupRepository::ListActiveMembersOnConnection(
     }
     result.status = GroupRepositoryStatus::kSucceeded;
     result.message = "active group members listed";
+    return result;
+}
+
+GroupUserIdListStorageResult GroupRepository::ListActiveRecipientUserIdsOnConnection(
+    MySqlConnection* connection,
+    std::uint64_t group_id,
+    std::uint64_t excluded_user_id,
+    std::uint32_t max_recipients
+) {
+    GroupUserIdListStorageResult result;
+    if (connection == nullptr || group_id == 0 || excluded_user_id == 0 ||
+        max_recipients == 0 || max_recipients > 5000) {
+        result.status = GroupRepositoryStatus::kInvalidArgument;
+        result.message = "invalid ListActiveRecipientUserIdsOnConnection arguments";
+        return result;
+    }
+    MySqlQueryResult query;
+    const std::string sql =
+        "SELECT user_id FROM im_group_members WHERE group_id = " +
+        std::to_string(group_id) + " AND status = 1 AND user_id <> " +
+        std::to_string(excluded_user_id) + " ORDER BY user_id ASC LIMIT " +
+        std::to_string(static_cast<std::uint64_t>(max_recipients) + 1U);
+    if (!connection->Query(sql, &query)) {
+        result.status = GroupRepositoryStatus::kStorageError;
+        result.message = "ListActiveRecipientUserIdsOnConnection query failed: " + connection->LastError();
+        return result;
+    }
+    if (query.rows.size() > max_recipients) {
+        result.status = GroupRepositoryStatus::kInvalidRecord;
+        result.message = "active recipient count exceeds group max_members snapshot";
+        return result;
+    }
+    result.user_ids.reserve(query.rows.size());
+    try {
+        for (const auto& row : query.rows) {
+            if (row.size() != 1) throw std::runtime_error("unexpected recipient row width");
+            const auto user_id = static_cast<std::uint64_t>(std::stoull(row[0]));
+            if (user_id == 0 || user_id == excluded_user_id) throw std::runtime_error("invalid recipient user id");
+            result.user_ids.push_back(user_id);
+        }
+    } catch (const std::exception& error) {
+        result.status = GroupRepositoryStatus::kInvalidRecord;
+        result.user_ids.clear();
+        result.message = std::string("invalid active recipient row: ") + error.what();
+        return result;
+    }
+    result.status = GroupRepositoryStatus::kSucceeded;
+    result.message = "active recipient user ids listed";
     return result;
 }
 

@@ -2,6 +2,7 @@
 
 #include "common/net/TimerId.h"
 #include "common/protocol/GatewayPeerProtocol.h"
+#include "common/protocol/GatewayGroupPeerProtocol.h"
 #include "common/protocol/ProtocolCodec.h"
 
 #include <atomic>
@@ -57,6 +58,13 @@ struct GatewayPeerTransportResult {
     }
 };
 
+struct GatewayGroupPeerTransportResult {
+    GatewayPeerTransportStatus status{GatewayPeerTransportStatus::kProtocolError};
+    GatewayForwardGroupMessageResponse response;
+    std::string error_message;
+    bool Succeeded() const noexcept { return status == GatewayPeerTransportStatus::kOk; }
+};
+
 
 struct GatewayPeerTransportOptions {
     std::string local_gateway_id;
@@ -94,6 +102,9 @@ public:
         std::function<void(
             GatewayPeerTransportResult
         )>;
+
+    using ForwardGroupMessageCallback =
+        std::function<void(GatewayGroupPeerTransportResult)>;
 
     using ConnectionStateCallback =
         std::function<void(bool connected)>;
@@ -139,6 +150,12 @@ public:
         ForwardChatCallback callback
     );
 
+    bool ForwardGroupMessage(
+        std::uint64_t message_id,
+        std::uint64_t recipient_user_id,
+        ForwardGroupMessageCallback callback
+    );
+
 
     bool IsRunning() const noexcept;
 
@@ -162,6 +179,17 @@ private:
         ForwardChatCallback callback;
 
         TimerId timeout_timer;
+    };
+
+    struct PendingGroupRequest {
+        ForwardGroupMessageCallback callback;
+        TimerId timeout_timer;
+    };
+
+    struct QueuedForwardGroupMessage {
+        std::uint64_t message_id{0};
+        std::uint64_t recipient_user_id{0};
+        ForwardGroupMessageCallback callback;
     };
 
     struct QueuedForwardChat {
@@ -193,6 +221,16 @@ private:
     );
 
 
+    void ForwardGroupMessageInLoop(
+        std::uint64_t message_id,
+        std::uint64_t recipient_user_id,
+        ForwardGroupMessageCallback callback
+    );
+
+    void HandleForwardGroupMessageResponse(
+        const Packet& packet
+    );
+
     void ForwardChatInLoop(
         std::uint64_t message_id,
         std::uint64_t from_user_id,
@@ -211,8 +249,17 @@ private:
         std::uint32_t sequence
     );
 
+    void HandleGroupRequestTimeout(
+        std::uint32_t sequence
+    );
+
 
     void FailAllPending(
+        GatewayPeerTransportStatus status,
+        const std::string& error_message
+    );
+
+    void FailAllPendingGroup(
         GatewayPeerTransportStatus status,
         const std::string& error_message
     );
@@ -227,8 +274,14 @@ private:
 
 
     void FlushQueuedForwards();
+    void FlushQueuedGroupForwards();
 
     void FailQueuedForwards(
+        GatewayPeerTransportStatus status,
+        const std::string& error_message
+    );
+
+    void FailQueuedGroupForwards(
         GatewayPeerTransportStatus status,
         const std::string& error_message
     );
@@ -260,11 +313,15 @@ private:
         PendingRequest
     > pending_requests_;
 
+    std::unordered_map<std::uint32_t, PendingGroupRequest> pending_group_requests_;
+
     ConnectionStateCallback
         connection_state_callback_;
 
     std::deque<QueuedForwardChat>
         queued_forwards_;
+
+    std::deque<QueuedForwardGroupMessage> queued_group_forwards_;
 };
 
 

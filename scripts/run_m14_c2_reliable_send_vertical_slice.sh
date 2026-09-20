@@ -266,10 +266,55 @@ else
   grep -q 'ListPendingMessagesAfter(' "$ROOT_DIR/gateway/GatewayServer.cpp" || \
     fail "Pending Replay path missing: neither historical C2 local path nor C3+ RPC path found"
 fi
-if grep -E -n 'packet_seq|delivery_seq|session_epoch|connection_id|gateway_id' \
-  "$ROOT_DIR/proto/tinyimx/message/v1/message_service.proto"; then
-  fail "MessageService contract leaked Gateway runtime identity"
-fi
+python3 - "$ROOT_DIR/proto/tinyimx/message/v1/message_service.proto" <<'PY_C2_CONTRACT'
+import re
+import sys
+from pathlib import Path
+
+proto_path = Path(sys.argv[1])
+text = proto_path.read_text(encoding="utf-8")
+
+# M14-C2 owns the private durable-send contract.
+# Later stages may legitimately add Gateway execution metadata to
+# independent group-delivery RPCs; that must not invalidate this gate.
+targets = (
+    "PersistPrivateMessageRequest",
+    "PersistPrivateMessageResponse",
+)
+
+for name in targets:
+    match = re.search(
+        rf"message\s+{re.escape(name)}\s*\{{(.*?)^\}}",
+        text,
+        flags=re.S | re.M,
+    )
+
+    if match is None:
+        raise SystemExit(
+            f"[FAIL] M14-C2 retained contract missing protobuf message: {name}"
+        )
+
+    body = match.group(1)
+
+    forbidden = re.search(
+        r"\b("
+        r"packet_seq|delivery_seq|session_epoch|connection_id|"
+        r"gateway_id|last_gateway_id"
+        r")\b",
+        body,
+    )
+
+    if forbidden:
+        raise SystemExit(
+            "[FAIL] M14-C2 private persistence leaked Gateway runtime "
+            f"identity: {name}.{forbidden.group(1)}"
+        )
+
+print(
+    "[PASS] M14-C2 private persistence remains "
+    "Gateway-runtime-identity independent"
+)
+PY_C2_CONTRACT
 
 log "configuring/building C2 targets"
 (

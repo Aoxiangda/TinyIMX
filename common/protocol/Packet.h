@@ -93,9 +93,19 @@ enum class MessageType : std::uint16_t {
     kListMyGroupsRequest = 2047,
     kListMyGroupsResponse = 2048,
 
+    // M17-B1 reliable Group message durable-write vertical slice.
+    kGroupMessageSendRequest = 2049,
+    kGroupMessageSendResponse = 2050,
+
+    // M17-B2 reliable receiver delivery protocol.
+    kGroupMessageDelivery = 2051,
+    kGroupMessageDeliveryAck = 2052,
+
     // Gateway-to-Gateway internal protocol.
     kGatewayForwardChatRequest = 3001,
     kGatewayForwardChatResponse = 3002,
+    kGatewayForwardGroupMessageRequest = 3003,
+    kGatewayForwardGroupMessageResponse = 3004,
 
     kHeartbeat = 9001,
     kError = 9999

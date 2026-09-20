@@ -452,6 +452,11 @@ bool Config::ApplyJsonConfig(const std::string& json_content) {
             ReadIfExists(section, "owner", &unread_projection_.owner);
             ReadIfExists(section, "shadow_mode", &unread_projection_.shadow_mode);
             ReadIfExists(section, "consumer_group", &unread_projection_.consumer_group);
+            ReadIfExists(
+                section,
+                "consumer_request_timeout_ms",
+                &unread_projection_.consumer_request_timeout_ms
+            );
             ReadIfExists(section, "batch_size", &unread_projection_.batch_size);
             ReadIfExists(section, "invisible_duration_ms", &unread_projection_.invisible_duration_ms);
             ReadIfExists(section, "await_duration_ms", &unread_projection_.await_duration_ms);
@@ -885,7 +890,8 @@ bool Config::Validate() {
             );
         }
 
-        if (unread_projection_.await_duration_ms <= 0 ||
+        if (unread_projection_.consumer_request_timeout_ms <= 0 ||
+            unread_projection_.await_duration_ms <= 0 ||
             unread_projection_.receive_error_backoff_ms <= 0) {
             return SetError(
                 "unread_projection await/backoff timing values "

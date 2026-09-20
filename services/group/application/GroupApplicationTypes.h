@@ -237,6 +237,20 @@ struct GroupSendPermissionResult {
     }
 };
 
+struct GroupSendPreparationResult {
+    GroupApplicationStatus status{GroupApplicationStatus::kStorageError};
+    bool allowed{false};
+    GroupRole role{GroupRole::kMember};
+    std::uint64_t membership_epoch{0};
+    std::uint64_t member_version{0};
+    std::vector<std::uint64_t> recipient_user_ids;
+    std::string message;
+
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return status == GroupApplicationStatus::kSucceeded;
+    }
+};
+
 using CreateGroupApplicationResult = GroupRepositoryMutationResult;
 using UpdateGroupApplicationResult = GroupRepositoryMutationResult;
 using DisbandGroupApplicationResult = GroupRepositoryMutationResult;
@@ -251,5 +265,6 @@ using GetGroupApplicationResult = GroupRepositoryGetResult;
 using ListGroupMembersApplicationResult = GroupMemberListResult;
 using ListMyGroupsApplicationResult = GroupListResult;
 using CheckGroupSendPermissionApplicationResult = GroupSendPermissionResult;
+using PrepareGroupMessageSendApplicationResult = GroupSendPreparationResult;
 
 }  // namespace tinyimx::group

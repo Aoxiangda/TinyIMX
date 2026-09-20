@@ -65,6 +65,201 @@ MessageApplicationService::PersistPrivateMessage(
     return output;
 }
 
+
+
+MessageRepositoryGroupGetResult
+MessageApplicationService::FindGroupMessageByClientMessageId(
+    std::uint64_t from_user_id,
+    const std::string& client_message_id
+) {
+    MessageRepositoryGroupGetResult output;
+    if (from_user_id == 0 || client_message_id.empty() || client_message_id.size() > 64) {
+        output.status = MessageApplicationStatus::kInvalidArgument;
+        output.message = "invalid group message idempotency lookup";
+        return output;
+    }
+    if (repository_ == nullptr) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "message repository port is unavailable";
+        return output;
+    }
+    return repository_->FindGroupMessageByClientMessageId(
+        from_user_id, client_message_id);
+}
+
+PersistGroupMessageApplicationResult
+MessageApplicationService::PersistAuthorizedGroupMessage(
+    std::uint64_t from_user_id,
+    std::uint64_t group_id,
+    const std::string& client_message_id,
+    std::uint32_t message_type,
+    const std::string& content,
+    std::uint64_t membership_epoch,
+    std::uint64_t member_version,
+    std::uint32_t authorized_role
+) {
+    return PersistAuthorizedGroupMessage(
+        from_user_id, group_id, client_message_id, message_type, content,
+        membership_epoch, member_version, authorized_role, {});
+}
+
+PersistGroupMessageApplicationResult
+MessageApplicationService::PersistAuthorizedGroupMessage(
+    std::uint64_t from_user_id,
+    std::uint64_t group_id,
+    const std::string& client_message_id,
+    std::uint32_t message_type,
+    const std::string& content,
+    std::uint64_t membership_epoch,
+    std::uint64_t member_version,
+    std::uint32_t authorized_role,
+    const std::vector<std::uint64_t>& recipient_user_ids
+) {
+    PersistGroupMessageApplicationResult output;
+    if (from_user_id == 0 || group_id == 0 || client_message_id.empty() ||
+        client_message_id.size() > 64 || message_type < 1 || message_type > 3 ||
+        content.empty() || membership_epoch == 0 || member_version == 0 ||
+        authorized_role < 1 || authorized_role > 3) {
+        output.status = MessageApplicationStatus::kInvalidArgument;
+        output.message = "invalid authorized group message application request";
+        return output;
+    }
+    if (repository_ == nullptr) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "message repository port is unavailable";
+        return output;
+    }
+    auto result = repository_->PersistAuthorizedGroupMessage(
+        from_user_id, group_id, client_message_id, message_type, content,
+        membership_epoch, member_version, authorized_role, recipient_user_ids);
+    output.status = result.status;
+    output.outcome = result.outcome;
+    output.message_id = result.message_id;
+    output.record = std::move(result.record);
+    output.message = std::move(result.message);
+    return output;
+}
+
+MessageRepositoryGroupDeliveryGetResult
+MessageApplicationService::GetGroupMessageDelivery(
+    std::uint64_t message_id,
+    std::uint64_t recipient_user_id
+) {
+    MessageRepositoryGroupDeliveryGetResult output;
+    if (message_id == 0 || recipient_user_id == 0) {
+        output.status = MessageApplicationStatus::kInvalidArgument;
+        output.message = "invalid GetGroupMessageDelivery application request";
+        return output;
+    }
+    if (repository_ == nullptr) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "message repository port is unavailable";
+        return output;
+    }
+    return repository_->GetGroupMessageDelivery(message_id, recipient_user_id);
+}
+
+MessageRepositoryGroupDeliveryListResult
+MessageApplicationService::ClaimGroupMessageDeliveries(
+    const std::string& lease_owner,
+    const std::string& lease_token,
+    std::size_t limit,
+    std::uint32_t lease_ms,
+    std::uint64_t message_id
+) {
+    MessageRepositoryGroupDeliveryListResult output;
+    if (lease_owner.empty() || lease_token.empty() || limit == 0 || limit > 256 ||
+        lease_ms < 100 || lease_ms > 60000) {
+        output.status = MessageApplicationStatus::kInvalidArgument;
+        output.message = "invalid ClaimGroupMessageDeliveries application request";
+        return output;
+    }
+    if (repository_ == nullptr) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "message repository port is unavailable";
+        return output;
+    }
+    return repository_->ClaimGroupMessageDeliveries(lease_owner, lease_token, limit, lease_ms, message_id);
+}
+
+MessageRepositoryGroupDeliveryListResult
+MessageApplicationService::ClaimGroupMessageDeliveriesForRecipient(
+    std::uint64_t recipient_user_id,
+    const std::string& lease_owner,
+    const std::string& lease_token,
+    std::size_t limit,
+    std::uint32_t lease_ms
+) {
+    MessageRepositoryGroupDeliveryListResult output;
+    if (recipient_user_id == 0 || lease_owner.empty() || lease_token.empty() ||
+        lease_owner.size() > 128 || lease_token.size() > 128 ||
+        limit == 0 || limit > 256 || lease_ms < 100 || lease_ms > 60000) {
+        output.status = MessageApplicationStatus::kInvalidArgument;
+        output.message =
+            "invalid ClaimGroupMessageDeliveriesForRecipient application request";
+        return output;
+    }
+    if (repository_ == nullptr) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "message repository port is unavailable";
+        return output;
+    }
+    return repository_->ClaimGroupMessageDeliveriesForRecipient(
+        recipient_user_id, lease_owner, lease_token, limit, lease_ms);
+}
+
+MessageMutationApplicationResult
+MessageApplicationService::CompleteGroupMessageDeliveryAttempt(
+    std::uint64_t message_id,
+    std::uint64_t recipient_user_id,
+    const std::string& lease_token,
+    GroupDeliveryAttemptOutcome outcome,
+    const std::string& gateway_id,
+    std::uint32_t retry_after_ms,
+    const std::string& error_code
+) {
+    MessageMutationApplicationResult output;
+    if (message_id == 0 || recipient_user_id == 0 || lease_token.empty()) {
+        output.status = MessageApplicationStatus::kInvalidArgument;
+        output.message = "invalid CompleteGroupMessageDeliveryAttempt application request";
+        return output;
+    }
+    if (repository_ == nullptr) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "message repository port is unavailable";
+        return output;
+    }
+    auto result = repository_->CompleteGroupMessageDeliveryAttempt(
+        message_id, recipient_user_id, lease_token, outcome, gateway_id, retry_after_ms, error_code);
+    output.status = result.status;
+    output.affected_rows = result.affected_rows;
+    output.message = std::move(result.message);
+    return output;
+}
+
+MessageMutationApplicationResult
+MessageApplicationService::ConfirmGroupMessageDelivery(
+    std::uint64_t message_id,
+    std::uint64_t recipient_user_id
+) {
+    MessageMutationApplicationResult output;
+    if (message_id == 0 || recipient_user_id == 0) {
+        output.status = MessageApplicationStatus::kInvalidArgument;
+        output.message = "invalid ConfirmGroupMessageDelivery application request";
+        return output;
+    }
+    if (repository_ == nullptr) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "message repository port is unavailable";
+        return output;
+    }
+    auto result = repository_->ConfirmGroupMessageDelivery(message_id, recipient_user_id);
+    output.status = result.status;
+    output.affected_rows = result.affected_rows;
+    output.message = std::move(result.message);
+    return output;
+}
+
 GetPrivateMessageApplicationResult
 MessageApplicationService::GetPrivateMessage(
     std::uint64_t message_id

@@ -117,7 +117,8 @@ int main(int argc, char** argv) {
     consumer_options.consumer_group = projection_config.consumer_group;
     consumer_options.filter_expression =
         tinyimx::projection::unread::kUnreadProjectionTagFilter;
-    consumer_options.request_timeout_ms = config.RocketMQ().request_timeout_ms;
+    consumer_options.request_timeout_ms =
+        projection_config.consumer_request_timeout_ms;
     consumer_options.await_duration_ms = projection_config.await_duration_ms;
     consumer_options.tls = config.RocketMQ().tls;
     consumer_options.access_key = config.RocketMQ().access_key;

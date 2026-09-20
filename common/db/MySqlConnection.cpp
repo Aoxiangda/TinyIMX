@@ -334,6 +334,49 @@ bool MySqlConnection::BeginTransaction() {
     return true;
 }
 
+bool MySqlConnection::BeginConsistentReadTransaction() {
+    if (!IsConnected()) {
+        SetError(
+            "mysql begin consistent read transaction failed: not connected"
+        );
+        return false;
+    }
+
+    if (transaction_active_) {
+        SetError(
+            "mysql begin consistent read transaction failed: "
+            "transaction already active"
+        );
+        return false;
+    }
+
+    // Do not depend on the server/session default isolation level. B2 group
+    // fanout correctness requires the permission reads and recipient list to
+    // come from one point-in-time snapshot even if an operator changes the
+    // global MySQL isolation setting. SET TRANSACTION affects only the next
+    // transaction on this connection.
+    if (::mysql_query(mysql_, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ") != 0) {
+        SetMysqlError(
+            "mysql set consistent read isolation failed"
+        );
+        return false;
+    }
+
+    if (::mysql_query(mysql_,
+                      "START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY") != 0) {
+        SetMysqlError(
+            "mysql start consistent read transaction failed"
+        );
+        return false;
+    }
+
+    transaction_active_ = true;
+    last_insert_id_ = 0;
+    affected_rows_ = 0;
+    last_error_.clear();
+    return true;
+}
+
 std::uint64_t MySqlConnection::LastInsertId() const {
     return last_insert_id_;
 }

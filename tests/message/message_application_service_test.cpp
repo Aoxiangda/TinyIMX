@@ -22,7 +22,6 @@ void Expect(bool condition, const char* label) {
 
 class FakeRepository final : public tinyimx::message::MessageRepositoryPort {
 public:
-    using namespace_placeholder = int;
 
     tinyimx::message::MessageRepositoryPersistResult PersistPrivateMessage(
         std::uint64_t from_user_id,
@@ -43,6 +42,76 @@ public:
         out.message = "persist fake";
         return out;
     }
+
+    tinyimx::message::MessageRepositoryGroupGetResult
+    FindGroupMessageByClientMessageId(
+        std::uint64_t,
+        const std::string&
+    ) override {
+        tinyimx::message::MessageRepositoryGroupGetResult out;
+        out.status = tinyimx::message::MessageApplicationStatus::kSucceeded;
+        out.found = false;
+        return out;
+    }
+
+    tinyimx::message::MessageRepositoryGroupPersistResult
+    PersistAuthorizedGroupMessage(
+        std::uint64_t from_user_id,
+        std::uint64_t group_id,
+        const std::string& client_message_id,
+        std::uint32_t message_type,
+        const std::string& content,
+        std::uint64_t membership_epoch,
+        std::uint64_t member_version,
+        std::uint32_t authorized_role,
+        const std::vector<std::uint64_t>& recipient_user_ids
+    ) override {
+        (void)recipient_user_ids;
+        tinyimx::message::MessageRepositoryGroupPersistResult out;
+        out.status = tinyimx::message::MessageApplicationStatus::kSucceeded;
+        out.outcome = tinyimx::message::PersistGroupMessageOutcome::kCreated;
+        out.message_id = 9901;
+        out.record.message_id = 9901;
+        out.record.client_message_id = client_message_id;
+        out.record.group_id = group_id;
+        out.record.from_user_id = from_user_id;
+        out.record.message_type = message_type;
+        out.record.content = content;
+        out.record.membership_epoch = membership_epoch;
+        out.record.member_version = member_version;
+        out.record.authorized_role = authorized_role;
+        out.record.created_at = "2026-09-18 10:00:00";
+        out.message = "fake group persist";
+        return out;
+    }
+
+    tinyimx::message::MessageRepositoryGroupDeliveryGetResult GetGroupMessageDelivery(
+        std::uint64_t, std::uint64_t) override {
+        tinyimx::message::MessageRepositoryGroupDeliveryGetResult out;
+        out.status = tinyimx::message::MessageApplicationStatus::kSucceeded;
+        out.found = false;
+        return out;
+    }
+    tinyimx::message::MessageRepositoryGroupDeliveryListResult ClaimGroupMessageDeliveries(
+        const std::string&, const std::string&, std::size_t, std::uint32_t, std::uint64_t) override {
+        tinyimx::message::MessageRepositoryGroupDeliveryListResult out;
+        out.status = tinyimx::message::MessageApplicationStatus::kSucceeded;
+        return out;
+    }
+    tinyimx::message::MessageRepositoryGroupDeliveryListResult ClaimGroupMessageDeliveriesForRecipient(
+        std::uint64_t, const std::string&, const std::string&, std::size_t, std::uint32_t) override {
+        tinyimx::message::MessageRepositoryGroupDeliveryListResult out;
+        out.status = tinyimx::message::MessageApplicationStatus::kSucceeded;
+        return out;
+    }
+    tinyimx::message::MessageRepositoryMutationResult CompleteGroupMessageDeliveryAttempt(
+        std::uint64_t, std::uint64_t, const std::string&,
+        tinyimx::message::GroupDeliveryAttemptOutcome, const std::string&,
+        std::uint32_t, const std::string&) override {
+        return SuccessMutation(1);
+    }
+    tinyimx::message::MessageRepositoryMutationResult ConfirmGroupMessageDelivery(
+        std::uint64_t, std::uint64_t) override { return SuccessMutation(1); }
 
     tinyimx::message::MessageRepositoryGetResult GetPrivateMessage(
         std::uint64_t message_id
@@ -208,6 +277,32 @@ void TestPersistCreatedReusedConflict() {
            "PersistCreatedReusedConflict");
 }
 
+void TestGroupMessageApplicationFoundation() {
+    FakeRepository repository;
+    tinyimx::message::MessageApplicationService app(&repository);
+
+    const auto invalid = app.PersistAuthorizedGroupMessage(
+        0, 47, "m17b1-invalid", 1, "hello", 1, 4, 1
+    );
+    const auto created = app.PersistAuthorizedGroupMessage(
+        10001, 47, "m17b1-app", 1, "hello", 2, 9, 3
+    );
+    const auto lookup = app.FindGroupMessageByClientMessageId(
+        10001, "m17b1-missing"
+    );
+
+    Expect(
+        invalid.status == tinyimx::message::MessageApplicationStatus::kInvalidArgument &&
+        created.Created() && created.message_id == 9901 &&
+        created.record.group_id == 47 &&
+        created.record.membership_epoch == 2 &&
+        created.record.member_version == 9 &&
+        created.record.authorized_role == 3 &&
+        lookup.Succeeded() && !lookup.Found(),
+        "GroupMessageApplicationFoundation"
+    );
+}
+
 void TestHistorySentinelPagination() {
     FakeRepository repository;
     for (std::uint64_t id = 1; id <= 3; ++id) {
@@ -319,6 +414,7 @@ int main() {
     std::cout << "========== TinyIMX M14-C3 Message Application Tests ==========\n";
     TestValidationFastFail();
     TestPersistCreatedReusedConflict();
+    TestGroupMessageApplicationFoundation();
     TestHistorySentinelPagination();
     TestConversationSentinelPagination();
     TestGetPrivateMessage();

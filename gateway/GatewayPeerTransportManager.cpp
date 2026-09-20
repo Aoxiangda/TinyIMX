@@ -255,6 +255,31 @@ ForwardChat(
 }
 
 
+
+bool GatewayPeerTransportManager::ForwardGroupMessage(
+    const GatewayInstanceRecord& remote_gateway,
+    std::uint64_t message_id,
+    std::uint64_t recipient_user_id,
+    ForwardGroupMessageCallback callback
+) {
+    if (!IsRunning() || message_id == 0 || recipient_user_id == 0 ||
+        remote_gateway.gateway_id.empty() || remote_gateway.listen_host.empty() ||
+        remote_gateway.listen_port == 0) {
+        return false;
+    }
+    const auto self = weak_from_this().lock();
+    if (!self || loop_ == nullptr) return false;
+    loop_->RunInLoop([
+        self, remote_gateway, message_id, recipient_user_id,
+        callback = std::move(callback)
+    ]() mutable {
+        self->ForwardGroupMessageInLoop(
+            std::move(remote_gateway), message_id, recipient_user_id,
+            std::move(callback));
+    });
+    return true;
+}
+
 bool
 GatewayPeerTransportManager::
 IsRunning() const noexcept {
@@ -307,6 +332,34 @@ StopInLoop() {
     );
 }
 
+
+
+void GatewayPeerTransportManager::ForwardGroupMessageInLoop(
+    GatewayInstanceRecord remote_gateway,
+    std::uint64_t message_id,
+    std::uint64_t recipient_user_id,
+    ForwardGroupMessageCallback callback
+) {
+    auto transport = GetOrCreateTransport(remote_gateway);
+    if (!transport) {
+        if (callback) {
+            GatewayGroupPeerTransportResult result;
+            result.status = GatewayPeerTransportStatus::kNotConnected;
+            result.error_message = "unable to create gateway peer transport";
+            callback(std::move(result));
+        }
+        return;
+    }
+    if (!transport->ForwardGroupMessage(
+            message_id, recipient_user_id, std::move(callback))) {
+        // The caller observes false only through callback when a callback was retained;
+        // durable delivery recovery will retry after lease completion.
+        LOG_WARN("gateway peer group submission rejected"
+                 << ", remote_gateway=" << remote_gateway.gateway_id
+                 << ", message_id=" << message_id
+                 << ", recipient=" << recipient_user_id);
+    }
+}
 
 void
 GatewayPeerTransportManager::

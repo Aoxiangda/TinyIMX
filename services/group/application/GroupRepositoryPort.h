@@ -60,6 +60,10 @@ public:
         std::uint64_t actor_user_id,
         std::uint64_t group_id
     ) = 0;
+    [[nodiscard]] virtual GroupSendPreparationResult PrepareGroupMessageSend(
+        std::uint64_t actor_user_id,
+        std::uint64_t group_id
+    ) = 0;
 };
 
 }  // namespace tinyimx::group

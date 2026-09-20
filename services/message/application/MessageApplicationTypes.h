@@ -29,6 +29,129 @@ enum class PersistPrivateMessageOutcome {
     kIdempotencyConflict,
 };
 
+
+
+enum class PersistGroupMessageOutcome {
+    kCreated = 0,
+    kReused,
+    kIdempotencyConflict,
+};
+
+struct GroupMessageView {
+    std::uint64_t message_id{0};
+    std::string client_message_id;
+    std::uint64_t group_id{0};
+    std::uint64_t from_user_id{0};
+    std::uint32_t message_type{0};
+    std::string content;
+    std::uint64_t membership_epoch{0};
+    std::uint64_t member_version{0};
+    std::uint32_t authorized_role{0};
+    std::string created_at;
+};
+
+enum class GroupDeliveryState : std::uint32_t {
+    kPending = 1,
+    kDeferredOffline = 2,
+    kDelivered = 3,
+};
+
+enum class GroupDeliveryAttemptOutcome : std::uint32_t {
+    kSubmitted = 1,
+    kOffline = 2,
+    kRetryableFailure = 3,
+};
+
+struct GroupDeliveryView {
+    std::uint64_t message_id{0};
+    std::uint64_t group_id{0};
+    std::uint64_t recipient_user_id{0};
+    GroupDeliveryState delivery_state{GroupDeliveryState::kPending};
+    std::uint32_t attempt_count{0};
+    std::string last_gateway_id;
+    std::string lease_owner;
+    std::string lease_token;
+    std::string lease_until;
+    std::string next_retry_at;
+    std::string last_error_code;
+    std::string created_at;
+    std::string updated_at;
+    std::string delivered_at;
+};
+
+struct GroupDeliveryWorkItem {
+    GroupMessageView message;
+    GroupDeliveryView delivery;
+};
+
+struct MessageRepositoryGroupDeliveryGetResult {
+    MessageApplicationStatus status{MessageApplicationStatus::kStorageError};
+    bool found{false};
+    GroupDeliveryWorkItem record;
+    std::string message;
+    [[nodiscard]] bool Succeeded() const noexcept { return status == MessageApplicationStatus::kSucceeded; }
+    [[nodiscard]] bool Found() const noexcept { return Succeeded() && found; }
+};
+
+struct MessageRepositoryGroupDeliveryListResult {
+    MessageApplicationStatus status{MessageApplicationStatus::kStorageError};
+    std::vector<GroupDeliveryWorkItem> records;
+    std::string message;
+    [[nodiscard]] bool Succeeded() const noexcept { return status == MessageApplicationStatus::kSucceeded; }
+};
+
+struct MessageRepositoryGroupGetResult {
+    MessageApplicationStatus status{MessageApplicationStatus::kStorageError};
+    bool found{false};
+    GroupMessageView record;
+    std::string message;
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return status == MessageApplicationStatus::kSucceeded;
+    }
+    [[nodiscard]] bool Found() const noexcept { return Succeeded() && found; }
+};
+
+struct MessageRepositoryGroupPersistResult {
+    MessageApplicationStatus status{MessageApplicationStatus::kStorageError};
+    PersistGroupMessageOutcome outcome{PersistGroupMessageOutcome::kCreated};
+    std::uint64_t message_id{0};
+    GroupMessageView record;
+    std::string message;
+    [[nodiscard]] bool Completed() const noexcept {
+        return status == MessageApplicationStatus::kSucceeded;
+    }
+    [[nodiscard]] bool Accepted() const noexcept {
+        return Completed() &&
+               (outcome == PersistGroupMessageOutcome::kCreated ||
+                outcome == PersistGroupMessageOutcome::kReused);
+    }
+};
+
+struct PersistGroupMessageApplicationResult {
+    MessageApplicationStatus status{MessageApplicationStatus::kStorageError};
+    PersistGroupMessageOutcome outcome{PersistGroupMessageOutcome::kCreated};
+    std::uint64_t message_id{0};
+    GroupMessageView record;
+    std::string message;
+    [[nodiscard]] bool Completed() const noexcept {
+        return status == MessageApplicationStatus::kSucceeded;
+    }
+    [[nodiscard]] bool Accepted() const noexcept {
+        return Completed() &&
+               (outcome == PersistGroupMessageOutcome::kCreated ||
+                outcome == PersistGroupMessageOutcome::kReused);
+    }
+    [[nodiscard]] bool Created() const noexcept {
+        return Accepted() && outcome == PersistGroupMessageOutcome::kCreated;
+    }
+    [[nodiscard]] bool Reused() const noexcept {
+        return Accepted() && outcome == PersistGroupMessageOutcome::kReused;
+    }
+    [[nodiscard]] bool Conflict() const noexcept {
+        return Completed() && outcome == PersistGroupMessageOutcome::kIdempotencyConflict;
+    }
+};
+
 struct MessageView {
     std::uint64_t message_id{0};
     std::string client_message_id;

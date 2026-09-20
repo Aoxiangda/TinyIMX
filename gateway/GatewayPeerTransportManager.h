@@ -105,6 +105,9 @@ public:
         GatewayPeerTransport::
             ForwardChatCallback;
 
+    using ForwardGroupMessageCallback =
+        GatewayPeerTransport::ForwardGroupMessageCallback;
+
     /*
      * Manager在重连之前重新解析Gateway。
      *
@@ -163,6 +166,15 @@ public:
         std::uint64_t to_user_id,
         std::string message_body,
         ForwardChatCallback callback
+    );
+
+    // M17-B2 group fanout uses durable MySQL retry/lease as its retry boundary.
+    // Peer transport performs one asynchronous network submission per durable attempt.
+    bool ForwardGroupMessage(
+        const GatewayInstanceRecord& remote_gateway,
+        std::uint64_t message_id,
+        std::uint64_t recipient_user_id,
+        ForwardGroupMessageCallback callback
     );
 
 
@@ -250,6 +262,13 @@ private:
 
     void StopInLoop();
 
+
+    void ForwardGroupMessageInLoop(
+        GatewayInstanceRecord remote_gateway,
+        std::uint64_t message_id,
+        std::uint64_t recipient_user_id,
+        ForwardGroupMessageCallback callback
+    );
 
     void ForwardChatInLoop(
         GatewayInstanceRecord

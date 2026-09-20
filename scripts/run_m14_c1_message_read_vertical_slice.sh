@@ -247,7 +247,8 @@ log "contract/application/integration gates"
 "${BUILD_DIR}/message_service_integration_tests" \
   | tee "${ARTIFACT_DIR}/message-integration.log"
 
-grep -q 'MessageService method count frozen at 9' "${ARTIFACT_DIR}/rpc-contract.log"
+grep -Fq 'MessageService method frozen: ListHistory' "$ARTIFACT_DIR/rpc-contract.log"
+grep -Fq 'MessageService method frozen: ListConversations' "$ARTIFACT_DIR/rpc-contract.log"
 grep -q 'failed=0' "${ARTIFACT_DIR}/message-application.log"
 grep -q 'failed=0' "${ARTIFACT_DIR}/message-integration.log"
 

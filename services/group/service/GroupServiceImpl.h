@@ -24,6 +24,7 @@ public:
     grpc::Status ListGroupMembers(grpc::ServerContext*, const tinyimx::group::v1::ListGroupMembersRequest*, tinyimx::group::v1::ListGroupMembersResponse*) override;
     grpc::Status ListMyGroups(grpc::ServerContext*, const tinyimx::group::v1::ListMyGroupsRequest*, tinyimx::group::v1::ListMyGroupsResponse*) override;
     grpc::Status CheckGroupSendPermission(grpc::ServerContext*, const tinyimx::group::v1::CheckGroupSendPermissionRequest*, tinyimx::group::v1::CheckGroupSendPermissionResponse*) override;
+    grpc::Status PrepareGroupMessageSend(grpc::ServerContext*, const tinyimx::group::v1::PrepareGroupMessageSendRequest*, tinyimx::group::v1::PrepareGroupMessageSendResponse*) override;
 
 private:
     GroupApplicationService* application_service_{nullptr};  // non-owning

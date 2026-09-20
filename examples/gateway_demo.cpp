@@ -17,6 +17,7 @@
 #include "gateway/GatewayRouteResolver.h"
 #include "common/net/EventLoopThread.h"
 #include "gateway/GatewayPeerTransportManager.h"
+#include "gateway/GroupFanoutCoordinator.h"
 #include "services/rpc/SocialRpcClient.h"
 #include "services/rpc/UserRpcClient.h"
 #include "services/rpc/MessageRpcClient.h"
@@ -216,6 +217,7 @@ int main(int argc, char* argv[]) {
         std::unique_ptr<tinyimx::GatewayRouteResolver> gateway_route_resolver;
         std::unique_ptr<tinyimx::EventLoopThread> gateway_peer_loop_thread;
         std::shared_ptr<tinyimx::GatewayPeerTransportManager> gateway_peer_transport_manager;
+        std::unique_ptr<tinyimx::GroupFanoutCoordinator> group_fanout_coordinator;
         std::unique_ptr<tinyimx::BusinessExecutor> business_executor;
         std::shared_ptr<const tinyimx::rpc::ServiceEndpointProvider>
             service_endpoint_provider;
@@ -1065,6 +1067,71 @@ int main(int argc, char* argv[]) {
             );
         }
 
+
+        const char* group_fanout_enable_env = std::getenv("TINYIMX_GROUP_FANOUT_ENABLE");
+        const bool group_fanout_enabled =
+            group_fanout_enable_env != nullptr && std::string(group_fanout_enable_env) == "1";
+        if (group_fanout_enabled) {
+            if (!message_rpc_client) {
+                LOG_ERROR("group fanout requires MessageService RPC client");
+                gateway.Stop();
+                if (business_executor) business_executor->ShutdownGraceful();
+                if (mysql_pool) mysql_pool->Shutdown();
+                if (redis_pool) redis_pool->Shutdown();
+                tinyimx::Logger::Instance().Shutdown();
+                return 1;
+            }
+            tinyimx::GroupFanoutCoordinatorOptions fanout_options;
+            fanout_options.gateway_id = options.gateway_id;
+            auto parse_u32_env = [](const char* name, std::uint32_t fallback) {
+                const char* value = std::getenv(name);
+                if (value == nullptr || *value == '\0') return fallback;
+                try {
+                    const auto parsed = std::stoul(value);
+                    return parsed > 0 && parsed <= 600000
+                        ? static_cast<std::uint32_t>(parsed) : fallback;
+                } catch (...) { return fallback; }
+            };
+            fanout_options.batch_size = std::min<std::size_t>(
+                parse_u32_env("TINYIMX_GROUP_FANOUT_BATCH_SIZE", 64), 256);
+            fanout_options.lease_ms = parse_u32_env("TINYIMX_GROUP_FANOUT_LEASE_MS", 5000);
+            fanout_options.submitted_retry_ms = parse_u32_env(
+                "TINYIMX_GROUP_FANOUT_ACK_RETRY_MS", 3000);
+            fanout_options.failure_retry_ms = parse_u32_env(
+                "TINYIMX_GROUP_FANOUT_FAILURE_RETRY_MS", 1000);
+            fanout_options.recovery_interval = std::chrono::milliseconds(
+                parse_u32_env("TINYIMX_GROUP_FANOUT_RECOVERY_MS", 1000));
+            const char* fault_pause_after_claim_env =
+                std::getenv("TINYIMX_FAULT_GROUP_FANOUT_PAUSE_AFTER_CLAIM_MS");
+            if (fault_pause_after_claim_env != nullptr &&
+                *fault_pause_after_claim_env != '\0') {
+                try {
+                    const auto parsed = std::stoul(fault_pause_after_claim_env);
+                    if (parsed > 0 && parsed <= 60000) {
+                        fanout_options.fault_pause_after_claim =
+                            std::chrono::milliseconds(parsed);
+                        LOG_WARN("group fanout post-claim crash-window fault injection enabled"
+                                 << ", pause_ms=" << parsed);
+                    }
+                } catch (...) {
+                    LOG_WARN("invalid TINYIMX_FAULT_GROUP_FANOUT_PAUSE_AFTER_CLAIM_MS ignored");
+                }
+            }
+            group_fanout_coordinator = std::make_unique<tinyimx::GroupFanoutCoordinator>(
+                message_rpc_client.get(), &gateway, fanout_options);
+            if (!group_fanout_coordinator->Start()) {
+                LOG_ERROR("group fanout coordinator start failed");
+                gateway.Stop();
+                if (business_executor) business_executor->ShutdownGraceful();
+                if (mysql_pool) mysql_pool->Shutdown();
+                if (redis_pool) redis_pool->Shutdown();
+                tinyimx::Logger::Instance().Shutdown();
+                return 1;
+            }
+        } else {
+            LOG_INFO("group fanout coordinator disabled; set TINYIMX_GROUP_FANOUT_ENABLE=1 to enable M17-B2 delivery");
+        }
+
         std::cout << "========== TinyIMX Gateway Demo ==========\n";
 
 
@@ -1107,6 +1174,9 @@ int main(int argc, char* argv[]) {
         );
 
         loop.Loop();
+        if (group_fanout_coordinator) {
+            group_fanout_coordinator->Stop();
+        }
         if (gateway_peer_transport_manager) {
             gateway_peer_transport_manager->Stop();
         }

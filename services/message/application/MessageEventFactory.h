@@ -21,6 +21,10 @@ public:
         const MessageView& message
     );
 
+    [[nodiscard]] static OutboxEventSpec GroupMessageCreated(
+        const GroupMessageView& message
+    );
+
     [[nodiscard]] static OutboxEventSpec DialogReadAdvanced(
         std::uint64_t reader_user_id,
         std::uint64_t peer_user_id,

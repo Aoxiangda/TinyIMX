@@ -2,6 +2,10 @@
 #include "services/message/server/MessageServiceServer.h"
 #include "services/message/service/MessageServiceImpl.h"
 #include "services/rpc/MessageRpcClient.h"
+#include "services/rpc/GroupRpcClient.h"
+#include "tinyimx/group/v1/group_service.grpc.pb.h"
+
+#include <grpcpp/grpcpp.h>
 #include "services/rpc/RpcCallOptions.h"
 #include "services/rpc/StaticServiceEndpointProvider.h"
 
@@ -45,6 +49,130 @@ public:
         result.message = "fake persist";
         return result;
     }
+
+    tinyimx::message::MessageRepositoryGroupGetResult
+    FindGroupMessageByClientMessageId(
+        std::uint64_t from_user_id,
+        const std::string& client_message_id
+    ) override {
+        ++group_lookup_calls;
+        tinyimx::message::MessageRepositoryGroupGetResult out;
+        out.status = tinyimx::message::MessageApplicationStatus::kSucceeded;
+        const std::string key =
+            std::to_string(from_user_id) + ":" + client_message_id;
+        const auto it = group_messages.find(key);
+        if (it == group_messages.end()) {
+            out.found = false;
+            return out;
+        }
+        out.found = true;
+        out.record = it->second;
+        return out;
+    }
+
+    tinyimx::message::MessageRepositoryGroupPersistResult
+    PersistAuthorizedGroupMessage(
+        std::uint64_t from_user_id,
+        std::uint64_t group_id,
+        const std::string& client_message_id,
+        std::uint32_t message_type,
+        const std::string& content,
+        std::uint64_t membership_epoch,
+        std::uint64_t member_version,
+        std::uint32_t authorized_role,
+        const std::vector<std::uint64_t>& recipient_user_ids
+    ) override {
+        (void)recipient_user_ids;
+        ++group_persist_calls;
+        tinyimx::message::MessageRepositoryGroupPersistResult out;
+        out.status = tinyimx::message::MessageApplicationStatus::kSucceeded;
+        const std::string key =
+            std::to_string(from_user_id) + ":" + client_message_id;
+        const auto existing = group_messages.find(key);
+        if (existing != group_messages.end()) {
+            out.message_id = existing->second.message_id;
+            out.record = existing->second;
+            const bool same =
+                existing->second.group_id == group_id &&
+                existing->second.message_type == message_type &&
+                existing->second.content == content;
+            out.outcome = same
+                ? tinyimx::message::PersistGroupMessageOutcome::kReused
+                : tinyimx::message::PersistGroupMessageOutcome::kIdempotencyConflict;
+            out.message = same ? "fake group reused" : "fake group conflict";
+            return out;
+        }
+
+        out.outcome = tinyimx::message::PersistGroupMessageOutcome::kCreated;
+        out.message_id = next_group_message_id++;
+        out.record.message_id = out.message_id;
+        out.record.client_message_id = client_message_id;
+        out.record.group_id = group_id;
+        out.record.from_user_id = from_user_id;
+        out.record.message_type = message_type;
+        out.record.content = content;
+        out.record.membership_epoch = membership_epoch;
+        out.record.member_version = member_version;
+        out.record.authorized_role = authorized_role;
+        out.record.created_at = "2026-09-18 10:00:00";
+        out.message = "fake group created";
+        group_messages.emplace(key, out.record);
+        return out;
+    }
+
+    tinyimx::message::MessageRepositoryGroupDeliveryGetResult GetGroupMessageDelivery(
+        std::uint64_t message_id, std::uint64_t recipient_user_id) override {
+        tinyimx::message::MessageRepositoryGroupDeliveryGetResult out;
+        out.status = tinyimx::message::MessageApplicationStatus::kSucceeded;
+        for (const auto& [key, message] : group_messages) {
+            (void)key;
+            if (message.message_id == message_id) {
+                out.found = true;
+                out.record.message = message;
+                out.record.delivery.message_id = message_id;
+                out.record.delivery.group_id = message.group_id;
+                out.record.delivery.recipient_user_id = recipient_user_id;
+                out.record.delivery.delivery_state = tinyimx::message::GroupDeliveryState::kPending;
+                return out;
+            }
+        }
+        out.found = false;
+        return out;
+    }
+    tinyimx::message::MessageRepositoryGroupDeliveryListResult ClaimGroupMessageDeliveries(
+        const std::string&, const std::string&, std::size_t, std::uint32_t, std::uint64_t) override {
+        tinyimx::message::MessageRepositoryGroupDeliveryListResult out;
+        out.status = tinyimx::message::MessageApplicationStatus::kSucceeded;
+        return out;
+    }
+    tinyimx::message::MessageRepositoryGroupDeliveryListResult ClaimGroupMessageDeliveriesForRecipient(
+        std::uint64_t recipient_user_id, const std::string& lease_owner,
+        const std::string& lease_token, std::size_t, std::uint32_t) override {
+        tinyimx::message::MessageRepositoryGroupDeliveryListResult out;
+        out.status = tinyimx::message::MessageApplicationStatus::kSucceeded;
+        if (recipient_user_id != 0 && !lease_owner.empty() && !lease_token.empty()) {
+            for (const auto& [key, message] : group_messages) {
+                (void)key;
+                tinyimx::message::GroupDeliveryWorkItem item;
+                item.message = message;
+                item.delivery.message_id = message.message_id;
+                item.delivery.group_id = message.group_id;
+                item.delivery.recipient_user_id = recipient_user_id;
+                item.delivery.delivery_state = tinyimx::message::GroupDeliveryState::kDeferredOffline;
+                item.delivery.lease_owner = lease_owner;
+                item.delivery.lease_token = lease_token;
+                out.records.push_back(std::move(item));
+                break;
+            }
+        }
+        return out;
+    }
+    tinyimx::message::MessageRepositoryMutationResult CompleteGroupMessageDeliveryAttempt(
+        std::uint64_t, std::uint64_t, const std::string&,
+        tinyimx::message::GroupDeliveryAttemptOutcome, const std::string&,
+        std::uint32_t, const std::string&) override { return SuccessMutation(1); }
+    tinyimx::message::MessageRepositoryMutationResult ConfirmGroupMessageDelivery(
+        std::uint64_t, std::uint64_t) override { return SuccessMutation(1); }
 
     tinyimx::message::MessageRepositoryGetResult GetPrivateMessage(
         std::uint64_t message_id
@@ -231,6 +359,10 @@ public:
     tinyimx::message::PersistPrivateMessageOutcome persist_outcome{
         tinyimx::message::PersistPrivateMessageOutcome::kCreated};
     std::unordered_map<std::uint64_t, tinyimx::message::MessageView> messages;
+    std::unordered_map<std::string, tinyimx::message::GroupMessageView> group_messages;
+    std::uint64_t next_group_message_id{9901};
+    std::size_t group_lookup_calls{0};
+    std::size_t group_persist_calls{0};
     std::uint64_t pending_count{0};
     std::size_t persist_calls{0};
     std::size_t get_calls{0};
@@ -245,6 +377,79 @@ public:
     std::uint64_t last_peer{0};
     std::uint64_t last_before{0};
     std::size_t last_limit{0};
+};
+
+class FakeGroupAuthorizationService final
+    : public tinyimx::group::v1::GroupService::Service {
+public:
+    grpc::Status CheckGroupSendPermission(
+        grpc::ServerContext*,
+        const tinyimx::group::v1::CheckGroupSendPermissionRequest* request,
+        tinyimx::group::v1::CheckGroupSendPermissionResponse* response
+    ) override {
+        ++calls;
+        if (request == nullptr || response == nullptr ||
+            request->actor_user_id() == 0 || request->group_id() == 0) {
+            return {grpc::StatusCode::INVALID_ARGUMENT, "invalid group permission request"};
+        }
+        if (request->group_id() == 404) {
+            return {grpc::StatusCode::NOT_FOUND, "group not found"};
+        }
+        if (request->group_id() == 48) {
+            response->set_allowed(false);
+            response->set_message("group is not active");
+            return grpc::Status::OK;
+        }
+        if (!allowed) {
+            response->set_allowed(false);
+            response->set_message("user is not a group member");
+            return grpc::Status::OK;
+        }
+        response->set_allowed(true);
+        response->set_role(tinyimx::group::v1::GROUP_ROLE_MEMBER);
+        response->set_membership_epoch(membership_epoch);
+        response->set_member_version(member_version);
+        response->set_message("group send allowed");
+        return grpc::Status::OK;
+    }
+
+    grpc::Status PrepareGroupMessageSend(
+        grpc::ServerContext*,
+        const tinyimx::group::v1::PrepareGroupMessageSendRequest* request,
+        tinyimx::group::v1::PrepareGroupMessageSendResponse* response
+    ) override {
+        ++calls;
+        if (request == nullptr || response == nullptr ||
+            request->actor_user_id() == 0 || request->group_id() == 0) {
+            return {grpc::StatusCode::INVALID_ARGUMENT, "invalid group prepare request"};
+        }
+        if (request->group_id() == 404) {
+            return {grpc::StatusCode::NOT_FOUND, "group not found"};
+        }
+        if (request->group_id() == 48) {
+            response->set_allowed(false);
+            response->set_message("group is not active");
+            return grpc::Status::OK;
+        }
+        if (!allowed) {
+            response->set_allowed(false);
+            response->set_message("user is not a group member");
+            return grpc::Status::OK;
+        }
+        response->set_allowed(true);
+        response->set_role(tinyimx::group::v1::GROUP_ROLE_MEMBER);
+        response->set_membership_epoch(membership_epoch);
+        response->set_member_version(member_version);
+        response->add_recipient_user_ids(10002);
+        response->add_recipient_user_ids(10003);
+        response->set_message("group send snapshot prepared");
+        return grpc::Status::OK;
+    }
+
+    bool allowed{true};
+    std::uint64_t membership_epoch{3};
+    std::uint64_t member_version{9};
+    std::size_t calls{0};
 };
 
 int g_failed = 0;
@@ -283,7 +488,31 @@ int main() {
     repository.pending_count = 2;
 
     tinyimx::message::MessageApplicationService application(&repository);
-    tinyimx::message::MessageServiceImpl service_impl(&application);
+
+    FakeGroupAuthorizationService group_authorization_service;
+    grpc::ServerBuilder group_builder;
+    int group_port = 0;
+    group_builder.AddListeningPort(
+        "127.0.0.1:0",
+        grpc::InsecureServerCredentials(),
+        &group_port
+    );
+    group_builder.RegisterService(&group_authorization_service);
+    auto group_server = group_builder.BuildAndStart();
+    if (!group_server || group_port <= 0) {
+        Expect(false, "GroupService.AuthorizationServerStart");
+        return 1;
+    }
+
+    const auto group_provider =
+        std::make_shared<tinyimx::rpc::StaticServiceEndpointProvider>(
+            "", "", "", "127.0.0.1:" + std::to_string(group_port));
+    tinyimx::rpc::GroupRpcClient group_client(group_provider);
+
+    tinyimx::message::MessageServiceImpl service_impl(
+        &application,
+        &group_client
+    );
     tinyimx::message::MessageServiceServer server(&service_impl);
 
     if (!server.Start("127.0.0.1:0")) {
@@ -357,6 +586,98 @@ int main() {
     const auto persist_conflict = client.PersistPrivateMessage(conflict_request, options);
     Expect(persist_conflict.ok() && persist_conflict.value->Conflict(),
            "MessageService.RealGrpcPersistConflict");
+
+    tinyimx::rpc::PersistGroupMessageRpcRequest group_request;
+    group_request.from_user_id = 10001;
+    group_request.group_id = 47;
+    group_request.client_message_id = "m17b1-grpc-group-1";
+    group_request.message_type = 1;
+    group_request.content = "hello-group";
+
+    const auto group_created = client.PersistGroupMessage(group_request, options);
+    Expect(
+        group_created.ok() && group_created.attempted &&
+        group_created.value->Created() &&
+        group_created.value->record.membership_epoch == 3 &&
+        group_created.value->record.member_version == 9 &&
+        group_authorization_service.calls == 1,
+        "MessageService.RealGrpcGroupPersistCreatedAuthorized"
+    );
+
+    // Durable truth must win over a later permission change. The retry must not
+    // call GroupService again after the original group message is durable.
+    group_authorization_service.allowed = false;
+    const std::size_t auth_calls_before_retry = group_authorization_service.calls;
+    const auto group_reused = client.PersistGroupMessage(group_request, options);
+    Expect(
+        group_reused.ok() && group_reused.value->Reused() &&
+        group_reused.value->message_id == group_created.value->message_id &&
+        group_authorization_service.calls == auth_calls_before_retry,
+        "MessageService.GroupDurableTruthBeatsReauthorization"
+    );
+
+
+    tinyimx::rpc::ClaimGroupMessageDeliveriesForRecipientRpcRequest replay_claim;
+    replay_claim.recipient_user_id = 10002;
+    replay_claim.lease_owner = "gateway-replay-test";
+    replay_claim.lease_token = "gateway-replay-test:lease-1";
+    replay_claim.limit = 100;
+    replay_claim.lease_ms = 10000;
+    const auto replay_claim_result =
+        client.ClaimGroupMessageDeliveriesForRecipient(replay_claim, options);
+    Expect(
+        replay_claim_result.ok() &&
+        replay_claim_result.value->work_items.size() == 1 &&
+        replay_claim_result.value->work_items.front().delivery.recipient_user_id == 10002 &&
+        replay_claim_result.value->work_items.front().delivery.delivery_state ==
+            tinyimx::rpc::GroupDeliveryRpcState::kDeferredOffline &&
+        replay_claim_result.value->work_items.front().delivery.lease_token ==
+            replay_claim.lease_token,
+        "MessageService.RealGrpcClaimGroupDeliveriesForRecipient"
+    );
+
+    auto denied_group_request = group_request;
+    denied_group_request.client_message_id = "m17b1-grpc-group-denied";
+    const auto group_denied = client.PersistGroupMessage(denied_group_request, options);
+    Expect(
+        !group_denied.ok() && group_denied.attempted &&
+        group_denied.status.code == tinyimx::rpc::RpcErrorCode::kPermissionDenied,
+        "MessageService.RealGrpcGroupPermissionDenied"
+    );
+
+    auto inactive_group_request = group_request;
+    inactive_group_request.group_id = 48;
+    inactive_group_request.client_message_id = "m17b1-grpc-group-inactive";
+    const auto group_inactive = client.PersistGroupMessage(inactive_group_request, options);
+    Expect(
+        !group_inactive.ok() && group_inactive.attempted &&
+        group_inactive.status.code == tinyimx::rpc::RpcErrorCode::kFailedPrecondition,
+        "MessageService.RealGrpcGroupInactive"
+    );
+
+    group_authorization_service.allowed = true;
+    auto uncertain_group_request = group_request;
+    uncertain_group_request.client_message_id = "m17b1-grpc-group-uncertain";
+    ::setenv("TINYIMX_FAULT_GROUP_MESSAGE_PERSIST_POST_COMMIT_DELAY_MS", "200", 1);
+    tinyimx::rpc::RpcCallOptions group_uncertain_options = options;
+    group_uncertain_options.remaining_timeout = std::chrono::milliseconds(50);
+    const auto group_uncertain =
+        client.PersistGroupMessage(uncertain_group_request, group_uncertain_options);
+    ::unsetenv("TINYIMX_FAULT_GROUP_MESSAGE_PERSIST_POST_COMMIT_DELAY_MS");
+    Expect(
+        !group_uncertain.ok() && group_uncertain.attempted,
+        "MessageRpcClient.GroupPersistPostCommitTimeoutIsAttempted"
+    );
+    group_authorization_service.allowed = false;
+    const std::size_t auth_calls_before_uncertain_retry =
+        group_authorization_service.calls;
+    const auto group_uncertain_retry =
+        client.PersistGroupMessage(uncertain_group_request, options);
+    Expect(
+        group_uncertain_retry.ok() && group_uncertain_retry.value->Reused() &&
+        group_authorization_service.calls == auth_calls_before_uncertain_retry,
+        "MessageService.GroupPostCommitRetryReusesWithoutReauthorization"
+    );
 
     tinyimx::rpc::GetPrivateMessageRpcRequest get_request;
     get_request.message_id = 7001;
@@ -474,6 +795,8 @@ int main() {
 
     server.Shutdown();
     server.Wait();
+    group_server->Shutdown();
+    group_server->Wait();
 
     std::cout
         << "==================================================================\n"

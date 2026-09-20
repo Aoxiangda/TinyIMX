@@ -541,10 +541,19 @@ grep -q 'gateway login auth client validation passed' "$ARTIFACT_DIR/failure-mat
 pass_case session-expired-recovery "$ARTIFACT_DIR/failure-matrix/login-after-session-recovery.log"
 
 log "C2 post-recovery watch re-arm"
+REWATCH_OFFSET="$(wc -c < "$ARTIFACT_DIR/gateway/fault.log")"
+
 start_user user-d-post-recovery "$USER_D_TARGET" USER_D_PID
 "$BUILD_DIR/zookeeper_registry_probe" "$ZK_CONNECT" "$USER_D_PATH" present 5000 >"$ARTIFACT_DIR/failure-matrix/user-d-register.log"
+
 stop_var USER_C_PID TERM
 "$BUILD_DIR/zookeeper_registry_probe" "$ZK_CONNECT" "$USER_C_PATH" absent 3000 >"$ARTIFACT_DIR/failure-matrix/user-c-remove.log"
+
+# ZooKeeper producer-side membership is not enough: wait until the recovered
+# Gateway's re-armed watcher has observed both the join and the subsequent
+# removal and has published the final authoritative user snapshot.
+wait_log_sequence_after   "$ARTIFACT_DIR/gateway/fault.log"   "$REWATCH_OFFSET"   "$FAULT_GATEWAY_PID"   FaultGateway   15   'ZooKeeper discovery snapshot refreshed.*service=user.*instance_count=2'   'ZooKeeper discovery snapshot refreshed.*service=user.*instance_count=1'
+
 "$BUILD_DIR/gateway_login_auth_client_demo" 127.0.0.1 "$FAULT_GATEWAY_PORT" >"$ARTIFACT_DIR/failure-matrix/login-post-rewatch.log"
 grep -q 'gateway login auth client validation passed' "$ARTIFACT_DIR/failure-matrix/login-post-rewatch.log"
 pass_case post-session-rewatch "$ARTIFACT_DIR/failure-matrix/login-post-rewatch.log"

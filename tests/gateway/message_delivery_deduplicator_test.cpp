@@ -232,6 +232,22 @@ RegisterMessageDeliveryDeduplicatorTests(
             );
         }
     );
+
+    runner.Add(
+        "MessageDeliveryDeduplicator.M17B2DeliveryIdentityIsolation",
+        []() {
+            MessageDeliveryDeduplicator dedup;
+            const auto group_u2 = GroupDeliveryIdentity(55, 10002);
+            const auto group_u3 = GroupDeliveryIdentity(55, 10003);
+            const auto private_u2 = PrivateDeliveryIdentity(55, 10002);
+            TINYIMX_EXPECT_EQ(dedup.Begin(group_u2), MessageDeliveryDedupBeginStatus::kAcquired);
+            TINYIMX_EXPECT_EQ(dedup.Begin(group_u3), MessageDeliveryDedupBeginStatus::kAcquired);
+            TINYIMX_EXPECT_EQ(dedup.Begin(private_u2), MessageDeliveryDedupBeginStatus::kAcquired);
+            TINYIMX_EXPECT_TRUE(dedup.MarkDelivered(group_u2));
+            TINYIMX_EXPECT_EQ(dedup.Begin(group_u2), MessageDeliveryDedupBeginStatus::kAlreadyDelivered);
+            TINYIMX_EXPECT_EQ(dedup.Begin(group_u3), MessageDeliveryDedupBeginStatus::kAlreadyProcessing);
+        });
+
 }
 
 }  // namespace tinyimx::test

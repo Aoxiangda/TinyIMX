@@ -137,6 +137,7 @@ struct UnreadProjectionConfig {
     std::string owner{"gateway"};
     bool shadow_mode{false};
     std::string consumer_group{"tinyimx-unread-projector-v1"};
+    int consumer_request_timeout_ms{30000};
     std::size_t batch_size{16};
     int invisible_duration_ms{30000};
     int await_duration_ms{5000};

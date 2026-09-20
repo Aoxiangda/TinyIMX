@@ -11,6 +11,21 @@ import "tinyimx/common/v1/common.proto";
 service MessageService {
     rpc PersistPrivateMessage(PersistPrivateMessageRequest)
         returns (PersistPrivateMessageResponse);
+
+    // M17-B1 reliable group-message durable write.
+    rpc PersistGroupMessage(PersistGroupMessageRequest)
+        returns (PersistGroupMessageResponse);
+
+    // M17-B2 durable fanout plane.
+    rpc GetGroupMessageDelivery(GetGroupMessageDeliveryRequest)
+        returns (GetGroupMessageDeliveryResponse);
+    rpc ClaimGroupMessageDeliveries(ClaimGroupMessageDeliveriesRequest)
+        returns (ClaimGroupMessageDeliveriesResponse);
+    rpc CompleteGroupMessageDeliveryAttempt(CompleteGroupMessageDeliveryAttemptRequest)
+        returns (MessageMutationResponse);
+    rpc ConfirmGroupMessageDelivery(ConfirmGroupMessageDeliveryRequest)
+        returns (MessageMutationResponse);
+
     rpc GetPrivateMessage(GetPrivateMessageRequest)
         returns (GetPrivateMessageResponse);
 
@@ -30,6 +45,12 @@ service MessageService {
         returns (MessageMutationResponse);
     rpc MarkDialogRead(MarkDialogReadRequest)
         returns (MessageMutationResponse);
+
+    // M17-B3: recipient-centric durable offline replay. Appended after the
+    // frozen M17-B2 surface so the first 14 RPC ordinals remain unchanged.
+    rpc ClaimGroupMessageDeliveriesForRecipient(
+        ClaimGroupMessageDeliveriesForRecipientRequest)
+        returns (ClaimGroupMessageDeliveriesResponse);
 }
 
 enum MessageDeliveryState {
@@ -91,6 +112,131 @@ message PersistPrivateMessageResponse {
     uint64 message_id = 2;
     MessageRecord record = 3;
     string message = 4;
+}
+
+
+
+message GroupMessageRecord {
+    uint64 message_id = 1;
+    string client_message_id = 2;
+    uint64 group_id = 3;
+    uint64 from_user_id = 4;
+    uint32 message_type = 5;
+    string content = 6;
+    uint64 membership_epoch = 7;
+    uint64 member_version = 8;
+    uint32 authorized_role = 9;
+    string created_at = 10;
+}
+
+message PersistGroupMessageRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 from_user_id = 2;
+    uint64 group_id = 3;
+    string client_message_id = 4;
+    uint32 message_type = 5;
+    string content = 6;
+}
+
+enum PersistGroupMessageResult {
+    PERSIST_GROUP_MESSAGE_RESULT_UNSPECIFIED = 0;
+    PERSIST_GROUP_MESSAGE_RESULT_CREATED = 1;
+    PERSIST_GROUP_MESSAGE_RESULT_REUSED = 2;
+    PERSIST_GROUP_MESSAGE_RESULT_IDEMPOTENCY_CONFLICT = 3;
+}
+
+message PersistGroupMessageResponse {
+    PersistGroupMessageResult result = 1;
+    uint64 message_id = 2;
+    GroupMessageRecord record = 3;
+    string message = 4;
+}
+
+enum GroupMessageDeliveryState {
+    GROUP_MESSAGE_DELIVERY_STATE_UNSPECIFIED = 0;
+    GROUP_MESSAGE_DELIVERY_STATE_PENDING = 1;
+    GROUP_MESSAGE_DELIVERY_STATE_DEFERRED_OFFLINE = 2;
+    GROUP_MESSAGE_DELIVERY_STATE_DELIVERED = 3;
+}
+
+enum GroupDeliveryAttemptOutcome {
+    GROUP_DELIVERY_ATTEMPT_OUTCOME_UNSPECIFIED = 0;
+    GROUP_DELIVERY_ATTEMPT_OUTCOME_SUBMITTED = 1;
+    GROUP_DELIVERY_ATTEMPT_OUTCOME_OFFLINE = 2;
+    GROUP_DELIVERY_ATTEMPT_OUTCOME_RETRYABLE_FAILURE = 3;
+}
+
+message GroupMessageDeliveryRecord {
+    uint64 message_id = 1;
+    uint64 group_id = 2;
+    uint64 recipient_user_id = 3;
+    GroupMessageDeliveryState delivery_state = 4;
+    uint32 attempt_count = 5;
+    string last_gateway_id = 6;
+    string lease_owner = 7;
+    string lease_token = 8;
+    string lease_until = 9;
+    string next_retry_at = 10;
+    string last_error_code = 11;
+    string created_at = 12;
+    string updated_at = 13;
+    string delivered_at = 14;
+}
+
+message GroupDeliveryWorkItem {
+    GroupMessageRecord message = 1;
+    GroupMessageDeliveryRecord delivery = 2;
+}
+
+message GetGroupMessageDeliveryRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 message_id = 2;
+    uint64 recipient_user_id = 3;
+}
+
+message GetGroupMessageDeliveryResponse {
+    GroupDeliveryWorkItem work = 1;
+}
+
+message ClaimGroupMessageDeliveriesRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    string lease_owner = 2;
+    string lease_token = 3;
+    uint32 limit = 4;
+    uint32 lease_ms = 5;
+    uint64 message_id = 6;
+}
+
+message ClaimGroupMessageDeliveriesResponse {
+    repeated GroupDeliveryWorkItem work_items = 1;
+}
+
+// Login/reconnect recovery claims only this authenticated recipient's
+// DEFERRED_OFFLINE rows. The DB lease is the cross-Gateway execution fence.
+message ClaimGroupMessageDeliveriesForRecipientRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 recipient_user_id = 2;
+    string lease_owner = 3;
+    string lease_token = 4;
+    uint32 limit = 5;
+    uint32 lease_ms = 6;
+}
+
+message CompleteGroupMessageDeliveryAttemptRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 message_id = 2;
+    uint64 recipient_user_id = 3;
+    string lease_token = 4;
+    GroupDeliveryAttemptOutcome outcome = 5;
+    string gateway_id = 6;
+    uint32 retry_after_ms = 7;
+    string error_code = 8;
+}
+
+message ConfirmGroupMessageDeliveryRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 message_id = 2;
+    uint64 recipient_user_id = 3;
 }
 
 message GetPrivateMessageRequest {
