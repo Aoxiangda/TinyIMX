@@ -1,5 +1,6 @@
 #include "services/rpc/MessageRpcClient.h"
 #include "services/rpc/GroupRpcClient.h"
+#include "services/rpc/FileRpcClient.h"
 #include "services/rpc/SocialRpcClient.h"
 #include "services/rpc/UserRpcClient.h"
 
@@ -17,6 +18,7 @@ namespace {
 
 using tinyimx::rpc::MessageRpcClient;
 using tinyimx::rpc::GroupRpcClient;
+using tinyimx::rpc::FileRpcClient;
 using tinyimx::rpc::ServiceEndpoint;
 using tinyimx::rpc::ServiceEndpointProvider;
 using tinyimx::rpc::ServiceKind;
@@ -91,6 +93,13 @@ void Call(GroupRpcClient* client) {
     (void)client->GetGroup(request, Options());
 }
 
+void Call(FileRpcClient* client) {
+    tinyimx::rpc::GetUploadSessionRpcRequest request;
+    request.actor_user_id = 1;
+    request.upload_id = 1;
+    (void)client->GetUploadSession(request, Options());
+}
+
 template <typename Client>
 bool TestReuse(const std::string& name) {
     auto provider = std::make_shared<SequenceEndpointProvider>(
@@ -144,10 +153,12 @@ int main() {
         TestReuse<SocialRpcClient>("SocialRpcClient") &&
         TestReuse<MessageRpcClient>("MessageRpcClient") &&
         TestReuse<GroupRpcClient>("GroupRpcClient") &&
+        TestReuse<FileRpcClient>("FileRpcClient") &&
         TestBounded<UserRpcClient>("UserRpcClient") &&
         TestBounded<SocialRpcClient>("SocialRpcClient") &&
         TestBounded<MessageRpcClient>("MessageRpcClient") &&
-        TestBounded<GroupRpcClient>("GroupRpcClient");
+        TestBounded<GroupRpcClient>("GroupRpcClient") &&
+        TestBounded<FileRpcClient>("FileRpcClient");
     std::cout
         << "================================================================="
         << '\n';

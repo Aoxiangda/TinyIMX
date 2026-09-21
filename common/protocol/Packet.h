@@ -101,6 +101,14 @@ enum class MessageType : std::uint16_t {
     kGroupMessageDelivery = 2051,
     kGroupMessageDeliveryAck = 2052,
 
+    // M18-A2 File control-plane protocol. File payload/chunks remain M18-B.
+    kBeginFileUploadRequest = 2053,
+    kBeginFileUploadResponse = 2054,
+    kGetFileUploadSessionRequest = 2055,
+    kGetFileUploadSessionResponse = 2056,
+    kCancelFileUploadRequest = 2057,
+    kCancelFileUploadResponse = 2058,
+
     // Gateway-to-Gateway internal protocol.
     kGatewayForwardChatRequest = 3001,
     kGatewayForwardChatResponse = 3002,

@@ -37,6 +37,15 @@ public:
         std::string group_target
     );
 
+    // M18-A2 constructor: adds FileService while preserving older call sites.
+    StaticServiceEndpointProvider(
+        std::string social_target,
+        std::string user_target,
+        std::string message_target,
+        std::string group_target,
+        std::string file_target
+    );
+
     [[nodiscard]] std::optional<ServiceEndpoint> Resolve(
         ServiceKind service
     ) const override;
@@ -46,6 +55,7 @@ private:
     const std::string user_target_;
     const std::string message_target_;
     const std::string group_target_;
+    const std::string file_target_;
 };
 
 }  // namespace tinyimx::rpc

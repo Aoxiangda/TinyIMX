@@ -104,6 +104,7 @@ add_library(tinyimx_rpc_client
     services/rpc/UserRpcClient.cpp
     services/rpc/MessageRpcClient.cpp
     services/rpc/GroupRpcClient.cpp
+    services/rpc/FileRpcClient.cpp
 )
 
 target_include_directories(tinyimx_rpc_client PUBLIC
@@ -139,6 +140,13 @@ add_executable(group_rpc_client_tests
 target_compile_features(group_rpc_client_tests PRIVATE cxx_std_20)
 target_link_libraries(group_rpc_client_tests PRIVATE tinyimx_rpc_client)
 add_test(NAME group_rpc_client_tests COMMAND group_rpc_client_tests)
+
+add_executable(file_rpc_client_tests
+    tests/rpc/file_rpc_client_test.cpp
+)
+target_compile_features(file_rpc_client_tests PRIVATE cxx_std_20)
+target_link_libraries(file_rpc_client_tests PRIVATE tinyimx_rpc_client)
+add_test(NAME file_rpc_client_tests COMMAND file_rpc_client_tests)
 
 
 add_executable(logger_demo
@@ -1055,6 +1063,16 @@ add_executable(gateway_group_client_demo
 )
 
 target_link_libraries(gateway_group_client_demo PRIVATE
+    tinyimx_net
+    tinyimx_protocol
+    nlohmann_json::nlohmann_json
+)
+
+add_executable(gateway_file_client_demo
+    examples/gateway_file_client_demo.cpp
+)
+
+target_link_libraries(gateway_file_client_demo PRIVATE
     tinyimx_net
     tinyimx_protocol
     nlohmann_json::nlohmann_json

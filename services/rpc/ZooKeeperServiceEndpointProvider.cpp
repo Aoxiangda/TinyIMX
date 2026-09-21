@@ -91,6 +91,8 @@ ZooKeeperServiceEndpointProvider::ServiceIndex(
             return 2;
         case ServiceKind::kGroup:
             return 3;
+        case ServiceKind::kFile:
+            return 4;
         default:
             return std::nullopt;
     }
@@ -108,6 +110,8 @@ const char* ZooKeeperServiceEndpointProvider::ServiceName(
             return "message";
         case ServiceKind::kGroup:
             return "group";
+        case ServiceKind::kFile:
+            return "file";
         default:
             return nullptr;
     }

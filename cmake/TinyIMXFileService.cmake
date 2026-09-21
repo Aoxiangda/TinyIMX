@@ -3,6 +3,7 @@ include_guard(GLOBAL)
 foreach(required_target IN ITEMS
     tinyimx_rpc_proto
     tinyimx_repository
+    tinyimx_service_registry
 )
   if(NOT TARGET ${required_target})
     message(FATAL_ERROR
@@ -79,3 +80,19 @@ target_link_libraries(file_repository_integration_tests PRIVATE
 
 # External-MySQL test: intentionally not added to ordinary CTest. Apply
 # migration 009 and run explicitly in the M18-A1 acceptance workflow.
+
+
+# M18-A2 runnable FileService control-plane endpoint for real-TCP Gateway acceptance.
+add_executable(file_service_demo
+  examples/file_service_demo.cpp
+)
+target_compile_features(file_service_demo PRIVATE cxx_std_20)
+target_link_libraries(file_service_demo PRIVATE
+  tinyimx_config
+  tinyimx_logging
+  tinyimx_db
+  tinyimx_repository
+  tinyimx_file_core
+  tinyimx_file_grpc
+  tinyimx_service_registry
+)

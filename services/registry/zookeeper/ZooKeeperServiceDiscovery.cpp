@@ -14,11 +14,12 @@ namespace tinyimx::registry::zookeeper {
 namespace {
 
 constexpr auto kControlTick = std::chrono::milliseconds(200);
-constexpr std::array<const char*, 4> kKnownServices = {
+constexpr std::array<const char*, 5> kKnownServices = {
     "user",
     "social",
     "message",
     "group",
+    "file",
 };
 
 std::string NormalizeRoot(std::string root) {

@@ -22,6 +22,7 @@
 #include "services/rpc/UserRpcClient.h"
 #include "services/rpc/MessageRpcClient.h"
 #include "services/rpc/GroupRpcClient.h"
+#include "services/rpc/FileRpcClient.h"
 #include "services/rpc/StaticServiceEndpointProvider.h"
 #include "services/rpc/ZooKeeperServiceEndpointProvider.h"
 #include "services/registry/zookeeper/ZooKeeperClient.h"
@@ -235,6 +236,8 @@ int main(int argc, char* argv[]) {
             message_rpc_client;
         std::unique_ptr<tinyimx::rpc::GroupRpcClient>
             group_rpc_client;
+        std::unique_ptr<tinyimx::rpc::FileRpcClient>
+            file_rpc_client;
         if (config.MySql().enable) {
             mysql_pool = std::make_unique<tinyimx::MySqlConnectionPool>();
 
@@ -466,6 +469,10 @@ int main(int argc, char* argv[]) {
                 std::make_unique<tinyimx::rpc::GroupRpcClient>(
                     service_endpoint_provider
                 );
+            file_rpc_client =
+                std::make_unique<tinyimx::rpc::FileRpcClient>(
+                    service_endpoint_provider
+                );
 
             LOG_INFO(
                 "gateway dynamic RPC discovery enabled"
@@ -485,6 +492,8 @@ int main(int argc, char* argv[]) {
                 std::getenv("TINYIMX_MESSAGE_RPC_TARGET");
             const char* group_rpc_target_env =
                 std::getenv("TINYIMX_GROUP_RPC_TARGET");
+            const char* file_rpc_target_env =
+                std::getenv("TINYIMX_FILE_RPC_TARGET");
 
             const std::string social_rpc_target =
                 social_rpc_target_env != nullptr
@@ -502,11 +511,16 @@ int main(int argc, char* argv[]) {
                 group_rpc_target_env != nullptr
                     ? std::string(group_rpc_target_env)
                     : std::string{};
+            const std::string file_rpc_target =
+                file_rpc_target_env != nullptr
+                    ? std::string(file_rpc_target_env)
+                    : std::string{};
 
             if (!social_rpc_target.empty() ||
                 !user_rpc_target.empty() ||
                 !message_rpc_target.empty() ||
-                !group_rpc_target.empty()) {
+                !group_rpc_target.empty() ||
+                !file_rpc_target.empty()) {
                 service_endpoint_provider =
                     std::make_shared<
                         tinyimx::rpc::StaticServiceEndpointProvider
@@ -514,7 +528,8 @@ int main(int argc, char* argv[]) {
                         social_rpc_target,
                         user_rpc_target,
                         message_rpc_target,
-                        group_rpc_target
+                        group_rpc_target,
+                        file_rpc_target
                     );
             }
 
@@ -588,6 +603,24 @@ int main(int argc, char* argv[]) {
                     "Group control requests will fail closed"
                 );
             }
+
+            if (!file_rpc_target.empty()) {
+                file_rpc_client =
+                    std::make_unique<tinyimx::rpc::FileRpcClient>(
+                        service_endpoint_provider
+                    );
+                LOG_INFO(
+                    "gateway FileService RPC enabled"
+                    << ", provider=static"
+                    << ", target=" << file_rpc_target
+                );
+            } else {
+                LOG_WARN(
+                    "gateway FileService RPC disabled: "
+                    "TINYIMX_FILE_RPC_TARGET is not set; "
+                    "File control requests will fail closed"
+                );
+            }
         }
 
         tinyimx::GatewayServer gateway(
@@ -616,6 +649,9 @@ int main(int argc, char* argv[]) {
 
         if (group_rpc_client) {
             gateway.SetGroupRpcClient(group_rpc_client.get());
+        }
+        if (file_rpc_client) {
+            gateway.SetFileRpcClient(file_rpc_client.get());
         }
 
         if (friend_repository) {

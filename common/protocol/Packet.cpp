@@ -98,6 +98,12 @@ std::string MessageTypeToString(MessageType type) {
         case MessageType::kGroupMessageSendResponse: return "group_message_send_response";
         case MessageType::kGroupMessageDelivery: return "group_message_delivery";
         case MessageType::kGroupMessageDeliveryAck: return "group_message_delivery_ack";
+        case MessageType::kBeginFileUploadRequest: return "begin_file_upload_request";
+        case MessageType::kBeginFileUploadResponse: return "begin_file_upload_response";
+        case MessageType::kGetFileUploadSessionRequest: return "get_file_upload_session_request";
+        case MessageType::kGetFileUploadSessionResponse: return "get_file_upload_session_response";
+        case MessageType::kCancelFileUploadRequest: return "cancel_file_upload_request";
+        case MessageType::kCancelFileUploadResponse: return "cancel_file_upload_response";
 
         case MessageType::kGatewayForwardChatRequest:
             return "gateway_forward_chat_request";
@@ -186,6 +192,12 @@ bool IsKnownMessageType(MessageType type) {
         case MessageType::kGroupMessageSendResponse:
         case MessageType::kGroupMessageDelivery:
         case MessageType::kGroupMessageDeliveryAck:
+        case MessageType::kBeginFileUploadRequest:
+        case MessageType::kBeginFileUploadResponse:
+        case MessageType::kGetFileUploadSessionRequest:
+        case MessageType::kGetFileUploadSessionResponse:
+        case MessageType::kCancelFileUploadRequest:
+        case MessageType::kCancelFileUploadResponse:
 
         case MessageType::kGatewayForwardChatRequest:
         case MessageType::kGatewayForwardChatResponse:

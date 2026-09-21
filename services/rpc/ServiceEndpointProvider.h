@@ -11,6 +11,7 @@ enum class ServiceKind : std::uint8_t {
     kUser,
     kMessage,
     kGroup,
+    kFile,
 };
 
 struct ServiceEndpoint {

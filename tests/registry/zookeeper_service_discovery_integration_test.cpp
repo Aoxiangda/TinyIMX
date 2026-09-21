@@ -115,6 +115,7 @@ void Cleanup(
     client->DeleteNode(root + "/social", -1);
     client->DeleteNode(root + "/message", -1);
     client->DeleteNode(root + "/group", -1);
+    client->DeleteNode(root + "/file", -1);
     client->DeleteNode(root, -1);
 
     const auto slash = root.rfind('/');
@@ -178,6 +179,11 @@ int main(int argc, char* argv[]) {
             discovery->Snapshot("group").initialized &&
                 discovery->Snapshot("group").instances.empty(),
             "initial group snapshot empty"
+        ) ||
+        !Expect(
+            discovery->Snapshot("file").initialized &&
+                discovery->Snapshot("file").instances.empty(),
+            "initial file snapshot empty"
         )) {
         discovery->Stop();
         discovery_client->Stop();
@@ -188,10 +194,12 @@ int main(int argc, char* argv[]) {
     ZooKeeperClient owner2;
     ZooKeeperClient owner3;
     ZooKeeperClient group_owner;
+    ZooKeeperClient file_owner;
     if (!Expect(owner1.Start(zk_config), "owner1 connected") ||
         !Expect(owner2.Start(zk_config), "owner2 connected") ||
         !Expect(owner3.Start(zk_config), "owner3 connected") ||
-        !Expect(group_owner.Start(zk_config), "group owner connected")) {
+        !Expect(group_owner.Start(zk_config), "group owner connected") ||
+        !Expect(file_owner.Start(zk_config), "file owner connected")) {
         discovery->Stop();
         discovery_client->Stop();
         return 1;
@@ -201,10 +209,12 @@ int main(int argc, char* argv[]) {
     const auto u2 = MakeInstance("user", 56002);
     const auto u3 = MakeInstance("user", 56003);
     const auto g1 = MakeInstance("group", 56054);
+    const auto f1 = MakeInstance("file", 56055);
     ZooKeeperServiceRegistrar r1(&owner1, u1, root);
     ZooKeeperServiceRegistrar r2(&owner2, u2, root);
     ZooKeeperServiceRegistrar r3(&owner3, u3, root);
     ZooKeeperServiceRegistrar group_registrar(&group_owner, g1, root);
+    ZooKeeperServiceRegistrar file_registrar(&file_owner, f1, root);
 
     if (!Expect(
             r1.Start(std::chrono::milliseconds(3000)),
@@ -243,9 +253,26 @@ int main(int argc, char* argv[]) {
             }),
             "group watch discovers GroupService"
         )) {
-        r1.Stop(); r2.Stop(); r3.Stop(); group_registrar.Stop();
+        r1.Stop(); r2.Stop(); r3.Stop(); group_registrar.Stop(); file_registrar.Stop();
         discovery->Stop();
-        owner1.Stop(); owner2.Stop(); owner3.Stop(); group_owner.Stop();
+        owner1.Stop(); owner2.Stop(); owner3.Stop(); group_owner.Stop(); file_owner.Stop();
+        discovery_client->Stop();
+        return 1;
+    }
+
+    if (!Expect(
+            file_registrar.Start(std::chrono::milliseconds(3000)),
+            "register FileService"
+        ) ||
+        !Expect(
+            WaitFor([&]() {
+                return HasTargets(discovery, {f1.target}, "file");
+            }),
+            "file watch discovers FileService"
+        )) {
+        r1.Stop(); r2.Stop(); r3.Stop(); group_registrar.Stop(); file_registrar.Stop();
+        discovery->Stop();
+        owner1.Stop(); owner2.Stop(); owner3.Stop(); group_owner.Stop(); file_owner.Stop();
         discovery_client->Stop();
         return 1;
     }
@@ -254,14 +281,25 @@ int main(int argc, char* argv[]) {
         discovery,
         discovery_config
     );
+    const auto file_endpoint = provider.Resolve(ServiceKind::kFile);
+    if (!Expect(
+            file_endpoint && file_endpoint->target == f1.target,
+            "ServiceKind::kFile resolves discovered FileService"
+        )) {
+        r1.Stop(); r2.Stop(); r3.Stop(); group_registrar.Stop(); file_registrar.Stop();
+        discovery->Stop();
+        owner1.Stop(); owner2.Stop(); owner3.Stop(); group_owner.Stop(); file_owner.Stop();
+        discovery_client->Stop();
+        return 1;
+    }
     const auto group_endpoint = provider.Resolve(ServiceKind::kGroup);
     if (!Expect(
             group_endpoint && group_endpoint->target == g1.target,
             "ServiceKind::kGroup resolves discovered GroupService"
         )) {
-        r1.Stop(); r2.Stop(); r3.Stop(); group_registrar.Stop();
+        r1.Stop(); r2.Stop(); r3.Stop(); group_registrar.Stop(); file_registrar.Stop();
         discovery->Stop();
-        owner1.Stop(); owner2.Stop(); owner3.Stop(); group_owner.Stop();
+        owner1.Stop(); owner2.Stop(); owner3.Stop(); group_owner.Stop(); file_owner.Stop();
         discovery_client->Stop();
         return 1;
     }
@@ -391,9 +429,9 @@ int main(int argc, char* argv[]) {
 
     discovery->Stop();
     r3.Stop();
-    group_registrar.Stop();
+    group_registrar.Stop(); file_registrar.Stop();
     Cleanup(&owner3, root);
-    group_owner.Stop();
+    group_owner.Stop(); file_owner.Stop();
     owner1.Stop();
     owner2.Stop();
     owner3.Stop();

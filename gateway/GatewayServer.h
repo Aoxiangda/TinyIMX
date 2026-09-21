@@ -35,6 +35,7 @@ class SocialRpcClient;
 class UserRpcClient;
 class MessageRpcClient;
 class GroupRpcClient;
+class FileRpcClient;
 struct GroupDeliveryWorkRpcRecord;
 }
 
@@ -205,6 +206,7 @@ public:
     void SetUserRpcClient(rpc::UserRpcClient* user_rpc_client);
     void SetMessageRpcClient(rpc::MessageRpcClient* message_rpc_client);
     void SetGroupRpcClient(rpc::GroupRpcClient* group_rpc_client);
+    void SetFileRpcClient(rpc::FileRpcClient* file_rpc_client);
     void SetFriendRepository(FriendRepository* repository);
     void SetFriendRequestRepository(
         FriendRequestRepository* repository
@@ -351,6 +353,11 @@ private:
     );
 
     void HandleGroupMessageSend(
+        const TcpConnectionPtr& connection,
+        const Packet& packet
+    );
+
+    void HandleFileControlRequest(
         const TcpConnectionPtr& connection,
         const Packet& packet
     );
@@ -621,6 +628,7 @@ private:
     bool HasUserRpcClient() const;
     bool HasMessageRpcClient() const;
     bool HasGroupRpcClient() const;
+    bool HasFileRpcClient() const;
     bool HasFriendRepository() const;
     bool HasFriendRequestRepository() const;
 
@@ -749,6 +757,9 @@ private:
     // M17-A3 GroupService RPC dependency. Non-owning; bootstrap keeps it
     // alive until BusinessExecutor drain completes.
     rpc::GroupRpcClient* group_rpc_client_{nullptr};
+
+    // M18-A2 FileService control-plane dependency. Non-owning.
+    rpc::FileRpcClient* file_rpc_client_{nullptr};
 
     std::atomic<std::uint64_t>
         next_internal_rpc_id_{1};

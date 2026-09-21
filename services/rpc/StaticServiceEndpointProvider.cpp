@@ -34,6 +34,7 @@ StaticServiceEndpointProvider::StaticServiceEndpointProvider(
           std::move(social_target),
           std::move(user_target),
           std::move(message_target),
+          std::string{},
           std::string{}
       ) {
 }
@@ -44,10 +45,27 @@ StaticServiceEndpointProvider::StaticServiceEndpointProvider(
     std::string message_target,
     std::string group_target
 )
+    : StaticServiceEndpointProvider(
+          std::move(social_target),
+          std::move(user_target),
+          std::move(message_target),
+          std::move(group_target),
+          std::string{}
+      ) {
+}
+
+StaticServiceEndpointProvider::StaticServiceEndpointProvider(
+    std::string social_target,
+    std::string user_target,
+    std::string message_target,
+    std::string group_target,
+    std::string file_target
+)
     : social_target_(std::move(social_target)),
       user_target_(std::move(user_target)),
       message_target_(std::move(message_target)),
-      group_target_(std::move(group_target)) {
+      group_target_(std::move(group_target)),
+      file_target_(std::move(file_target)) {
 }
 
 std::optional<ServiceEndpoint>
@@ -76,6 +94,12 @@ StaticServiceEndpointProvider::Resolve(
         case ServiceKind::kGroup:
             if (!group_target_.empty()) {
                 return ServiceEndpoint{group_target_};
+            }
+            break;
+
+        case ServiceKind::kFile:
+            if (!file_target_.empty()) {
+                return ServiceEndpoint{file_target_};
             }
             break;
     }

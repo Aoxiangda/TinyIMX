@@ -6,6 +6,7 @@
 #include "services/rpc/UserRpcClient.h"
 #include "services/rpc/MessageRpcClient.h"
 #include "services/rpc/GroupRpcClient.h"
+#include "services/rpc/FileRpcClient.h"
 #include "services/repository/FriendRequestRepository.h"
 #include "services/rpc/SocialRpcClient.h"
 #include "services/cache/OnlineStatusCache.h"
@@ -1274,6 +1275,151 @@ Json ExecuteGroupRpc(
     }
 }
 
+
+std::optional<tinyimx::MessageType> FileResponseType(tinyimx::MessageType type) {
+    using tinyimx::MessageType;
+    switch (type) {
+        case MessageType::kBeginFileUploadRequest: return MessageType::kBeginFileUploadResponse;
+        case MessageType::kGetFileUploadSessionRequest: return MessageType::kGetFileUploadSessionResponse;
+        case MessageType::kCancelFileUploadRequest: return MessageType::kCancelFileUploadResponse;
+        default: return std::nullopt;
+    }
+}
+
+const char* FileOperationName(tinyimx::MessageType type) noexcept {
+    using tinyimx::MessageType;
+    switch (type) {
+        case MessageType::kBeginFileUploadRequest: return "begin_upload";
+        case MessageType::kGetFileUploadSessionRequest: return "get_upload_session";
+        case MessageType::kCancelFileUploadRequest: return "cancel_upload";
+        default: return "unknown_file_operation";
+    }
+}
+
+const char* FileRpcErrorReason(tinyimx::rpc::RpcErrorCode code) noexcept {
+    using tinyimx::rpc::RpcErrorCode;
+    switch (code) {
+        case RpcErrorCode::kInvalidArgument: return "invalid_file_request";
+        case RpcErrorCode::kCancelled: return "file_request_cancelled";
+        case RpcErrorCode::kDeadlineExceeded: return "file_service_deadline_exceeded";
+        case RpcErrorCode::kNotFound: return "file_upload_not_found";
+        case RpcErrorCode::kPermissionDenied: return "file_permission_denied";
+        case RpcErrorCode::kUnauthenticated: return "not_logged_in";
+        case RpcErrorCode::kResourceExhausted: return "file_service_overloaded";
+        case RpcErrorCode::kFailedPrecondition: return "file_failed_precondition";
+        case RpcErrorCode::kUnavailable: return "file_service_unavailable";
+        case RpcErrorCode::kDataLoss: return "file_service_invalid_response";
+        default: return "file_service_error";
+    }
+}
+
+const char* FileStatusToString(tinyimx::rpc::FileRpcStatus value) noexcept {
+    using tinyimx::rpc::FileRpcStatus;
+    switch (value) {
+        case FileRpcStatus::kUploading: return "uploading";
+        case FileRpcStatus::kVerifying: return "verifying";
+        case FileRpcStatus::kAvailable: return "available";
+        case FileRpcStatus::kFailed: return "failed";
+        case FileRpcStatus::kCanceled: return "canceled";
+        case FileRpcStatus::kExpired: return "expired";
+        case FileRpcStatus::kDeleted: return "deleted";
+    }
+    return "unknown";
+}
+
+const char* UploadSessionStatusToString(tinyimx::rpc::UploadSessionRpcStatus value) noexcept {
+    using tinyimx::rpc::UploadSessionRpcStatus;
+    switch (value) {
+        case UploadSessionRpcStatus::kActive: return "active";
+        case UploadSessionRpcStatus::kFinalizing: return "finalizing";
+        case UploadSessionRpcStatus::kCompleted: return "completed";
+        case UploadSessionRpcStatus::kCanceled: return "canceled";
+        case UploadSessionRpcStatus::kExpired: return "expired";
+    }
+    return "unknown";
+}
+
+Json FileBundleToJson(const tinyimx::rpc::FileUploadBundleRpcView& bundle) {
+    return Json{
+        {"file", Json{
+            {"file_id", bundle.file.file_id}, {"owner_user_id", bundle.file.owner_user_id},
+            {"file_name", bundle.file.file_name}, {"content_type", bundle.file.content_type},
+            {"total_size", bundle.file.total_size}, {"checksum_algorithm", bundle.file.checksum_algorithm},
+            {"expected_checksum", bundle.file.expected_checksum}, {"verified_checksum", bundle.file.verified_checksum},
+            {"storage_backend", bundle.file.storage_backend}, {"storage_key", bundle.file.storage_key},
+            {"status", FileStatusToString(bundle.file.status)}, {"version", bundle.file.version},
+            {"created_at", bundle.file.created_at}, {"updated_at", bundle.file.updated_at},
+            {"available_at", bundle.file.available_at}, {"expires_at", bundle.file.expires_at}
+        }},
+        {"session", Json{
+            {"upload_id", bundle.session.upload_id}, {"file_id", bundle.session.file_id},
+            {"owner_user_id", bundle.session.owner_user_id}, {"client_upload_id", bundle.session.client_upload_id},
+            {"total_size", bundle.session.total_size}, {"chunk_size", bundle.session.chunk_size},
+            {"status", UploadSessionStatusToString(bundle.session.status)}, {"version", bundle.session.version},
+            {"created_at", bundle.session.created_at}, {"updated_at", bundle.session.updated_at},
+            {"expires_at", bundle.session.expires_at}, {"completed_at", bundle.session.completed_at}
+        }}
+    };
+}
+
+Json ExecuteFileRpc(
+    tinyimx::rpc::FileRpcClient* client,
+    tinyimx::MessageType type,
+    tinyimx::UserId actor_user_id,
+    const Json& body,
+    const tinyimx::rpc::RpcCallOptions& options
+) {
+    using namespace tinyimx::rpc;
+    if (!client || actor_user_id == 0 || !body.is_object())
+        return Json{{"success",false},{"reason","invalid_file_request"},{"message","invalid file request context"}};
+
+    if (type == tinyimx::MessageType::kBeginFileUploadRequest) {
+        BeginUploadRpcRequest request;
+        request.actor_user_id = actor_user_id;
+        if (!JsonStringField(body,"client_upload_id",&request.client_upload_id) ||
+            !JsonStringField(body,"file_name",&request.file_name) ||
+            !JsonPositiveU64(body,"total_size",&request.total_size) ||
+            !JsonStringField(body,"checksum_algorithm",&request.checksum_algorithm) ||
+            !JsonStringField(body,"expected_checksum",&request.expected_checksum)) {
+            return Json{{"success",false},{"reason","invalid_file_request"},{"message","invalid BeginUpload fields"}};
+        }
+        request.content_type = "application/octet-stream";
+        if (body.contains("content_type") && !JsonStringField(body,"content_type",&request.content_type))
+            return Json{{"success",false},{"reason","invalid_file_request"},{"message","invalid content_type"}};
+        if (!JsonOptionalU64(body,"preferred_chunk_size",&request.preferred_chunk_size))
+            return Json{{"success",false},{"reason","invalid_file_request"},{"message","invalid preferred_chunk_size"}};
+        const auto result = client->BeginUpload(request, options);
+        if (!result.ok()) return Json{{"success",false},{"reason",FileRpcErrorReason(result.status.code)},{"message",result.status.message}};
+        if (result.value->outcome == BeginUploadRpcOutcome::kIdempotencyConflict)
+            return Json{{"success",false},{"reason","idempotency_conflict"},{"message",result.value->message}};
+        Json response = FileBundleToJson(result.value->bundle);
+        response["success"] = true;
+        response["result"] = result.value->outcome == BeginUploadRpcOutcome::kCreated ? "created" : "reused";
+        response["message"] = result.value->message;
+        return response;
+    }
+
+    std::uint64_t upload_id = 0;
+    if (!JsonPositiveU64(body,"upload_id",&upload_id))
+        return Json{{"success",false},{"reason","invalid_file_request"},{"message","invalid upload_id"}};
+
+    if (type == tinyimx::MessageType::kGetFileUploadSessionRequest) {
+        const auto result = client->GetUploadSession({actor_user_id,upload_id}, options);
+        if (!result.ok()) return Json{{"success",false},{"reason",FileRpcErrorReason(result.status.code)},{"message",result.status.message}};
+        Json response = FileBundleToJson(result.value->bundle); response["success"] = true; return response;
+    }
+    if (type == tinyimx::MessageType::kCancelFileUploadRequest) {
+        const auto result = client->CancelUpload({actor_user_id,upload_id}, options);
+        if (!result.ok()) return Json{{"success",false},{"reason",FileRpcErrorReason(result.status.code)},{"message",result.status.message}};
+        Json response = FileBundleToJson(result.value->bundle);
+        response["success"] = true;
+        response["result"] = result.value->outcome == CancelUploadRpcOutcome::kApplied ? "applied" : "reused";
+        response["message"] = result.value->message;
+        return response;
+    }
+    return Json{{"success",false},{"reason","invalid_file_request"},{"message","unsupported file request"}};
+}
+
 }  // namespace
 
 namespace tinyimx {
@@ -1766,6 +1912,20 @@ void GatewayServer::SetGroupRpcClient(
 
 bool GatewayServer::HasGroupRpcClient() const {
     return group_rpc_client_ != nullptr;
+}
+
+void GatewayServer::SetFileRpcClient(
+    rpc::FileRpcClient* file_rpc_client
+) {
+    file_rpc_client_ = file_rpc_client;
+    LOG_INFO(
+        "gateway file rpc client attached"
+        << ", enabled=" << (file_rpc_client_ != nullptr)
+    );
+}
+
+bool GatewayServer::HasFileRpcClient() const {
+    return file_rpc_client_ != nullptr;
 }
 
 
@@ -3262,6 +3422,12 @@ void GatewayServer::HandlePacket(const TcpConnectionPtr& connection,
 
         case MessageType::kGroupMessageSendRequest:
             HandleGroupMessageSend(connection, packet);
+            break;
+
+        case MessageType::kBeginFileUploadRequest:
+        case MessageType::kGetFileUploadSessionRequest:
+        case MessageType::kCancelFileUploadRequest:
+            HandleFileControlRequest(connection, packet);
             break;
 
         case MessageType::kHeartbeat:
@@ -11161,6 +11327,116 @@ void GatewayServer::HandleGroupControlRequest(
         case BusinessSubmitStatus::kDeadlineExpired:
             rejected["reason"] = "business_deadline_expired";
             rejected["message"] = "group request deadline expired";
+            break;
+        case BusinessSubmitStatus::kShuttingDown:
+            rejected["reason"] = "business_runtime_shutting_down";
+            rejected["message"] = "business runtime shutting down";
+            break;
+        case BusinessSubmitStatus::kInvalidArgument:
+            rejected["reason"] = "business_runtime_unavailable";
+            rejected["message"] = "business runtime unavailable";
+            break;
+        case BusinessSubmitStatus::kAccepted:
+            return;
+    }
+    send_response(rejected);
+}
+
+
+void GatewayServer::HandleFileControlRequest(
+    const TcpConnectionPtr& connection,
+    const Packet& packet
+) {
+    const BusinessTimePoint request_received_at = BusinessClock::now();
+    const auto response_type = FileResponseType(packet.type);
+    if (!response_type.has_value()) {
+        SendPacket(connection, MakeErrorPacket(packet.seq, "unsupported file request type"));
+        return;
+    }
+
+    auto send_response = [this, connection, request_seq = packet.seq, type = *response_type](const Json& body) {
+        if (!connection || !connection->IsConnected()) return;
+        Packet response;
+        response.type = type;
+        response.seq = request_seq;
+        response.body = body.dump();
+        SendPacket(connection, response);
+    };
+
+    Json request_body;
+    std::string parse_error;
+    if (!ParseJsonBody(packet, &request_body, &parse_error) || !request_body.is_object()) {
+        send_response(Json{{"success",false},{"reason","invalid_json"},{"message","invalid file request json"}});
+        return;
+    }
+
+    const auto session_snapshot = session_manager_.FindSessionByConnection(connection);
+    if (!session_snapshot.has_value()) {
+        send_response(Json{{"success",false},{"reason","not_logged_in"},{"message","file request rejected: not logged in"}});
+        return;
+    }
+    if (!HasFileRpcClient()) {
+        send_response(Json{{"success",false},{"reason","file_service_unavailable"},{"message","file service unavailable"}});
+        return;
+    }
+    if (!HasBusinessExecutor()) {
+        send_response(Json{{"success",false},{"reason","business_runtime_unavailable"},{"message","business runtime unavailable"}});
+        return;
+    }
+
+    // Security boundary: actor identity is authoritative only from SessionManager.
+    // Any actor_user_id/owner_user_id supplied by the client body is ignored.
+    const UserId actor_user_id = session_snapshot->user_id;
+    const std::uint64_t rpc_id = next_internal_rpc_id_.fetch_add(1, std::memory_order_relaxed);
+    const std::string operation = FileOperationName(packet.type);
+    const std::string rpc_request_id = options_.gateway_id + ":file:" + operation + ":req:" + std::to_string(rpc_id);
+    const std::string trace_id = options_.gateway_id + ":file:trace:" + std::to_string(rpc_id) + ":client-seq:" + std::to_string(packet.seq);
+
+    const BusinessSubmitStatus submit_status = SubmitSessionBusinessTask(
+        business_executor_, &session_manager_, connection, *session_snapshot,
+        packet.seq, request_received_at,
+        std::string("gateway.file.") + operation + ".rpc",
+        BusinessCancellationPolicy::kCancelable,
+        std::nullopt,
+        [this, connection, request_seq = packet.seq, response_type = *response_type,
+         request_type = packet.type, actor_user_id,
+         request_body = std::move(request_body), rpc_request_id, trace_id]
+        (const BusinessExecutor::ExecutionContext& context) mutable -> BusinessExecutor::Completion {
+            if (context.CancellationRequested()) return {};
+            rpc::RpcCallOptions call_options;
+            call_options.request_id = rpc_request_id;
+            call_options.trace_id = trace_id;
+            call_options.caller_service = "gateway";
+            call_options.caller_instance = options_.gateway_id;
+            const auto remaining = context.Request().RemainingTime();
+            call_options.remaining_timeout = remaining == std::chrono::milliseconds::max()
+                ? std::chrono::milliseconds{0} : remaining;
+
+            Json async_body = ExecuteFileRpc(
+                file_rpc_client_, request_type, actor_user_id, request_body, call_options);
+            if (context.CancellationRequested()) return {};
+            return BusinessExecutor::Completion(
+                [this, connection, request_seq, response_type, body = std::move(async_body)]() mutable {
+                    if (!connection || !connection->IsConnected()) return;
+                    Packet response;
+                    response.type = response_type;
+                    response.seq = request_seq;
+                    response.body = body.dump();
+                    SendPacket(connection, response);
+                });
+        });
+
+    if (submit_status == BusinessSubmitStatus::kAccepted) return;
+    Json rejected{{"success",false}};
+    switch (submit_status) {
+        case BusinessSubmitStatus::kOverloaded:
+        case BusinessSubmitStatus::kHotKeyOverloaded:
+            rejected["reason"] = "business_runtime_overloaded";
+            rejected["message"] = "business runtime overloaded";
+            break;
+        case BusinessSubmitStatus::kDeadlineExpired:
+            rejected["reason"] = "business_deadline_expired";
+            rejected["message"] = "file request deadline expired";
             break;
         case BusinessSubmitStatus::kShuttingDown:
             rejected["reason"] = "business_runtime_shutting_down";
