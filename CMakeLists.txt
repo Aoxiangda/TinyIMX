@@ -653,6 +653,7 @@ add_library(tinyimx_repository
     services/repository/FriendRepository.cpp
     services/repository/FriendRequestRepository.cpp
     services/repository/GroupRepository.cpp
+    services/repository/FileRepository.cpp
 )
 
 target_include_directories(tinyimx_repository PUBLIC
@@ -1402,6 +1403,11 @@ include(
 # mute/ownership transitions, transactional outbox, and idempotent mutations.
 include(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXGroupService.cmake"
+)
+
+# M18-A1: File domain foundation, durable upload session, and FileService gRPC.
+include(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXFileService.cmake"
 )
 
 # M16-B: isolated RocketMQ producer/consumer transport executables.

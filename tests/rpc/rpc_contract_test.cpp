@@ -12,6 +12,8 @@
 #include "tinyimx/message/v1/message_service.pb.h"
 #include "tinyimx/group/v1/group_service.grpc.pb.h"
 #include "tinyimx/group/v1/group_service.pb.h"
+#include "tinyimx/file/v1/file_service.grpc.pb.h"
+#include "tinyimx/file/v1/file_service.pb.h"
 
 namespace {
 
@@ -571,6 +573,74 @@ int main() {
   Expect(FindField(prepare_send_descriptor, "recipient_user_ids") != nullptr &&
              FindField(prepare_send_descriptor, "recipient_user_ids")->number() == 5,
          "PrepareGroupMessageSendResponse.recipient_user_ids frozen at 5");
+  // M18-A1 FileService control-plane contract gate. Payload/chunk transport
+  // deliberately remains outside this contract until M18-B.
+  using tinyimx::file::v1::BeginUploadRequest;
+  using tinyimx::file::v1::FileService;
+  using tinyimx::file::v1::UploadSessionRecord;
+
+  static_assert(std::is_class_v<FileService>);
+  static_assert(std::is_class_v<FileService::StubInterface>);
+
+  BeginUploadRequest file_begin_request;
+  *file_begin_request.mutable_meta() = meta;
+  file_begin_request.set_actor_user_id(10001);
+  file_begin_request.set_client_upload_id("m18-a1-upload-1");
+  file_begin_request.set_file_name("report.pdf");
+  file_begin_request.set_content_type("application/pdf");
+  file_begin_request.set_total_size(4096);
+  file_begin_request.set_checksum_algorithm("sha256");
+  file_begin_request.set_expected_checksum(
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  file_begin_request.set_preferred_chunk_size(4ULL * 1024ULL * 1024ULL);
+
+  const auto* file_begin_descriptor = BeginUploadRequest::descriptor();
+  Expect(FindField(file_begin_descriptor, "meta") != nullptr &&
+             FindField(file_begin_descriptor, "meta")->number() == 1,
+         "BeginUploadRequest.meta field number frozen at 1");
+  Expect(FindField(file_begin_descriptor, "actor_user_id") != nullptr &&
+             FindField(file_begin_descriptor, "actor_user_id")->number() == 2,
+         "BeginUploadRequest.actor_user_id field number frozen at 2");
+  Expect(FindField(file_begin_descriptor, "client_upload_id") != nullptr &&
+             FindField(file_begin_descriptor, "client_upload_id")->number() == 3,
+         "BeginUploadRequest.client_upload_id field number frozen at 3");
+  Expect(FindField(file_begin_descriptor, "expected_checksum") != nullptr &&
+             FindField(file_begin_descriptor, "expected_checksum")->number() == 8,
+         "BeginUploadRequest.expected_checksum field number frozen at 8");
+  Expect(FindField(file_begin_descriptor, "preferred_chunk_size") != nullptr &&
+             FindField(file_begin_descriptor, "preferred_chunk_size")->number() == 9,
+         "BeginUploadRequest.preferred_chunk_size field number frozen at 9");
+
+  UploadSessionRecord upload_session_record;
+  upload_session_record.set_upload_id(77);
+  upload_session_record.set_file_id(7001);
+  upload_session_record.set_owner_user_id(10001);
+  upload_session_record.set_status(
+      tinyimx::file::v1::UPLOAD_SESSION_STATUS_ACTIVE);
+  Expect(upload_session_record.upload_id() == 77 &&
+             upload_session_record.status() ==
+                 tinyimx::file::v1::UPLOAD_SESSION_STATUS_ACTIVE,
+         "UploadSessionRecord durable identity/state typed fields work");
+
+  const auto* file_service =
+      google::protobuf::DescriptorPool::generated_pool()->FindServiceByName(
+          "tinyimx.file.v1.FileService");
+  Expect(file_service != nullptr && file_service->method_count() == 3,
+         "FileService 3-method M18-A1 control-plane contract frozen");
+  static const char* kExpectedFileMethods[] = {
+      "BeginUpload",
+      "GetUploadSession",
+      "CancelUpload",
+  };
+  if (file_service != nullptr) {
+    for (int i = 0; i < file_service->method_count() && i < 3; ++i) {
+      const std::string label =
+          std::string("FileService method frozen: ") + kExpectedFileMethods[i];
+      Expect(file_service->method(i)->name() == kExpectedFileMethods[i],
+             label.c_str());
+    }
+  }
+
   std::cout << "total_failed=" << g_failed << '\n';
 
   return g_failed == 0 ? 0 : 1;

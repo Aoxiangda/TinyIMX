@@ -1,0 +1,124 @@
+syntax = "proto3";
+
+package tinyimx.file.v1;
+
+import "tinyimx/common/v1/common.proto";
+
+// M18-A1 control-plane contract only. File payload/chunk transfer is introduced
+// in M18-B. actor_user_id is an authenticated identity injected by Gateway;
+// Internet clients must never be authoritative for this field.
+service FileService {
+    rpc BeginUpload(BeginUploadRequest) returns (BeginUploadResponse);
+    rpc GetUploadSession(GetUploadSessionRequest) returns (GetUploadSessionResponse);
+    rpc CancelUpload(CancelUploadRequest) returns (CancelUploadResponse);
+}
+
+enum FileStatus {
+    FILE_STATUS_UNSPECIFIED = 0;
+    FILE_STATUS_UPLOADING = 1;
+    FILE_STATUS_VERIFYING = 2;
+    FILE_STATUS_AVAILABLE = 3;
+    FILE_STATUS_FAILED = 4;
+    FILE_STATUS_CANCELED = 5;
+    FILE_STATUS_EXPIRED = 6;
+    FILE_STATUS_DELETED = 7;
+}
+
+enum UploadSessionStatus {
+    UPLOAD_SESSION_STATUS_UNSPECIFIED = 0;
+    UPLOAD_SESSION_STATUS_ACTIVE = 1;
+    UPLOAD_SESSION_STATUS_FINALIZING = 2;
+    UPLOAD_SESSION_STATUS_COMPLETED = 3;
+    UPLOAD_SESSION_STATUS_CANCELED = 4;
+    UPLOAD_SESSION_STATUS_EXPIRED = 5;
+}
+
+enum BeginUploadResult {
+    BEGIN_UPLOAD_RESULT_UNSPECIFIED = 0;
+    BEGIN_UPLOAD_RESULT_CREATED = 1;
+    BEGIN_UPLOAD_RESULT_REUSED = 2;
+    BEGIN_UPLOAD_RESULT_IDEMPOTENCY_CONFLICT = 3;
+}
+
+enum CancelUploadResult {
+    CANCEL_UPLOAD_RESULT_UNSPECIFIED = 0;
+    CANCEL_UPLOAD_RESULT_APPLIED = 1;
+    CANCEL_UPLOAD_RESULT_REUSED = 2;
+}
+
+message FileRecord {
+    uint64 file_id = 1;
+    uint64 owner_user_id = 2;
+    string file_name = 3;
+    string content_type = 4;
+    uint64 total_size = 5;
+    string checksum_algorithm = 6;
+    string expected_checksum = 7;
+    string verified_checksum = 8;
+    string storage_backend = 9;
+    string storage_key = 10;
+    FileStatus status = 11;
+    uint64 version = 12;
+    string created_at = 13;
+    string updated_at = 14;
+    string available_at = 15;
+    string expires_at = 16;
+}
+
+message UploadSessionRecord {
+    uint64 upload_id = 1;
+    uint64 file_id = 2;
+    uint64 owner_user_id = 3;
+    string client_upload_id = 4;
+    uint64 total_size = 5;
+    uint64 chunk_size = 6;
+    UploadSessionStatus status = 7;
+    uint64 version = 8;
+    string created_at = 9;
+    string updated_at = 10;
+    string expires_at = 11;
+    string completed_at = 12;
+}
+
+message BeginUploadRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    string client_upload_id = 3;
+    string file_name = 4;
+    string content_type = 5;
+    uint64 total_size = 6;
+    string checksum_algorithm = 7;
+    string expected_checksum = 8;
+    uint64 preferred_chunk_size = 9;
+}
+
+message BeginUploadResponse {
+    BeginUploadResult result = 1;
+    FileRecord file = 2;
+    UploadSessionRecord session = 3;
+    string message = 4;
+}
+
+message GetUploadSessionRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    uint64 upload_id = 3;
+}
+
+message GetUploadSessionResponse {
+    FileRecord file = 1;
+    UploadSessionRecord session = 2;
+}
+
+message CancelUploadRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    uint64 upload_id = 3;
+}
+
+message CancelUploadResponse {
+    CancelUploadResult result = 1;
+    FileRecord file = 2;
+    UploadSessionRecord session = 3;
+    string message = 4;
+}
