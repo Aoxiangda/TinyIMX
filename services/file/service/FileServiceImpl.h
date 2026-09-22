@@ -45,6 +45,18 @@ public:
         tinyimx::file::v1::FinalizeUploadResponse* response
     ) override;
 
+    grpc::Status GetDownloadInfo(
+        grpc::ServerContext* context,
+        const tinyimx::file::v1::GetDownloadInfoRequest* request,
+        tinyimx::file::v1::GetDownloadInfoResponse* response
+    ) override;
+
+    grpc::Status ReadFileRange(
+        grpc::ServerContext* context,
+        const tinyimx::file::v1::ReadFileRangeRequest* request,
+        tinyimx::file::v1::ReadFileRangeResponse* response
+    ) override;
+
 private:
     FileApplicationService* application_service_{nullptr};  // non-owning
 };

@@ -18,6 +18,10 @@ public:
         const ComposeObjectRequest& request
     ) override;
 
+    [[nodiscard]] ReadObjectRangeResult ReadObjectRange(
+        const ReadObjectRangeRequest& request
+    ) override;
+
     [[nodiscard]] const std::filesystem::path& Root() const noexcept {
         return root_;
     }

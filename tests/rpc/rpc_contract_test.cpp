@@ -625,8 +625,8 @@ int main() {
   const auto* file_service =
       google::protobuf::DescriptorPool::generated_pool()->FindServiceByName(
           "tinyimx.file.v1.FileService");
-  Expect(file_service != nullptr && file_service->method_count() == 6,
-         "FileService 6-method M18-B2 contract frozen");
+  Expect(file_service != nullptr && file_service->method_count() == 8,
+         "FileService 8-method M18-C1 contract frozen");
   static const char* kExpectedFileMethods[] = {
       "BeginUpload",
       "GetUploadSession",
@@ -634,9 +634,11 @@ int main() {
       "UploadChunk",
       "GetUploadProgress",
       "FinalizeUpload",
+      "GetDownloadInfo",
+      "ReadFileRange",
   };
   if (file_service != nullptr) {
-    for (int i = 0; i < file_service->method_count() && i < 6; ++i) {
+    for (int i = 0; i < file_service->method_count() && i < 8; ++i) {
       const std::string label =
           std::string("FileService method frozen: ") + kExpectedFileMethods[i];
       Expect(file_service->method(i)->name() == kExpectedFileMethods[i],
@@ -682,6 +684,32 @@ int main() {
   Expect(FindField(finalize_response_descriptor, "verified_checksum") != nullptr &&
              FindField(finalize_response_descriptor, "verified_checksum")->number() == 5,
          "FinalizeUploadResponse.verified_checksum frozen at 5");
+
+  using tinyimx::file::v1::GetDownloadInfoRequest;
+  using tinyimx::file::v1::ReadFileRangeRequest;
+  using tinyimx::file::v1::ReadFileRangeResponse;
+  const auto* download_info_request_descriptor = GetDownloadInfoRequest::descriptor();
+  Expect(FindField(download_info_request_descriptor, "actor_user_id") != nullptr &&
+             FindField(download_info_request_descriptor, "actor_user_id")->number() == 2 &&
+             FindField(download_info_request_descriptor, "file_id") != nullptr &&
+             FindField(download_info_request_descriptor, "file_id")->number() == 3,
+         "GetDownloadInfoRequest authorization identity fields frozen");
+  const auto* read_range_request_descriptor = ReadFileRangeRequest::descriptor();
+  Expect(FindField(read_range_request_descriptor, "offset") != nullptr &&
+             FindField(read_range_request_descriptor, "offset")->number() == 4 &&
+             FindField(read_range_request_descriptor, "length") != nullptr &&
+             FindField(read_range_request_descriptor, "length")->number() == 5 &&
+             FindField(read_range_request_descriptor, "if_match_sha256") != nullptr &&
+             FindField(read_range_request_descriptor, "if_match_sha256")->number() == 6,
+         "ReadFileRangeRequest resumable range contract frozen");
+  const auto* read_range_response_descriptor = ReadFileRangeResponse::descriptor();
+  Expect(FindField(read_range_response_descriptor, "data") != nullptr &&
+             FindField(read_range_response_descriptor, "data")->number() == 3 &&
+             FindField(read_range_response_descriptor, "range_sha256") != nullptr &&
+             FindField(read_range_response_descriptor, "range_sha256")->number() == 4 &&
+             FindField(read_range_response_descriptor, "next_offset") != nullptr &&
+             FindField(read_range_response_descriptor, "next_offset")->number() == 6,
+         "ReadFileRangeResponse integrity/resume fields frozen");
 
   std::cout << "total_failed=" << g_failed << '\n';
 

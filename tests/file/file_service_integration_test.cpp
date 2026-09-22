@@ -7,6 +7,7 @@
 #include <grpcpp/grpcpp.h>
 #include <openssl/evp.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
@@ -160,6 +161,25 @@ public:
         return result;
     }
 
+    tinyimx::file::GetDownloadFileResult GetDownloadFile(
+        const tinyimx::file::GetDownloadInfoQuery& query
+    ) override {
+        tinyimx::file::GetDownloadFileResult result;
+        if (query.actor_user_id != 10001 || query.file_id != 7077) {
+            result.status = tinyimx::file::FileApplicationStatus::kNotFound;
+            result.message = "not found";
+            return result;
+        }
+        auto bundle = MakeBundle(query.actor_user_id, 77);
+        bundle.file.status = tinyimx::file::FileStatus::kAvailable;
+        bundle.file.verified_checksum = bundle.file.expected_checksum;
+        bundle.file.available_at = "2026-09-22 00:00:00.000";
+        result.status = tinyimx::file::FileApplicationStatus::kSucceeded;
+        result.file = bundle.file;
+        result.message = "download file";
+        return result;
+    }
+
     static tinyimx::file::UploadBundleView MakeBundle(
         std::uint64_t actor_user_id, std::uint64_t upload_id
     ) {
@@ -221,6 +241,8 @@ public:
     std::string last_client_upload_id;
 };
 
+std::string Sha256Hex(const std::string& input);
+
 class FakeStorage final : public tinyimx::file::FileStoragePort {
 public:
     tinyimx::file::StoreChunkResult StoreChunkAtomically(
@@ -242,6 +264,21 @@ public:
         result.bytes_written = request.expected_total_size;
         result.verified_sha256 = request.expected_sha256;
         result.message = "composed";
+        return result;
+    }
+    tinyimx::file::ReadObjectRangeResult ReadObjectRange(
+        const tinyimx::file::ReadObjectRangeRequest& request
+    ) override {
+        tinyimx::file::ReadObjectRangeResult result;
+        result.status = tinyimx::file::FileStorageStatus::kSucceeded;
+        result.offset = request.offset;
+        const std::uint64_t size = std::min(
+            request.length, request.expected_total_size - request.offset
+        );
+        result.data.assign(static_cast<std::size_t>(size), 'D');
+        result.range_sha256 = Sha256Hex(result.data);
+        result.eof = request.offset + size == request.expected_total_size;
+        result.message = "range";
         return result;
     }
 };
@@ -389,6 +426,52 @@ int main() {
         finalize_response.session().status() == tinyimx::file::v1::UPLOAD_SESSION_STATUS_COMPLETED &&
         finalize_response.verified_checksum() == std::string(64, 'a'),
         "FileService.RealGrpcFinalizeUpload") && ok;
+
+    tinyimx::file::v1::GetDownloadInfoRequest download_info_request;
+    download_info_request.set_actor_user_id(10001);
+    download_info_request.set_file_id(7077);
+    grpc::ClientContext download_info_context;
+    tinyimx::file::v1::GetDownloadInfoResponse download_info_response;
+    const auto download_info_status = stub->GetDownloadInfo(
+        &download_info_context, download_info_request, &download_info_response
+    );
+    ok = Expect(download_info_status.ok() &&
+        download_info_response.info().file_id() == 7077 &&
+        download_info_response.info().total_size() == 1024 &&
+        download_info_response.info().verified_checksum() == std::string(64, 'a'),
+        "FileService.RealGrpcGetDownloadInfo") && ok;
+
+    tinyimx::file::v1::ReadFileRangeRequest range_request;
+    range_request.set_actor_user_id(10001);
+    range_request.set_file_id(7077);
+    range_request.set_offset(256);
+    range_request.set_length(512);
+    range_request.set_if_match_sha256(std::string(64, 'a'));
+    grpc::ClientContext range_context;
+    tinyimx::file::v1::ReadFileRangeResponse range_response;
+    const auto range_status = stub->ReadFileRange(&range_context, range_request, &range_response);
+    ok = Expect(range_status.ok() && range_response.offset() == 256 &&
+        range_response.data().size() == 512 && range_response.next_offset() == 768 &&
+        !range_response.eof() && range_response.range_sha256().size() == 64,
+        "FileService.RealGrpcReadFileRange") && ok;
+
+    range_request.set_offset(1024);
+    grpc::ClientContext range_oob_context;
+    tinyimx::file::v1::ReadFileRangeResponse range_oob_response;
+    const auto range_oob_status = stub->ReadFileRange(
+        &range_oob_context, range_request, &range_oob_response
+    );
+    ok = Expect(range_oob_status.error_code() == grpc::StatusCode::OUT_OF_RANGE,
+        "FileService.DownloadRangeOutOfRangeMapping") && ok;
+
+    download_info_request.set_actor_user_id(20002);
+    grpc::ClientContext unauthorized_context;
+    tinyimx::file::v1::GetDownloadInfoResponse unauthorized_response;
+    const auto unauthorized_status = stub->GetDownloadInfo(
+        &unauthorized_context, download_info_request, &unauthorized_response
+    );
+    ok = Expect(unauthorized_status.error_code() == grpc::StatusCode::NOT_FOUND,
+        "FileService.DownloadAuthorizationHidesExistence") && ok;
 
     get.set_upload_id(999);
     grpc::ClientContext missing_context;

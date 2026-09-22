@@ -125,6 +125,20 @@ target_link_libraries(file_finalize_integration_tests PRIVATE
   OpenSSL::Crypto
 )
 
+add_executable(file_download_integration_tests
+  tests/file/file_download_integration_test.cpp
+)
+target_compile_features(file_download_integration_tests PRIVATE cxx_std_20)
+target_link_libraries(file_download_integration_tests PRIVATE
+  tinyimx_config
+  tinyimx_logging
+  tinyimx_db
+  tinyimx_repository
+  tinyimx_file_core
+  tinyimx_file_storage
+  OpenSSL::Crypto
+)
+
 # External-MySQL test: intentionally not added to ordinary CTest. Apply
 # migration 009 and run explicitly in the M18-A1 acceptance workflow.
 

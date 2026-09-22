@@ -47,6 +47,10 @@ public:
     [[nodiscard]] virtual FailFinalizeChecksumResult FailFinalizeChecksum(
         const FailFinalizeChecksumCommand& command
     ) = 0;
+
+    [[nodiscard]] virtual GetDownloadFileResult GetDownloadFile(
+        const GetDownloadInfoQuery& query
+    ) = 0;
 };
 
 }  // namespace tinyimx::file

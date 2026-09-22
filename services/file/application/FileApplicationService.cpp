@@ -19,6 +19,7 @@ constexpr std::uint64_t kDefaultChunkSize = 4ULL * 1024ULL * 1024ULL;
 constexpr std::uint64_t kMinChunkSize = 256ULL * 1024ULL;
 constexpr std::uint64_t kMaxChunkSize = 8ULL * 1024ULL * 1024ULL;
 constexpr std::uint64_t kChunkAlignment = 64ULL * 1024ULL;
+constexpr std::uint64_t kMaxDownloadRangeSize = 1ULL * 1024ULL * 1024ULL;
 
 std::string Trim(std::string value) {
     auto not_space = [](unsigned char ch) { return !std::isspace(ch); };
@@ -172,6 +173,46 @@ FinalizeUploadResult FinalizeFailure(FileApplicationStatus status, std::string m
     result.status = status;
     result.message = std::move(message);
     return result;
+}
+
+GetDownloadInfoResult DownloadInfoFailure(
+    FileApplicationStatus status,
+    std::string message
+) {
+    GetDownloadInfoResult result;
+    result.status = status;
+    result.message = std::move(message);
+    return result;
+}
+
+ReadFileRangeResult RangeFailure(
+    FileApplicationStatus status,
+    std::string message
+) {
+    ReadFileRangeResult result;
+    result.status = status;
+    result.message = std::move(message);
+    return result;
+}
+
+std::optional<DownloadInfoView> BuildDownloadInfo(const FileView& file) {
+    if (file.file_id == 0 || file.owner_user_id == 0 || file.total_size == 0 ||
+        file.status != FileStatus::kAvailable || file.checksum_algorithm != "sha256" ||
+        !ValidSha256Hex(file.expected_checksum) || !ValidSha256Hex(file.verified_checksum) ||
+        file.expected_checksum != file.verified_checksum || file.storage_backend.empty() ||
+        file.storage_key.empty() || file.version == 0 || file.available_at.empty()) {
+        return std::nullopt;
+    }
+    DownloadInfoView info;
+    info.file_id = file.file_id;
+    info.file_name = file.file_name;
+    info.content_type = file.content_type;
+    info.total_size = file.total_size;
+    info.checksum_algorithm = file.checksum_algorithm;
+    info.verified_checksum = file.verified_checksum;
+    info.version = file.version;
+    info.available_at = file.available_at;
+    return info;
 }
 
 }  // namespace
@@ -540,6 +581,167 @@ FinalizeUploadResult FileApplicationService::FinalizeUpload(
     result.message = completed.outcome == CompleteFinalizeOutcome::kCompleted
         ? "final object atomically published and durable state marked AVAILABLE"
         : "FinalizeUpload response-loss retry reused COMPLETED/AVAILABLE state";
+    return result;
+}
+
+GetDownloadInfoResult FileApplicationService::GetDownloadInfo(
+    const GetDownloadInfoQuery& query
+) {
+    if (query.actor_user_id == 0 || query.file_id == 0) {
+        return DownloadInfoFailure(
+            FileApplicationStatus::kInvalidArgument,
+            "actor_user_id and file_id must be non-zero"
+        );
+    }
+    if (repository_ == nullptr) {
+        return DownloadInfoFailure(
+            FileApplicationStatus::kStorageError,
+            "file repository port is unavailable"
+        );
+    }
+
+    const auto found = repository_->GetDownloadFile(query);
+    if (!found.Found()) {
+        return DownloadInfoFailure(found.status, found.message);
+    }
+    const auto& file = *found.file;
+    if (file.file_id != query.file_id || file.owner_user_id != query.actor_user_id) {
+        return DownloadInfoFailure(
+            FileApplicationStatus::kInvalidRecord,
+            "download repository returned mismatched file ownership"
+        );
+    }
+    if (file.status != FileStatus::kAvailable) {
+        return DownloadInfoFailure(
+            FileApplicationStatus::kFailedPrecondition,
+            "only AVAILABLE files may be downloaded"
+        );
+    }
+    const auto info = BuildDownloadInfo(file);
+    if (!info.has_value()) {
+        return DownloadInfoFailure(
+            FileApplicationStatus::kInvalidRecord,
+            "AVAILABLE file metadata/checksum invariants are invalid"
+        );
+    }
+
+    GetDownloadInfoResult result;
+    result.status = FileApplicationStatus::kSucceeded;
+    result.info = *info;
+    result.message = "download metadata authorized";
+    return result;
+}
+
+ReadFileRangeResult FileApplicationService::ReadFileRange(ReadFileRangeQuery query) {
+    query.if_match_sha256 = Lower(Trim(std::move(query.if_match_sha256)));
+    if (query.actor_user_id == 0 || query.file_id == 0) {
+        return RangeFailure(
+            FileApplicationStatus::kInvalidArgument,
+            "actor_user_id and file_id must be non-zero"
+        );
+    }
+    if (query.length == 0 || query.length > kMaxDownloadRangeSize) {
+        return RangeFailure(
+            FileApplicationStatus::kInvalidArgument,
+            "download range length must be 1..1MiB"
+        );
+    }
+    if (!query.if_match_sha256.empty() && !ValidSha256Hex(query.if_match_sha256)) {
+        return RangeFailure(
+            FileApplicationStatus::kInvalidArgument,
+            "if_match_sha256 must be empty or a 64-character SHA-256 digest"
+        );
+    }
+    if (repository_ == nullptr || storage_ == nullptr) {
+        return RangeFailure(
+            FileApplicationStatus::kStorageError,
+            "download repository/storage dependency is unavailable"
+        );
+    }
+
+    const auto found = repository_->GetDownloadFile({query.actor_user_id, query.file_id});
+    if (!found.Found()) {
+        return RangeFailure(found.status, found.message);
+    }
+    const auto& file = *found.file;
+    if (file.file_id != query.file_id || file.owner_user_id != query.actor_user_id) {
+        return RangeFailure(
+            FileApplicationStatus::kInvalidRecord,
+            "download repository returned mismatched file ownership"
+        );
+    }
+    if (file.status != FileStatus::kAvailable) {
+        return RangeFailure(
+            FileApplicationStatus::kFailedPrecondition,
+            "only AVAILABLE files may be downloaded"
+        );
+    }
+    const auto info = BuildDownloadInfo(file);
+    if (!info.has_value()) {
+        return RangeFailure(
+            FileApplicationStatus::kInvalidRecord,
+            "AVAILABLE file metadata/checksum invariants are invalid"
+        );
+    }
+    if (!query.if_match_sha256.empty() && query.if_match_sha256 != info->verified_checksum) {
+        return RangeFailure(
+            FileApplicationStatus::kFailedPrecondition,
+            "download validator no longer matches the AVAILABLE object"
+        );
+    }
+    if (query.offset >= info->total_size) {
+        return RangeFailure(
+            FileApplicationStatus::kOutOfRange,
+            "download offset must be smaller than total_size"
+        );
+    }
+    const std::uint64_t effective_length = std::min(
+        query.length, info->total_size - query.offset
+    );
+
+    const auto read = storage_->ReadObjectRange({
+        file.storage_key, query.offset, effective_length, info->total_size
+    });
+    if (!read.Succeeded()) {
+        if (read.status == FileStorageStatus::kInvalidArgument) {
+            return RangeFailure(FileApplicationStatus::kInvalidArgument, read.message);
+        }
+        if (read.status == FileStorageStatus::kNotFound ||
+            read.status == FileStorageStatus::kDataLoss) {
+            return RangeFailure(
+                FileApplicationStatus::kInvalidRecord,
+                read.message.empty() ? "AVAILABLE storage object is missing or corrupt" : read.message
+            );
+        }
+        return RangeFailure(
+            FileApplicationStatus::kStorageError,
+            read.message.empty() ? "storage range read failed" : read.message
+        );
+    }
+
+    const std::uint64_t bytes_read = static_cast<std::uint64_t>(read.data.size());
+    const std::string actual_range_sha256 = Sha256Hex(read.data);
+    if (read.offset != query.offset || bytes_read != effective_length || bytes_read == 0 ||
+        !ValidSha256Hex(read.range_sha256) || actual_range_sha256.empty() ||
+        actual_range_sha256 != read.range_sha256 ||
+        read.eof != (query.offset + bytes_read == info->total_size)) {
+        return RangeFailure(
+            FileApplicationStatus::kInvalidRecord,
+            "storage range result violates immutable object invariants"
+        );
+    }
+
+    ReadFileRangeResult result;
+    result.status = FileApplicationStatus::kSucceeded;
+    result.info = *info;
+    result.offset = query.offset;
+    result.data = read.data;
+    result.range_sha256 = read.range_sha256;
+    result.eof = read.eof;
+    result.next_offset = query.offset + bytes_read;
+    result.message = result.eof
+        ? "final download range read"
+        : "download range read; resume from next_offset after reconnect";
     return result;
 }
 

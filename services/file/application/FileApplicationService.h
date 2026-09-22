@@ -30,6 +30,12 @@ public:
     [[nodiscard]] FinalizeUploadResult FinalizeUpload(
         const FinalizeUploadCommand& command
     );
+    [[nodiscard]] GetDownloadInfoResult GetDownloadInfo(
+        const GetDownloadInfoQuery& query
+    );
+    [[nodiscard]] ReadFileRangeResult ReadFileRange(
+        ReadFileRangeQuery query
+    );
 
 private:
     FileRepositoryPort* repository_{nullptr};  // non-owning

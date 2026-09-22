@@ -1,11 +1,30 @@
 #include "services/file/application/FileApplicationService.h"
 #include "services/file/storage/FileStoragePort.h"
 
+#include <openssl/evp.h>
+
 #include <cstdint>
 #include <iostream>
+#include <sstream>
+#include <iomanip>
 #include <string>
 
 namespace {
+
+
+std::string Sha256Hex(const std::string& input) {
+    unsigned char digest[EVP_MAX_MD_SIZE]{};
+    unsigned int size = 0;
+    if (EVP_Digest(input.data(), input.size(), digest, &size, EVP_sha256(), nullptr) != 1) {
+        return {};
+    }
+    std::ostringstream output;
+    output << std::hex << std::setfill('0');
+    for (unsigned int i = 0; i < size; ++i) {
+        output << std::setw(2) << static_cast<unsigned int>(digest[i]);
+    }
+    return output.str();
+}
 
 class FakeFileRepository final : public tinyimx::file::FileRepositoryPort {
 public:
@@ -18,6 +37,7 @@ public:
     tinyimx::file::FinalizePreparationResult prepare_result;
     tinyimx::file::CompleteFinalizeResult complete_result;
     tinyimx::file::FailFinalizeChecksumResult fail_finalize_result;
+    tinyimx::file::GetDownloadFileResult download_result;
 
     tinyimx::file::BeginUploadCommand last_begin;
     tinyimx::file::GetUploadSessionQuery last_get;
@@ -27,6 +47,7 @@ public:
     tinyimx::file::GetUploadProgressQuery last_snapshot;
     tinyimx::file::FinalizeUploadCommand last_prepare;
     tinyimx::file::CompleteFinalizeCommand last_complete;
+    tinyimx::file::GetDownloadInfoQuery last_download;
 
     tinyimx::file::BeginUploadResult BeginUpload(
         const tinyimx::file::BeginUploadCommand& command
@@ -63,6 +84,10 @@ public:
     tinyimx::file::FailFinalizeChecksumResult FailFinalizeChecksum(
         const tinyimx::file::FailFinalizeChecksumCommand&
     ) override { return fail_finalize_result; }
+
+    tinyimx::file::GetDownloadFileResult GetDownloadFile(
+        const tinyimx::file::GetDownloadInfoQuery& query
+    ) override { last_download = query; return download_result; }
 };
 
 class FakeStorage final : public tinyimx::file::FileStoragePort {
@@ -94,13 +119,39 @@ public:
         return result;
     }
 
+    tinyimx::file::ReadObjectRangeResult ReadObjectRange(
+        const tinyimx::file::ReadObjectRangeRequest& request
+    ) override {
+        last_range_key = request.storage_key;
+        last_range_offset = request.offset;
+        last_range_length = request.length;
+        tinyimx::file::ReadObjectRangeResult result;
+        result.status = range_status;
+        result.offset = request.offset;
+        if (range_status == tinyimx::file::FileStorageStatus::kSucceeded) {
+            const std::size_t start = static_cast<std::size_t>(request.offset);
+            const std::size_t count = static_cast<std::size_t>(request.length);
+            result.data = range_source.substr(start, count);
+            result.range_sha256 = corrupt_range_digest ? std::string(64, 'f') : Sha256Hex(result.data);
+            result.eof = request.offset + result.data.size() == request.expected_total_size;
+        }
+        result.message = "range";
+        return result;
+    }
+
     tinyimx::file::FileStorageStatus status{tinyimx::file::FileStorageStatus::kSucceeded};
     tinyimx::file::FileStorageStatus compose_status{tinyimx::file::FileStorageStatus::kSucceeded};
+    tinyimx::file::FileStorageStatus range_status{tinyimx::file::FileStorageStatus::kSucceeded};
     std::string last_key;
     std::string last_data;
     std::string last_checksum;
     std::string last_compose_key;
     std::size_t last_compose_parts{0};
+    std::string range_source{"hello"};
+    std::string last_range_key;
+    std::uint64_t last_range_offset{0};
+    std::uint64_t last_range_length{0};
+    bool corrupt_range_digest{false};
 };
 
 int Fail(const char* message) {
@@ -174,10 +225,13 @@ int main() {
     auto completed_bundle = snapshot.bundle;
     completed_bundle.file.status = FileStatus::kAvailable;
     completed_bundle.file.verified_checksum = reserved_chunk.checksum;
+    completed_bundle.file.available_at = "2026-09-22 00:00:00.000";
     completed_bundle.session.status = UploadSessionStatus::kCompleted;
     repository.complete_result.status = FileApplicationStatus::kSucceeded;
     repository.complete_result.outcome = CompleteFinalizeOutcome::kCompleted;
     repository.complete_result.bundle = completed_bundle;
+    repository.download_result.status = FileApplicationStatus::kSucceeded;
+    repository.download_result.file = completed_bundle.file;
 
     FileApplicationService service(&repository, &storage);
 
@@ -282,6 +336,53 @@ int main() {
     if (service.CancelUpload({10001, 0}).status != FileApplicationStatus::kInvalidArgument)
         return Fail("CancelUpload accepted zero upload_id");
 
-    std::cout << "[PASS] M18-B2 file application progress/finalize orchestration\n";
+    const auto download_info = service.GetDownloadInfo({10001, 7001});
+    if (!download_info.Found() || download_info.info->file_id != 7001 ||
+        download_info.info->verified_checksum != reserved_chunk.checksum ||
+        repository.last_download.file_id != 7001) {
+        return Fail("GetDownloadInfo did not authorize AVAILABLE metadata");
+    }
+
+    ReadFileRangeQuery range;
+    range.actor_user_id = 10001;
+    range.file_id = 7001;
+    range.offset = 1;
+    range.length = 3;
+    range.if_match_sha256 = reserved_chunk.checksum;
+    const auto read = service.ReadFileRange(range);
+    if (!read.Completed() || read.data != "ell" || read.offset != 1 ||
+        read.next_offset != 4 || read.eof || storage.last_range_key != "files/7001" ||
+        storage.last_range_offset != 1 || storage.last_range_length != 3) {
+        return Fail("ReadFileRange did not preserve authorized bounded range semantics");
+    }
+
+    storage.corrupt_range_digest = true;
+    if (service.ReadFileRange(range).status != FileApplicationStatus::kInvalidRecord) {
+        return Fail("ReadFileRange trusted a storage digest that disagrees with payload bytes");
+    }
+    storage.corrupt_range_digest = false;
+
+    range.if_match_sha256 = std::string(64, 'a');
+    if (service.ReadFileRange(range).status != FileApplicationStatus::kFailedPrecondition)
+        return Fail("ReadFileRange accepted mismatching strong validator");
+    range.if_match_sha256 = reserved_chunk.checksum;
+    range.offset = 5;
+    if (service.ReadFileRange(range).status != FileApplicationStatus::kOutOfRange)
+        return Fail("ReadFileRange accepted offset at EOF");
+    range.offset = 0;
+    range.length = (1ULL << 20) + 1;
+    if (service.ReadFileRange(range).status != FileApplicationStatus::kInvalidArgument)
+        return Fail("ReadFileRange accepted range above 1MiB bound");
+
+    auto unavailable_file = completed_bundle.file;
+    unavailable_file.status = FileStatus::kVerifying;
+    repository.download_result.file = unavailable_file;
+    if (service.GetDownloadInfo({10001, 7001}).status !=
+            FileApplicationStatus::kFailedPrecondition) {
+        return Fail("GetDownloadInfo exposed non-AVAILABLE file");
+    }
+    repository.download_result.file = completed_bundle.file;
+
+    std::cout << "[PASS] M18-C1 file application download/range orchestration\n";
     return 0;
 }

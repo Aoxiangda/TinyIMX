@@ -23,6 +23,8 @@ grpc::Status MapApplicationFailure(
             return {grpc::StatusCode::FAILED_PRECONDITION, message};
         case FileApplicationStatus::kInvalidRecord:
             return {grpc::StatusCode::DATA_LOSS, message};
+        case FileApplicationStatus::kOutOfRange:
+            return {grpc::StatusCode::OUT_OF_RANGE, message};
         case FileApplicationStatus::kStorageError:
             return {grpc::StatusCode::UNAVAILABLE, message};
         case FileApplicationStatus::kSucceeded:
@@ -153,6 +155,21 @@ void FillProtoProgress(
         proto_range->set_start_index(range.start_index);
         proto_range->set_end_index(range.end_index);
     }
+}
+
+void FillProtoDownloadInfo(
+    const DownloadInfoView& input,
+    tinyimx::file::v1::DownloadInfoRecord* output
+) {
+    if (output == nullptr) return;
+    output->set_file_id(input.file_id);
+    output->set_file_name(input.file_name);
+    output->set_content_type(input.content_type);
+    output->set_total_size(input.total_size);
+    output->set_checksum_algorithm(input.checksum_algorithm);
+    output->set_verified_checksum(input.verified_checksum);
+    output->set_version(input.version);
+    output->set_available_at(input.available_at);
 }
 
 }  // namespace
@@ -373,6 +390,59 @@ grpc::Status FileServiceImpl::FinalizeUpload(
         FillProtoProgress(*result.progress, response->mutable_progress());
     }
     response->set_verified_checksum(result.verified_checksum);
+    response->set_message(result.message);
+    return grpc::Status::OK;
+}
+
+grpc::Status FileServiceImpl::GetDownloadInfo(
+    grpc::ServerContext* context,
+    const tinyimx::file::v1::GetDownloadInfoRequest* request,
+    tinyimx::file::v1::GetDownloadInfoResponse* response
+) {
+    if (context == nullptr || request == nullptr || response == nullptr) {
+        return {grpc::StatusCode::INVALID_ARGUMENT, "invalid GetDownloadInfo RPC arguments"};
+    }
+    if (application_service_ == nullptr) {
+        return {grpc::StatusCode::UNAVAILABLE, "FileService application service is unavailable"};
+    }
+    const auto result = application_service_->GetDownloadInfo(
+        {request->actor_user_id(), request->file_id()}
+    );
+    if (!result.Found()) {
+        return MapApplicationFailure(result.status, result.message);
+    }
+    FillProtoDownloadInfo(*result.info, response->mutable_info());
+    response->set_message(result.message);
+    return grpc::Status::OK;
+}
+
+grpc::Status FileServiceImpl::ReadFileRange(
+    grpc::ServerContext* context,
+    const tinyimx::file::v1::ReadFileRangeRequest* request,
+    tinyimx::file::v1::ReadFileRangeResponse* response
+) {
+    if (context == nullptr || request == nullptr || response == nullptr) {
+        return {grpc::StatusCode::INVALID_ARGUMENT, "invalid ReadFileRange RPC arguments"};
+    }
+    if (application_service_ == nullptr) {
+        return {grpc::StatusCode::UNAVAILABLE, "FileService application service is unavailable"};
+    }
+    ReadFileRangeQuery query;
+    query.actor_user_id = request->actor_user_id();
+    query.file_id = request->file_id();
+    query.offset = request->offset();
+    query.length = request->length();
+    query.if_match_sha256 = request->if_match_sha256();
+    const auto result = application_service_->ReadFileRange(std::move(query));
+    if (!result.Completed()) {
+        return MapApplicationFailure(result.status, result.message);
+    }
+    FillProtoDownloadInfo(*result.info, response->mutable_info());
+    response->set_offset(result.offset);
+    response->set_data(result.data);
+    response->set_range_sha256(result.range_sha256);
+    response->set_eof(result.eof);
+    response->set_next_offset(result.next_offset);
     response->set_message(result.message);
     return grpc::Status::OK;
 }

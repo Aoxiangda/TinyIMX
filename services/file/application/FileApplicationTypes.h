@@ -14,6 +14,7 @@ enum class FileApplicationStatus {
     kPermissionDenied,
     kFailedPrecondition,
     kInvalidRecord,
+    kOutOfRange,
     kStorageError,
 };
 
@@ -134,6 +135,19 @@ struct UploadChunkView {
     std::string stored_at;
 };
 
+
+
+struct DownloadInfoView {
+    std::uint64_t file_id{0};
+    std::string file_name;
+    std::string content_type;
+    std::uint64_t total_size{0};
+    std::string checksum_algorithm;
+    std::string verified_checksum;
+    std::uint64_t version{0};
+    std::string available_at;
+};
+
 struct UploadBundleView {
     FileView file;
     UploadSessionView session;
@@ -187,6 +201,19 @@ struct GetUploadProgressQuery {
 struct FinalizeUploadCommand {
     std::uint64_t actor_user_id{0};
     std::uint64_t upload_id{0};
+};
+
+struct GetDownloadInfoQuery {
+    std::uint64_t actor_user_id{0};
+    std::uint64_t file_id{0};
+};
+
+struct ReadFileRangeQuery {
+    std::uint64_t actor_user_id{0};
+    std::uint64_t file_id{0};
+    std::uint64_t offset{0};
+    std::uint64_t length{0};
+    std::string if_match_sha256;
 };
 
 struct UploadChunkCommand {
@@ -368,6 +395,42 @@ struct FinalizeUploadResult {
 
     [[nodiscard]] bool Completed() const noexcept {
         return status == FileApplicationStatus::kSucceeded;
+    }
+};
+
+
+struct GetDownloadFileResult {
+    FileApplicationStatus status{FileApplicationStatus::kStorageError};
+    std::optional<FileView> file;
+    std::string message;
+
+    [[nodiscard]] bool Found() const noexcept {
+        return status == FileApplicationStatus::kSucceeded && file.has_value();
+    }
+};
+
+struct GetDownloadInfoResult {
+    FileApplicationStatus status{FileApplicationStatus::kStorageError};
+    std::optional<DownloadInfoView> info;
+    std::string message;
+
+    [[nodiscard]] bool Found() const noexcept {
+        return status == FileApplicationStatus::kSucceeded && info.has_value();
+    }
+};
+
+struct ReadFileRangeResult {
+    FileApplicationStatus status{FileApplicationStatus::kStorageError};
+    std::optional<DownloadInfoView> info;
+    std::uint64_t offset{0};
+    std::string data;
+    std::string range_sha256;
+    bool eof{false};
+    std::uint64_t next_offset{0};
+    std::string message;
+
+    [[nodiscard]] bool Completed() const noexcept {
+        return status == FileApplicationStatus::kSucceeded && info.has_value();
     }
 };
 

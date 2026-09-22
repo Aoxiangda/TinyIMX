@@ -66,6 +66,20 @@ struct FileBooleanResult {
     }
 };
 
+struct FileFindResult {
+    FileRepositoryStatus status{FileRepositoryStatus::kStorageError};
+    bool found{false};
+    FileRecord record;
+    std::string message;
+
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return status == FileRepositoryStatus::kSucceeded;
+    }
+    [[nodiscard]] bool Found() const noexcept {
+        return Succeeded() && found;
+    }
+};
+
 struct FileInsertResult {
     FileRepositoryStatus status{FileRepositoryStatus::kStorageError};
     std::uint64_t file_id{0};
@@ -179,6 +193,11 @@ public:
     [[nodiscard]] FileUploadBundleFindResult FindUploadBundle(
         std::uint64_t owner_user_id,
         std::uint64_t upload_id
+    );
+
+    [[nodiscard]] FileFindResult FindFileById(
+        std::uint64_t owner_user_id,
+        std::uint64_t file_id
     );
 
     [[nodiscard]] FileUploadChunkFindResult FindChunk(

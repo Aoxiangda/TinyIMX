@@ -52,6 +52,10 @@ public:
         const FailFinalizeChecksumCommand& command
     ) override;
 
+    [[nodiscard]] GetDownloadFileResult GetDownloadFile(
+        const GetDownloadInfoQuery& query
+    ) override;
+
 private:
     tinyimx::FileRepository* repository_{nullptr};  // non-owning
     tinyimx::MySqlConnectionPool* pool_{nullptr};  // non-owning

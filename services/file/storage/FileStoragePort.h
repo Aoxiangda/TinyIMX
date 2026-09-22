@@ -11,6 +11,8 @@ enum class FileStorageStatus {
     kSucceeded = 0,
     kInvalidArgument,
     kIoError,
+    kNotFound,
+    kDataLoss,
     kChecksumMismatch,
 };
 
@@ -55,6 +57,28 @@ struct ComposeObjectResult {
     }
 };
 
+
+
+struct ReadObjectRangeRequest {
+    std::string storage_key;
+    std::uint64_t offset{0};
+    std::uint64_t length{0};
+    std::uint64_t expected_total_size{0};
+};
+
+struct ReadObjectRangeResult {
+    FileStorageStatus status{FileStorageStatus::kIoError};
+    std::uint64_t offset{0};
+    std::string data;
+    std::string range_sha256;
+    bool eof{false};
+    std::string message;
+
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return status == FileStorageStatus::kSucceeded;
+    }
+};
+
 class FileStoragePort {
 public:
     virtual ~FileStoragePort() = default;
@@ -75,6 +99,12 @@ public:
     // not hold a database transaction across this potentially slow I/O.
     [[nodiscard]] virtual ComposeObjectResult ComposeObjectAtomically(
         const ComposeObjectRequest& request
+    ) = 0;
+
+    // Read one bounded range from an immutable final object. Range reads are
+    // stateless/idempotent; reconnect resumes by submitting the next offset.
+    [[nodiscard]] virtual ReadObjectRangeResult ReadObjectRange(
+        const ReadObjectRangeRequest& request
     ) = 0;
 };
 

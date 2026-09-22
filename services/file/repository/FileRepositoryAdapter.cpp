@@ -65,6 +65,32 @@ std::optional<UploadChunkStatus> MapChunkStatus(std::uint32_t status) {
     }
 }
 
+std::optional<FileView> ToFileView(const tinyimx::FileRecord& record) {
+    const auto status = MapFileStatus(record.status);
+    if (!status.has_value() || record.file_id == 0 || record.owner_user_id == 0 ||
+        record.total_size == 0) {
+        return std::nullopt;
+    }
+    FileView view;
+    view.file_id = record.file_id;
+    view.owner_user_id = record.owner_user_id;
+    view.file_name = record.file_name;
+    view.content_type = record.content_type;
+    view.total_size = record.total_size;
+    view.checksum_algorithm = record.checksum_algorithm;
+    view.expected_checksum = record.expected_checksum;
+    view.verified_checksum = record.verified_checksum;
+    view.storage_backend = record.storage_backend;
+    view.storage_key = record.storage_key;
+    view.status = *status;
+    view.version = record.version;
+    view.created_at = record.created_at;
+    view.updated_at = record.updated_at;
+    view.available_at = record.available_at;
+    view.expires_at = record.expires_at;
+    return view;
+}
+
 std::optional<UploadChunkView> ToChunkView(const tinyimx::FileUploadChunkRecord& record) {
     const auto status = MapChunkStatus(record.status);
     if (!status.has_value() || record.upload_id == 0 || record.file_id == 0 ||
@@ -288,6 +314,16 @@ FailFinalizeChecksumResult FinalizeChecksumFailure(
     std::string message
 ) {
     FailFinalizeChecksumResult result;
+    result.status = status;
+    result.message = std::move(message);
+    return result;
+}
+
+GetDownloadFileResult DownloadFileFailure(
+    FileApplicationStatus status,
+    std::string message
+) {
+    GetDownloadFileResult result;
     result.status = status;
     result.message = std::move(message);
     return result;
@@ -1453,6 +1489,38 @@ FailFinalizeChecksumResult FileRepositoryAdapter::FailFinalizeChecksum(
     result.status = FileApplicationStatus::kSucceeded;
     result.bundle = *updated_view;
     result.message = "whole-file checksum mismatch durably marked FAILED";
+    return result;
+}
+
+GetDownloadFileResult FileRepositoryAdapter::GetDownloadFile(
+    const GetDownloadInfoQuery& query
+) {
+    if (repository_ == nullptr) {
+        return DownloadFileFailure(
+            FileApplicationStatus::kStorageError,
+            "file repository is unavailable"
+        );
+    }
+    const auto found = repository_->FindFileById(query.actor_user_id, query.file_id);
+    if (!found.Succeeded()) {
+        return DownloadFileFailure(MapStorageStatus(found.status), found.message);
+    }
+    if (!found.found) {
+        // Deliberately collapse nonexistent and not-owned into NOT_FOUND so a
+        // caller cannot enumerate file IDs through the download boundary.
+        return DownloadFileFailure(FileApplicationStatus::kNotFound, "download file not found");
+    }
+    const auto view = ToFileView(found.record);
+    if (!view.has_value()) {
+        return DownloadFileFailure(
+            FileApplicationStatus::kInvalidRecord,
+            "download file metadata violates durable invariants"
+        );
+    }
+    GetDownloadFileResult result;
+    result.status = FileApplicationStatus::kSucceeded;
+    result.file = *view;
+    result.message = "download file metadata found";
     return result;
 }
 

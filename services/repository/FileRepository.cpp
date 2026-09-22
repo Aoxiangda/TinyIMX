@@ -31,6 +31,52 @@ bool ParseU32(const std::string& text, std::uint32_t* output) {
     return true;
 }
 
+FileFindResult ParseFileResult(const MySqlQueryResult& query) {
+    FileFindResult result;
+    result.status = FileRepositoryStatus::kSucceeded;
+    if (query.rows.empty()) {
+        result.found = false;
+        result.message = "file not found";
+        return result;
+    }
+    if (query.rows.size() != 1 || query.rows.front().size() != 16) {
+        result.status = FileRepositoryStatus::kInvalidRecord;
+        result.message = "file query returned invalid shape";
+        return result;
+    }
+    const auto& row = query.rows.front();
+    auto& file = result.record;
+    if (!ParseU64(row[0], &file.file_id) ||
+        !ParseU64(row[1], &file.owner_user_id) ||
+        !ParseU64(row[4], &file.total_size) ||
+        !ParseU32(row[10], &file.status) ||
+        !ParseU64(row[11], &file.version)) {
+        result.status = FileRepositoryStatus::kInvalidRecord;
+        result.message = "file query contains invalid numeric fields";
+        return result;
+    }
+    file.file_name = row[2];
+    file.content_type = row[3];
+    file.checksum_algorithm = row[5];
+    file.expected_checksum = row[6];
+    file.verified_checksum = row[7];
+    file.storage_backend = row[8];
+    file.storage_key = row[9];
+    file.created_at = row[12];
+    file.updated_at = row[13];
+    file.available_at = row[14];
+    file.expires_at = row[15];
+    if (file.file_id == 0 || file.owner_user_id == 0 || file.total_size == 0 ||
+        file.status < 1 || file.status > 7) {
+        result.status = FileRepositoryStatus::kInvalidRecord;
+        result.message = "file query violates durable invariants";
+        return result;
+    }
+    result.found = true;
+    result.message = "file found";
+    return result;
+}
+
 FileUploadBundleFindResult ParseBundleResult(const MySqlQueryResult& query) {
     FileUploadBundleFindResult result;
     result.status = FileRepositoryStatus::kSucceeded;
@@ -209,6 +255,38 @@ FileUploadBundleFindResult FileRepository::FindUploadBundle(
     return FindUploadBundleOnConnection(
         connection.operator->(), owner_user_id, upload_id, false
     );
+}
+
+FileFindResult FileRepository::FindFileById(
+    std::uint64_t owner_user_id,
+    std::uint64_t file_id
+) {
+    FileFindResult result;
+    if (pool_ == nullptr || owner_user_id == 0 || file_id == 0) {
+        result.status = FileRepositoryStatus::kInvalidArgument;
+        result.message = "invalid FindFileById arguments";
+        return result;
+    }
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        result.status = FileRepositoryStatus::kStorageError;
+        result.message = "FindFileById failed to acquire connection";
+        return result;
+    }
+    const std::string sql =
+        "SELECT file_id, owner_user_id, file_name, content_type, total_size, "
+        "checksum_algorithm, expected_checksum, IFNULL(verified_checksum, ''), "
+        "storage_backend, IFNULL(storage_key, ''), status, version, created_at, updated_at, "
+        "IFNULL(available_at, ''), IFNULL(expires_at, '') FROM im_files WHERE file_id = " +
+        std::to_string(file_id) + " AND owner_user_id = " + std::to_string(owner_user_id) +
+        " LIMIT 1";
+    MySqlQueryResult query;
+    if (!connection->Query(sql, &query)) {
+        result.status = FileRepositoryStatus::kStorageError;
+        result.message = "FindFileById query failed: " + connection->LastError();
+        return result;
+    }
+    return ParseFileResult(query);
 }
 
 FileUploadChunkFindResult FileRepository::FindChunk(

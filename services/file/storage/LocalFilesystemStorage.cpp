@@ -7,6 +7,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cerrno>
@@ -14,6 +15,7 @@
 #include <cstring>
 #include <iomanip>
 #include <memory>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -83,6 +85,16 @@ ComposeObjectResult InvalidCompose(std::string message) {
 ComposeObjectResult ComposeIoFailure(std::string message) {
     ComposeObjectResult result;
     result.status = FileStorageStatus::kIoError;
+    result.message = std::move(message);
+    return result;
+}
+
+ReadObjectRangeResult RangeFailure(
+    FileStorageStatus status,
+    std::string message
+) {
+    ReadObjectRangeResult result;
+    result.status = status;
     result.message = std::move(message);
     return result;
 }
@@ -387,6 +399,109 @@ ComposeObjectResult LocalFilesystemStorage::ComposeObjectAtomically(
     result.bytes_written = total_bytes;
     result.verified_sha256 = actual_whole_sha256;
     result.message = "final object assembled, verified, and atomically published";
+    return result;
+}
+
+ReadObjectRangeResult LocalFilesystemStorage::ReadObjectRange(
+    const ReadObjectRangeRequest& request
+) {
+    if (request.length == 0 || request.expected_total_size == 0 ||
+        request.offset >= request.expected_total_size) {
+        return RangeFailure(
+            FileStorageStatus::kInvalidArgument,
+            "invalid immutable object range"
+        );
+    }
+
+    std::filesystem::path source;
+    if (!ResolveSafePath(request.storage_key, &source)) {
+        return RangeFailure(FileStorageStatus::kInvalidArgument, "storage_key is unsafe");
+    }
+
+    const int fd = ::open(source.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) {
+        if (errno == ENOENT) {
+            return RangeFailure(
+                FileStorageStatus::kNotFound,
+                "AVAILABLE final object is missing"
+            );
+        }
+        return RangeFailure(
+            FileStorageStatus::kIoError,
+            std::string("open final object failed: ") + std::strerror(errno)
+        );
+    }
+
+    struct stat metadata {};
+    if (::fstat(fd, &metadata) != 0) {
+        const std::string error = std::string("fstat final object failed: ") +
+            std::strerror(errno);
+        (void)::close(fd);
+        return RangeFailure(FileStorageStatus::kIoError, error);
+    }
+    if (!S_ISREG(metadata.st_mode) || metadata.st_size < 0 ||
+        static_cast<std::uint64_t>(metadata.st_size) != request.expected_total_size) {
+        (void)::close(fd);
+        return RangeFailure(
+            FileStorageStatus::kDataLoss,
+            "AVAILABLE final object type/size disagrees with durable metadata"
+        );
+    }
+
+    const std::uint64_t available = request.expected_total_size - request.offset;
+    const std::uint64_t wanted = std::min(request.length, available);
+    const auto max_off_t = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
+    if (request.offset > max_off_t || wanted - 1 > max_off_t - request.offset) {
+        (void)::close(fd);
+        return RangeFailure(
+            FileStorageStatus::kInvalidArgument,
+            "range offset cannot be represented by this filesystem backend"
+        );
+    }
+    if (wanted > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+        (void)::close(fd);
+        return RangeFailure(FileStorageStatus::kInvalidArgument, "range length is too large");
+    }
+
+    std::string data(static_cast<std::size_t>(wanted), '\0');
+    std::size_t completed = 0;
+    while (completed < data.size()) {
+        const ssize_t rc = ::pread(
+            fd,
+            data.data() + completed,
+            data.size() - completed,
+            static_cast<off_t>(request.offset + completed)
+        );
+        if (rc < 0) {
+            if (errno == EINTR) continue;
+            const std::string error = std::string("pread final object failed: ") +
+                std::strerror(errno);
+            (void)::close(fd);
+            return RangeFailure(FileStorageStatus::kIoError, error);
+        }
+        if (rc == 0) {
+            (void)::close(fd);
+            return RangeFailure(
+                FileStorageStatus::kDataLoss,
+                "AVAILABLE final object ended before durable total_size"
+            );
+        }
+        completed += static_cast<std::size_t>(rc);
+    }
+    (void)::close(fd);
+
+    const std::string range_sha256 = Sha256Hex(data);
+    if (range_sha256.empty()) {
+        return RangeFailure(FileStorageStatus::kIoError, "compute range SHA-256 failed");
+    }
+
+    ReadObjectRangeResult result;
+    result.status = FileStorageStatus::kSucceeded;
+    result.offset = request.offset;
+    result.data = std::move(data);
+    result.range_sha256 = range_sha256;
+    result.eof = request.offset + wanted == request.expected_total_size;
+    result.message = result.eof ? "final object EOF range read" : "final object range read";
     return result;
 }
 

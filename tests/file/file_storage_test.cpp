@@ -105,6 +105,49 @@ int main() {
                 std::filesystem::file_size(final_path) == 10,
                 "LocalFilesystemStorage.compose-retry-does-not-append") && ok;
 
+    tinyimx::file::ReadObjectRangeRequest range;
+    range.storage_key = "files/7001";
+    range.offset = 2;
+    range.length = 4;
+    range.expected_total_size = 10;
+    const auto middle = storage.ReadObjectRange(range);
+    ok = Expect(middle.Succeeded() && middle.offset == 2 && middle.data == "llow" &&
+                middle.range_sha256 ==
+                    "ecfb725fceebce1ddc2602061742ba6add1a19af8a344d2c91168b118e14e933" &&
+                !middle.eof,
+                "LocalFilesystemStorage.bounded-range-read") && ok;
+
+    range.offset = 8;
+    range.length = 1024;
+    const auto tail = storage.ReadObjectRange(range);
+    ok = Expect(tail.Succeeded() && tail.data == "ld" && tail.eof &&
+                tail.range_sha256 ==
+                    "e5a08ffd3d7509c66e79642edbdcd8ed889269a7164c718afca541304188423d",
+                "LocalFilesystemStorage.tail-range-clamped-to-eof") && ok;
+
+    range.offset = 10;
+    range.length = 1;
+    ok = Expect(storage.ReadObjectRange(range).status ==
+                    tinyimx::file::FileStorageStatus::kInvalidArgument,
+                "LocalFilesystemStorage.offset-at-eof-rejected") && ok;
+
+    range.storage_key = "files/missing-object";
+    range.offset = 0;
+    range.length = 1;
+    ok = Expect(storage.ReadObjectRange(range).status ==
+                    tinyimx::file::FileStorageStatus::kNotFound,
+                "LocalFilesystemStorage.missing-available-object-detected") && ok;
+
+    std::filesystem::create_directories(root / "files", ec);
+    {
+        std::ofstream wrong(root / "files/wrong-size", std::ios::binary);
+        wrong << "short";
+    }
+    range.storage_key = "files/wrong-size";
+    ok = Expect(storage.ReadObjectRange(range).status ==
+                    tinyimx::file::FileStorageStatus::kDataLoss,
+                "LocalFilesystemStorage.size-drift-detected") && ok;
+
     auto bad_whole = compose;
     bad_whole.storage_key = "files/checksum-mismatch";
     bad_whole.expected_sha256 = std::string(64, 'a');
