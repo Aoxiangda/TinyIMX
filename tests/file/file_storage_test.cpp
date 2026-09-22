@@ -27,7 +27,7 @@ std::string ReadAll(const std::filesystem::path& path) {
 
 int main() {
     const auto root = std::filesystem::temp_directory_path() /
-        ("tinyimx-m18b1-storage-" + std::to_string(
+        ("tinyimx-m18b2-storage-" + std::to_string(
             static_cast<unsigned long long>(std::hash<std::thread::id>{}(std::this_thread::get_id()))));
     std::error_code ec;
     std::filesystem::remove_all(root, ec);
@@ -74,6 +74,54 @@ int main() {
     ok = Expect(storage.StoreChunkAtomically(request).status ==
                     tinyimx::file::FileStorageStatus::kInvalidArgument,
                 "LocalFilesystemStorage.checksum-mismatch-rejected") && ok;
+
+    tinyimx::file::StoreChunkRequest second_part;
+    second_part.storage_part_key = "uploads/77/chunks/1.part";
+    second_part.data = "world";
+    second_part.expected_sha256 =
+        "486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7";
+    ok = Expect(storage.StoreChunkAtomically(second_part).Succeeded(),
+                "LocalFilesystemStorage.second-part-write") && ok;
+
+    tinyimx::file::ComposeObjectRequest compose;
+    compose.storage_key = "files/7001";
+    compose.expected_total_size = 10;
+    compose.expected_sha256 =
+        "936a185caaa266bb9cbe981e9e05cb78cd732b0b3280eb944412bb6f8f8f07af";
+    compose.parts = {
+        {"uploads/77/chunks/0.part", 5,
+         "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"},
+        {"uploads/77/chunks/1.part", 5,
+         "486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7"},
+    };
+    const auto composed = storage.ComposeObjectAtomically(compose);
+    const auto final_path = root / "files/7001";
+    ok = Expect(composed.Succeeded() && composed.bytes_written == 10 &&
+                ReadAll(final_path) == "helloworld",
+                "LocalFilesystemStorage.compose-verified-final-object") && ok;
+
+    const auto compose_retry = storage.ComposeObjectAtomically(compose);
+    ok = Expect(compose_retry.Succeeded() && ReadAll(final_path) == "helloworld" &&
+                std::filesystem::file_size(final_path) == 10,
+                "LocalFilesystemStorage.compose-retry-does-not-append") && ok;
+
+    auto bad_whole = compose;
+    bad_whole.storage_key = "files/checksum-mismatch";
+    bad_whole.expected_sha256 = std::string(64, 'a');
+    const auto bad_whole_result = storage.ComposeObjectAtomically(bad_whole);
+    ok = Expect(bad_whole_result.status == tinyimx::file::FileStorageStatus::kChecksumMismatch &&
+                bad_whole_result.verified_sha256 ==
+                    "936a185caaa266bb9cbe981e9e05cb78cd732b0b3280eb944412bb6f8f8f07af" &&
+                !std::filesystem::exists(root / "files/checksum-mismatch"),
+                "LocalFilesystemStorage.whole-checksum-mismatch-not-published") && ok;
+
+    auto missing_part = compose;
+    missing_part.storage_key = "files/missing-part";
+    missing_part.parts[1].storage_part_key = "uploads/77/chunks/missing.part";
+    const auto missing_result = storage.ComposeObjectAtomically(missing_part);
+    ok = Expect(missing_result.status == tinyimx::file::FileStorageStatus::kIoError &&
+                !std::filesystem::exists(root / "files/missing-part"),
+                "LocalFilesystemStorage.missing-part-not-published") && ok;
 
     std::filesystem::remove_all(root, ec);
     return ok ? 0 : 1;

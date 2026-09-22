@@ -139,6 +139,22 @@ void FillBundle(
     FillProtoSession(bundle.session, session);
 }
 
+void FillProtoProgress(
+    const UploadProgressView& input,
+    tinyimx::file::v1::UploadProgressRecord* output
+) {
+    if (output == nullptr) return;
+    output->set_expected_chunk_count(input.expected_chunk_count);
+    output->set_stored_chunk_count(input.stored_chunk_count);
+    output->set_reserved_chunk_count(input.reserved_chunk_count);
+    output->set_ready_to_finalize(input.ready_to_finalize);
+    for (const auto& range : input.missing_ranges) {
+        auto* proto_range = output->add_missing_ranges();
+        proto_range->set_start_index(range.start_index);
+        proto_range->set_end_index(range.end_index);
+    }
+}
+
 }  // namespace
 
 FileServiceImpl::FileServiceImpl(FileApplicationService* application_service)
@@ -281,6 +297,83 @@ grpc::Status FileServiceImpl::UploadChunk(
     }
     response->set_message(result.message);
     if (result.chunk.has_value()) FillProtoChunk(*result.chunk, response->mutable_chunk());
+    return grpc::Status::OK;
+}
+
+grpc::Status FileServiceImpl::GetUploadProgress(
+    grpc::ServerContext* context,
+    const tinyimx::file::v1::GetUploadProgressRequest* request,
+    tinyimx::file::v1::GetUploadProgressResponse* response
+) {
+    if (context == nullptr || request == nullptr || response == nullptr) {
+        return {grpc::StatusCode::INVALID_ARGUMENT, "invalid GetUploadProgress RPC arguments"};
+    }
+    if (application_service_ == nullptr) {
+        return {grpc::StatusCode::UNAVAILABLE, "FileService application service is unavailable"};
+    }
+
+    const auto result = application_service_->GetUploadProgress(
+        {request->actor_user_id(), request->upload_id()}
+    );
+    if (!result.Found()) {
+        return MapApplicationFailure(result.status, result.message);
+    }
+    FillBundle(
+        result.progress->bundle,
+        response->mutable_file(),
+        response->mutable_session()
+    );
+    FillProtoProgress(*result.progress, response->mutable_progress());
+    response->set_message(result.message);
+    return grpc::Status::OK;
+}
+
+grpc::Status FileServiceImpl::FinalizeUpload(
+    grpc::ServerContext* context,
+    const tinyimx::file::v1::FinalizeUploadRequest* request,
+    tinyimx::file::v1::FinalizeUploadResponse* response
+) {
+    if (context == nullptr || request == nullptr || response == nullptr) {
+        return {grpc::StatusCode::INVALID_ARGUMENT, "invalid FinalizeUpload RPC arguments"};
+    }
+    if (application_service_ == nullptr) {
+        return {grpc::StatusCode::UNAVAILABLE, "FileService application service is unavailable"};
+    }
+
+    const auto result = application_service_->FinalizeUpload(
+        {request->actor_user_id(), request->upload_id()}
+    );
+    if (!result.Completed()) {
+        return MapApplicationFailure(result.status, result.message);
+    }
+    switch (result.outcome) {
+        case FinalizeUploadOutcome::kCompleted:
+            response->set_result(tinyimx::file::v1::FINALIZE_UPLOAD_RESULT_COMPLETED);
+            break;
+        case FinalizeUploadOutcome::kReused:
+            response->set_result(tinyimx::file::v1::FINALIZE_UPLOAD_RESULT_REUSED);
+            break;
+        case FinalizeUploadOutcome::kNotReady:
+            response->set_result(tinyimx::file::v1::FINALIZE_UPLOAD_RESULT_NOT_READY);
+            break;
+        case FinalizeUploadOutcome::kChecksumMismatch:
+            response->set_result(tinyimx::file::v1::FINALIZE_UPLOAD_RESULT_CHECKSUM_MISMATCH);
+            break;
+    }
+    if (result.bundle.has_value()) {
+        FillBundle(*result.bundle, response->mutable_file(), response->mutable_session());
+    } else if (result.progress.has_value()) {
+        FillBundle(
+            result.progress->bundle,
+            response->mutable_file(),
+            response->mutable_session()
+        );
+    }
+    if (result.progress.has_value()) {
+        FillProtoProgress(*result.progress, response->mutable_progress());
+    }
+    response->set_verified_checksum(result.verified_checksum);
+    response->set_message(result.message);
     return grpc::Status::OK;
 }
 

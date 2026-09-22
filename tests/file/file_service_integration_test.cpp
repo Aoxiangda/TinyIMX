@@ -114,6 +114,52 @@ public:
         return result;
     }
 
+    tinyimx::file::GetUploadSnapshotResult GetUploadSnapshot(
+        const tinyimx::file::GetUploadProgressQuery& query
+    ) override {
+        tinyimx::file::GetUploadSnapshotResult result;
+        result.status = tinyimx::file::FileApplicationStatus::kSucceeded;
+        result.snapshot = MakeSnapshot(query.actor_user_id, query.upload_id, false);
+        return result;
+    }
+
+    tinyimx::file::FinalizePreparationResult PrepareFinalize(
+        const tinyimx::file::FinalizeUploadCommand& command
+    ) override {
+        tinyimx::file::FinalizePreparationResult result;
+        result.status = tinyimx::file::FileApplicationStatus::kSucceeded;
+        result.outcome = tinyimx::file::FinalizePreparationOutcome::kStarted;
+        result.snapshot = MakeSnapshot(command.actor_user_id, command.upload_id, true);
+        return result;
+    }
+
+    tinyimx::file::CompleteFinalizeResult CompleteFinalize(
+        const tinyimx::file::CompleteFinalizeCommand& command
+    ) override {
+        auto bundle = MakeBundle(command.actor_user_id, command.upload_id);
+        bundle.file.status = tinyimx::file::FileStatus::kAvailable;
+        bundle.file.verified_checksum = command.verified_checksum;
+        bundle.session.status = tinyimx::file::UploadSessionStatus::kCompleted;
+        tinyimx::file::CompleteFinalizeResult result;
+        result.status = tinyimx::file::FileApplicationStatus::kSucceeded;
+        result.outcome = tinyimx::file::CompleteFinalizeOutcome::kCompleted;
+        result.bundle = bundle;
+        return result;
+    }
+
+    tinyimx::file::FailFinalizeChecksumResult FailFinalizeChecksum(
+        const tinyimx::file::FailFinalizeChecksumCommand& command
+    ) override {
+        auto bundle = MakeBundle(command.actor_user_id, command.upload_id);
+        bundle.file.status = tinyimx::file::FileStatus::kFailed;
+        bundle.file.verified_checksum = command.actual_checksum;
+        bundle.session.status = tinyimx::file::UploadSessionStatus::kFinalizing;
+        tinyimx::file::FailFinalizeChecksumResult result;
+        result.status = tinyimx::file::FileApplicationStatus::kSucceeded;
+        result.bundle = bundle;
+        return result;
+    }
+
     static tinyimx::file::UploadBundleView MakeBundle(
         std::uint64_t actor_user_id, std::uint64_t upload_id
     ) {
@@ -140,6 +186,32 @@ public:
         return bundle;
     }
 
+    static tinyimx::file::UploadSnapshotView MakeSnapshot(
+        std::uint64_t actor_user_id,
+        std::uint64_t upload_id,
+        bool finalizing
+    ) {
+        tinyimx::file::UploadSnapshotView snapshot;
+        snapshot.bundle = MakeBundle(actor_user_id, upload_id);
+        if (finalizing) {
+            snapshot.bundle.file.status = tinyimx::file::FileStatus::kVerifying;
+            snapshot.bundle.session.status = tinyimx::file::UploadSessionStatus::kFinalizing;
+        }
+        tinyimx::file::UploadChunkView chunk;
+        chunk.upload_id = upload_id;
+        chunk.chunk_index = 0;
+        chunk.file_id = snapshot.bundle.file.file_id;
+        chunk.owner_user_id = actor_user_id;
+        chunk.byte_offset = 0;
+        chunk.chunk_size = 1024;
+        chunk.checksum_algorithm = "sha256";
+        chunk.checksum = std::string(64, 'b');
+        chunk.storage_part_key = "uploads/" + std::to_string(upload_id) + "/chunks/0.part";
+        chunk.status = tinyimx::file::UploadChunkStatus::kStored;
+        snapshot.chunks.push_back(chunk);
+        return snapshot;
+    }
+
     std::size_t begin_calls{0};
     std::size_t get_calls{0};
     std::size_t cancel_calls{0};
@@ -159,6 +231,17 @@ public:
         result.bytes_written = request.data.size();
         result.verified_sha256 = request.expected_sha256;
         result.message = "stored";
+        return result;
+    }
+
+    tinyimx::file::ComposeObjectResult ComposeObjectAtomically(
+        const tinyimx::file::ComposeObjectRequest& request
+    ) override {
+        tinyimx::file::ComposeObjectResult result;
+        result.status = tinyimx::file::FileStorageStatus::kSucceeded;
+        result.bytes_written = request.expected_total_size;
+        result.verified_sha256 = request.expected_sha256;
+        result.message = "composed";
         return result;
     }
 };
@@ -276,6 +359,36 @@ int main() {
     const auto get_status = stub->GetUploadSession(&get_context, get, &get_response);
     ok = Expect(get_status.ok() && get_response.file().owner_user_id() == 10001 &&
         get_response.session().upload_id() == 77, "FileService.RealGrpcGetUploadSession") && ok;
+
+    tinyimx::file::v1::GetUploadProgressRequest progress_request;
+    progress_request.set_actor_user_id(10001);
+    progress_request.set_upload_id(77);
+    grpc::ClientContext progress_context;
+    tinyimx::file::v1::GetUploadProgressResponse progress_response;
+    const auto progress_status = stub->GetUploadProgress(
+        &progress_context, progress_request, &progress_response
+    );
+    ok = Expect(progress_status.ok() &&
+        progress_response.progress().expected_chunk_count() == 1 &&
+        progress_response.progress().stored_chunk_count() == 1 &&
+        progress_response.progress().missing_ranges_size() == 0 &&
+        progress_response.progress().ready_to_finalize(),
+        "FileService.RealGrpcGetUploadProgress") && ok;
+
+    tinyimx::file::v1::FinalizeUploadRequest finalize_request;
+    finalize_request.set_actor_user_id(10001);
+    finalize_request.set_upload_id(77);
+    grpc::ClientContext finalize_context;
+    tinyimx::file::v1::FinalizeUploadResponse finalize_response;
+    const auto finalize_status = stub->FinalizeUpload(
+        &finalize_context, finalize_request, &finalize_response
+    );
+    ok = Expect(finalize_status.ok() &&
+        finalize_response.result() == tinyimx::file::v1::FINALIZE_UPLOAD_RESULT_COMPLETED &&
+        finalize_response.file().status() == tinyimx::file::v1::FILE_STATUS_AVAILABLE &&
+        finalize_response.session().status() == tinyimx::file::v1::UPLOAD_SESSION_STATUS_COMPLETED &&
+        finalize_response.verified_checksum() == std::string(64, 'a'),
+        "FileService.RealGrpcFinalizeUpload") && ok;
 
     get.set_upload_id(999);
     grpc::ClientContext missing_context;

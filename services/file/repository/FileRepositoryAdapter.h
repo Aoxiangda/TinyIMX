@@ -36,6 +36,22 @@ public:
         const MarkChunkStoredCommand& command
     ) override;
 
+    [[nodiscard]] GetUploadSnapshotResult GetUploadSnapshot(
+        const GetUploadProgressQuery& query
+    ) override;
+
+    [[nodiscard]] FinalizePreparationResult PrepareFinalize(
+        const FinalizeUploadCommand& command
+    ) override;
+
+    [[nodiscard]] CompleteFinalizeResult CompleteFinalize(
+        const CompleteFinalizeCommand& command
+    ) override;
+
+    [[nodiscard]] FailFinalizeChecksumResult FailFinalizeChecksum(
+        const FailFinalizeChecksumCommand& command
+    ) override;
+
 private:
     tinyimx::FileRepository* repository_{nullptr};  // non-owning
     tinyimx::MySqlConnectionPool* pool_{nullptr};  // non-owning

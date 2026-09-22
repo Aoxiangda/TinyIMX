@@ -233,6 +233,26 @@ FileUploadChunkFindResult FileRepository::FindChunk(
     );
 }
 
+
+FileUploadChunkListResult FileRepository::FindChunks(
+    std::uint64_t owner_user_id,
+    std::uint64_t upload_id
+) {
+    FileUploadChunkListResult result;
+    if (pool_ == nullptr || owner_user_id == 0 || upload_id == 0) {
+        result.status = FileRepositoryStatus::kInvalidArgument;
+        result.message = "invalid FindChunks arguments";
+        return result;
+    }
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        result.status = FileRepositoryStatus::kStorageError;
+        result.message = "FindChunks failed to acquire connection";
+        return result;
+    }
+    return FindChunksOnConnection(connection.operator->(), owner_user_id, upload_id, false);
+}
+
 FileBooleanResult FileRepository::UserExistsOnConnection(
     MySqlConnection* connection,
     std::uint64_t user_id
@@ -498,6 +518,50 @@ FileUploadChunkFindResult FileRepository::FindChunkOnConnection(
     return ParseChunkResult(query);
 }
 
+
+FileUploadChunkListResult FileRepository::FindChunksOnConnection(
+    MySqlConnection* connection,
+    std::uint64_t owner_user_id,
+    std::uint64_t upload_id,
+    bool for_update
+) {
+    FileUploadChunkListResult result;
+    if (connection == nullptr || owner_user_id == 0 || upload_id == 0) {
+        result.status = FileRepositoryStatus::kInvalidArgument;
+        result.message = "invalid FindChunksOnConnection arguments";
+        return result;
+    }
+    std::string sql =
+        "SELECT upload_id, chunk_index, file_id, owner_user_id, byte_offset, chunk_size, "
+        "checksum_algorithm, checksum, storage_part_key, status, version, created_at, updated_at, "
+        "IFNULL(stored_at, '') FROM im_file_upload_chunks WHERE owner_user_id = " +
+        std::to_string(owner_user_id) + " AND upload_id = " + std::to_string(upload_id) +
+        " ORDER BY chunk_index";
+    if (for_update) sql += " FOR UPDATE";
+    MySqlQueryResult query;
+    if (!connection->Query(sql, &query)) {
+        result.status = FileRepositoryStatus::kStorageError;
+        result.message = "FindChunksOnConnection query failed: " + connection->LastError();
+        return result;
+    }
+    result.status = FileRepositoryStatus::kSucceeded;
+    result.records.reserve(query.rows.size());
+    for (const auto& row : query.rows) {
+        MySqlQueryResult one;
+        one.rows.push_back(row);
+        auto parsed = ParseChunkResult(one);
+        if (!parsed.Succeeded() || !parsed.found) {
+            result.status = parsed.status;
+            result.records.clear();
+            result.message = parsed.message;
+            return result;
+        }
+        result.records.push_back(std::move(parsed.record));
+    }
+    result.message = "file upload chunks listed";
+    return result;
+}
+
 FileMutationResult FileRepository::MarkChunkStoredOnConnection(
     MySqlConnection* connection,
     std::uint64_t owner_user_id,
@@ -533,6 +597,136 @@ FileMutationResult FileRepository::MarkChunkStoredOnConnection(
     }
     result.status = FileRepositoryStatus::kSucceeded;
     result.message = result.affected_rows == 1 ? "upload chunk marked stored" : "upload chunk already stored";
+    return result;
+}
+
+FileMutationResult FileRepository::BeginFinalizeOnConnection(
+    MySqlConnection* connection,
+    std::uint64_t owner_user_id,
+    std::uint64_t upload_id,
+    std::uint64_t file_id
+) {
+    FileMutationResult result;
+    if (connection == nullptr || owner_user_id == 0 || upload_id == 0 || file_id == 0) {
+        result.status = FileRepositoryStatus::kInvalidArgument;
+        result.message = "invalid BeginFinalizeOnConnection arguments";
+        return result;
+    }
+    const std::string session_sql =
+        "UPDATE im_file_upload_sessions SET status = 2, version = version + 1 "
+        "WHERE upload_id = " + std::to_string(upload_id) +
+        " AND owner_user_id = " + std::to_string(owner_user_id) + " AND status = 1";
+    if (!connection->Execute(session_sql)) {
+        result.status = FileRepositoryStatus::kStorageError;
+        result.message = "begin finalize session failed: " + connection->LastError();
+        return result;
+    }
+    if (connection->AffectedRows() != 1) {
+        result.status = FileRepositoryStatus::kInvalidRecord;
+        result.message = "begin finalize session affected unexpected row count";
+        return result;
+    }
+    const std::string file_sql =
+        "UPDATE im_files SET status = 2, version = version + 1 WHERE file_id = " +
+        std::to_string(file_id) + " AND owner_user_id = " + std::to_string(owner_user_id) +
+        " AND status = 1";
+    if (!connection->Execute(file_sql)) {
+        result.status = FileRepositoryStatus::kStorageError;
+        result.message = "begin finalize file failed: " + connection->LastError();
+        return result;
+    }
+    if (connection->AffectedRows() != 1) {
+        result.status = FileRepositoryStatus::kInvalidRecord;
+        result.message = "begin finalize file affected unexpected row count";
+        return result;
+    }
+    result.status = FileRepositoryStatus::kSucceeded;
+    result.affected_rows = 2;
+    result.message = "upload entered FINALIZING/VERIFYING";
+    return result;
+}
+
+FileMutationResult FileRepository::CompleteFinalizeOnConnection(
+    MySqlConnection* connection,
+    std::uint64_t owner_user_id,
+    std::uint64_t upload_id,
+    std::uint64_t file_id,
+    const std::string& verified_checksum
+) {
+    FileMutationResult result;
+    if (connection == nullptr || owner_user_id == 0 || upload_id == 0 || file_id == 0 ||
+        verified_checksum.size() != 64) {
+        result.status = FileRepositoryStatus::kInvalidArgument;
+        result.message = "invalid CompleteFinalizeOnConnection arguments";
+        return result;
+    }
+    const std::string escaped = connection->EscapeString(verified_checksum);
+    const std::string file_sql =
+        "UPDATE im_files SET status = 3, verified_checksum = '" + escaped +
+        "', available_at = COALESCE(available_at, CURRENT_TIMESTAMP(3)), version = version + 1 "
+        "WHERE file_id = " + std::to_string(file_id) + " AND owner_user_id = " +
+        std::to_string(owner_user_id) + " AND status = 2 AND expected_checksum = '" + escaped + "'";
+    if (!connection->Execute(file_sql)) {
+        result.status = FileRepositoryStatus::kStorageError;
+        result.message = "complete finalize file failed: " + connection->LastError();
+        return result;
+    }
+    if (connection->AffectedRows() != 1) {
+        result.status = FileRepositoryStatus::kInvalidRecord;
+        result.message = "complete finalize file affected unexpected row count";
+        return result;
+    }
+    const std::string session_sql =
+        "UPDATE im_file_upload_sessions SET status = 3, completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP(3)), "
+        "version = version + 1 WHERE upload_id = " + std::to_string(upload_id) +
+        " AND owner_user_id = " + std::to_string(owner_user_id) + " AND status = 2";
+    if (!connection->Execute(session_sql)) {
+        result.status = FileRepositoryStatus::kStorageError;
+        result.message = "complete finalize session failed: " + connection->LastError();
+        return result;
+    }
+    if (connection->AffectedRows() != 1) {
+        result.status = FileRepositoryStatus::kInvalidRecord;
+        result.message = "complete finalize session affected unexpected row count";
+        return result;
+    }
+    result.status = FileRepositoryStatus::kSucceeded;
+    result.affected_rows = 2;
+    result.message = "upload completed and file marked AVAILABLE";
+    return result;
+}
+
+FileMutationResult FileRepository::FailFinalizeChecksumOnConnection(
+    MySqlConnection* connection,
+    std::uint64_t owner_user_id,
+    std::uint64_t file_id,
+    const std::string& actual_checksum
+) {
+    FileMutationResult result;
+    if (connection == nullptr || owner_user_id == 0 || file_id == 0 ||
+        actual_checksum.size() != 64) {
+        result.status = FileRepositoryStatus::kInvalidArgument;
+        result.message = "invalid FailFinalizeChecksumOnConnection arguments";
+        return result;
+    }
+    const std::string sql =
+        "UPDATE im_files SET status = 4, verified_checksum = '" +
+        connection->EscapeString(actual_checksum) + "', version = version + 1 WHERE file_id = " +
+        std::to_string(file_id) + " AND owner_user_id = " + std::to_string(owner_user_id) +
+        " AND status = 2";
+    if (!connection->Execute(sql)) {
+        result.status = FileRepositoryStatus::kStorageError;
+        result.message = "mark finalize checksum failure failed: " + connection->LastError();
+        return result;
+    }
+    result.affected_rows = connection->AffectedRows();
+    if (result.affected_rows != 1) {
+        result.status = FileRepositoryStatus::kInvalidRecord;
+        result.message = "mark finalize checksum failure affected unexpected row count";
+        return result;
+    }
+    result.status = FileRepositoryStatus::kSucceeded;
+    result.message = "whole-file checksum mismatch recorded";
     return result;
 }
 

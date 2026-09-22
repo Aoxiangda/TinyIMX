@@ -14,6 +14,10 @@ public:
         const StoreChunkRequest& request
     ) override;
 
+    [[nodiscard]] ComposeObjectResult ComposeObjectAtomically(
+        const ComposeObjectRequest& request
+    ) override;
+
     [[nodiscard]] const std::filesystem::path& Root() const noexcept {
         return root_;
     }

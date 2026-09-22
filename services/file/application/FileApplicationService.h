@@ -24,6 +24,12 @@ public:
         const CancelUploadCommand& command
     );
     [[nodiscard]] UploadChunkResult UploadChunk(UploadChunkCommand command);
+    [[nodiscard]] GetUploadProgressResult GetUploadProgress(
+        const GetUploadProgressQuery& query
+    );
+    [[nodiscard]] FinalizeUploadResult FinalizeUpload(
+        const FinalizeUploadCommand& command
+    );
 
 private:
     FileRepositoryPort* repository_{nullptr};  // non-owning

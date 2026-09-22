@@ -14,12 +14,19 @@ public:
     tinyimx::file::CancelUploadResult cancel_result;
     tinyimx::file::ReserveChunkResult reserve_result;
     tinyimx::file::MarkChunkStoredResult mark_result;
+    tinyimx::file::GetUploadSnapshotResult snapshot_result;
+    tinyimx::file::FinalizePreparationResult prepare_result;
+    tinyimx::file::CompleteFinalizeResult complete_result;
+    tinyimx::file::FailFinalizeChecksumResult fail_finalize_result;
 
     tinyimx::file::BeginUploadCommand last_begin;
     tinyimx::file::GetUploadSessionQuery last_get;
     tinyimx::file::CancelUploadCommand last_cancel;
     tinyimx::file::ReserveChunkCommand last_reserve;
     tinyimx::file::MarkChunkStoredCommand last_mark;
+    tinyimx::file::GetUploadProgressQuery last_snapshot;
+    tinyimx::file::FinalizeUploadCommand last_prepare;
+    tinyimx::file::CompleteFinalizeCommand last_complete;
 
     tinyimx::file::BeginUploadResult BeginUpload(
         const tinyimx::file::BeginUploadCommand& command
@@ -40,6 +47,22 @@ public:
     tinyimx::file::MarkChunkStoredResult MarkChunkStored(
         const tinyimx::file::MarkChunkStoredCommand& command
     ) override { last_mark = command; return mark_result; }
+
+    tinyimx::file::GetUploadSnapshotResult GetUploadSnapshot(
+        const tinyimx::file::GetUploadProgressQuery& query
+    ) override { last_snapshot = query; return snapshot_result; }
+
+    tinyimx::file::FinalizePreparationResult PrepareFinalize(
+        const tinyimx::file::FinalizeUploadCommand& command
+    ) override { last_prepare = command; return prepare_result; }
+
+    tinyimx::file::CompleteFinalizeResult CompleteFinalize(
+        const tinyimx::file::CompleteFinalizeCommand& command
+    ) override { last_complete = command; return complete_result; }
+
+    tinyimx::file::FailFinalizeChecksumResult FailFinalizeChecksum(
+        const tinyimx::file::FailFinalizeChecksumCommand&
+    ) override { return fail_finalize_result; }
 };
 
 class FakeStorage final : public tinyimx::file::FileStoragePort {
@@ -58,10 +81,26 @@ public:
         return result;
     }
 
+    tinyimx::file::ComposeObjectResult ComposeObjectAtomically(
+        const tinyimx::file::ComposeObjectRequest& request
+    ) override {
+        last_compose_key = request.storage_key;
+        last_compose_parts = request.parts.size();
+        tinyimx::file::ComposeObjectResult result;
+        result.status = compose_status;
+        result.bytes_written = request.expected_total_size;
+        result.verified_sha256 = request.expected_sha256;
+        result.message = "composed";
+        return result;
+    }
+
     tinyimx::file::FileStorageStatus status{tinyimx::file::FileStorageStatus::kSucceeded};
+    tinyimx::file::FileStorageStatus compose_status{tinyimx::file::FileStorageStatus::kSucceeded};
     std::string last_key;
     std::string last_data;
     std::string last_checksum;
+    std::string last_compose_key;
+    std::size_t last_compose_parts{0};
 };
 
 int Fail(const char* message) {
@@ -100,6 +139,45 @@ int main() {
     reserved_chunk.status = UploadChunkStatus::kStored;
     repository.mark_result.status = FileApplicationStatus::kSucceeded;
     repository.mark_result.chunk = reserved_chunk;
+
+    UploadSnapshotView snapshot;
+    snapshot.bundle.file.file_id = 7001;
+    snapshot.bundle.file.owner_user_id = 10001;
+    snapshot.bundle.file.file_name = "hello.bin";
+    snapshot.bundle.file.content_type = "application/octet-stream";
+    snapshot.bundle.file.total_size = 5;
+    snapshot.bundle.file.checksum_algorithm = "sha256";
+    snapshot.bundle.file.expected_checksum = reserved_chunk.checksum;
+    snapshot.bundle.file.storage_backend = "local_fs";
+    snapshot.bundle.file.storage_key = "files/7001";
+    snapshot.bundle.file.status = FileStatus::kUploading;
+    snapshot.bundle.file.version = 1;
+    snapshot.bundle.session.upload_id = 77;
+    snapshot.bundle.session.file_id = 7001;
+    snapshot.bundle.session.owner_user_id = 10001;
+    snapshot.bundle.session.client_upload_id = "upload";
+    snapshot.bundle.session.total_size = 5;
+    snapshot.bundle.session.chunk_size = 5;
+    snapshot.bundle.session.status = UploadSessionStatus::kActive;
+    snapshot.bundle.session.version = 1;
+    snapshot.chunks.push_back(reserved_chunk);
+    repository.snapshot_result.status = FileApplicationStatus::kSucceeded;
+    repository.snapshot_result.snapshot = snapshot;
+
+    auto finalizing_snapshot = snapshot;
+    finalizing_snapshot.bundle.file.status = FileStatus::kVerifying;
+    finalizing_snapshot.bundle.session.status = UploadSessionStatus::kFinalizing;
+    repository.prepare_result.status = FileApplicationStatus::kSucceeded;
+    repository.prepare_result.outcome = FinalizePreparationOutcome::kStarted;
+    repository.prepare_result.snapshot = finalizing_snapshot;
+
+    auto completed_bundle = snapshot.bundle;
+    completed_bundle.file.status = FileStatus::kAvailable;
+    completed_bundle.file.verified_checksum = reserved_chunk.checksum;
+    completed_bundle.session.status = UploadSessionStatus::kCompleted;
+    repository.complete_result.status = FileApplicationStatus::kSucceeded;
+    repository.complete_result.outcome = CompleteFinalizeOutcome::kCompleted;
+    repository.complete_result.bundle = completed_bundle;
 
     FileApplicationService service(&repository, &storage);
 
@@ -183,11 +261,27 @@ int main() {
     if (service.UploadChunk(chunk).status != FileApplicationStatus::kInvalidArgument)
         return Fail("UploadChunk accepted empty data");
 
+    const auto progress = service.GetUploadProgress({10001, 77});
+    if (!progress.Found() || !progress.progress->ready_to_finalize ||
+        progress.progress->expected_chunk_count != 1 ||
+        progress.progress->stored_chunk_count != 1 ||
+        !progress.progress->missing_ranges.empty()) {
+        return Fail("GetUploadProgress did not derive complete durable manifest");
+    }
+
+    const auto finalized = service.FinalizeUpload({10001, 77});
+    if (!finalized.Completed() || finalized.outcome != FinalizeUploadOutcome::kCompleted ||
+        !finalized.bundle || finalized.bundle->file.status != FileStatus::kAvailable ||
+        repository.last_prepare.upload_id != 77 || repository.last_complete.upload_id != 77 ||
+        storage.last_compose_key != "files/7001" || storage.last_compose_parts != 1) {
+        return Fail("FinalizeUpload did not preserve prepare->compose->complete chain");
+    }
+
     if (service.GetUploadSession({0, 77}).status != FileApplicationStatus::kInvalidArgument)
         return Fail("GetUploadSession accepted zero actor");
     if (service.CancelUpload({10001, 0}).status != FileApplicationStatus::kInvalidArgument)
         return Fail("CancelUpload accepted zero upload_id");
 
-    std::cout << "[PASS] M18-B1 file application validation/storage orchestration\n";
+    std::cout << "[PASS] M18-B2 file application progress/finalize orchestration\n";
     return 0;
 }

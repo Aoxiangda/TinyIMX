@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace tinyimx {
 
@@ -132,6 +133,17 @@ struct FileUploadChunkFindResult {
     }
 };
 
+
+struct FileUploadChunkListResult {
+    FileRepositoryStatus status{FileRepositoryStatus::kStorageError};
+    std::vector<FileUploadChunkRecord> records;
+    std::string message;
+
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return status == FileRepositoryStatus::kSucceeded;
+    }
+};
+
 struct FileUploadChunkInsertResult {
     FileRepositoryStatus status{FileRepositoryStatus::kStorageError};
     bool inserted{false};
@@ -173,6 +185,11 @@ public:
         std::uint64_t owner_user_id,
         std::uint64_t upload_id,
         std::uint64_t chunk_index
+    );
+
+    [[nodiscard]] FileUploadChunkListResult FindChunks(
+        std::uint64_t owner_user_id,
+        std::uint64_t upload_id
     );
 
     [[nodiscard]] FileBooleanResult UserExistsOnConnection(
@@ -242,6 +259,13 @@ public:
         bool for_update
     );
 
+    [[nodiscard]] FileUploadChunkListResult FindChunksOnConnection(
+        MySqlConnection* connection,
+        std::uint64_t owner_user_id,
+        std::uint64_t upload_id,
+        bool for_update
+    );
+
     [[nodiscard]] FileMutationResult MarkChunkStoredOnConnection(
         MySqlConnection* connection,
         std::uint64_t owner_user_id,
@@ -249,6 +273,28 @@ public:
         std::uint64_t chunk_index,
         std::uint64_t chunk_size,
         const std::string& checksum
+    );
+
+    [[nodiscard]] FileMutationResult BeginFinalizeOnConnection(
+        MySqlConnection* connection,
+        std::uint64_t owner_user_id,
+        std::uint64_t upload_id,
+        std::uint64_t file_id
+    );
+
+    [[nodiscard]] FileMutationResult CompleteFinalizeOnConnection(
+        MySqlConnection* connection,
+        std::uint64_t owner_user_id,
+        std::uint64_t upload_id,
+        std::uint64_t file_id,
+        const std::string& verified_checksum
+    );
+
+    [[nodiscard]] FileMutationResult FailFinalizeChecksumOnConnection(
+        MySqlConnection* connection,
+        std::uint64_t owner_user_id,
+        std::uint64_t file_id,
+        const std::string& actual_checksum
     );
 
     [[nodiscard]] FileMutationResult CancelUploadOnConnection(

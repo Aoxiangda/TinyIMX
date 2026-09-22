@@ -33,6 +33,18 @@ public:
         tinyimx::file::v1::UploadChunkResponse* response
     ) override;
 
+    grpc::Status GetUploadProgress(
+        grpc::ServerContext* context,
+        const tinyimx::file::v1::GetUploadProgressRequest* request,
+        tinyimx::file::v1::GetUploadProgressResponse* response
+    ) override;
+
+    grpc::Status FinalizeUpload(
+        grpc::ServerContext* context,
+        const tinyimx::file::v1::FinalizeUploadRequest* request,
+        tinyimx::file::v1::FinalizeUploadResponse* response
+    ) override;
+
 private:
     FileApplicationService* application_service_{nullptr};  // non-owning
 };

@@ -12,6 +12,8 @@ service FileService {
     rpc GetUploadSession(GetUploadSessionRequest) returns (GetUploadSessionResponse);
     rpc CancelUpload(CancelUploadRequest) returns (CancelUploadResponse);
     rpc UploadChunk(UploadChunkRequest) returns (UploadChunkResponse);
+    rpc GetUploadProgress(GetUploadProgressRequest) returns (GetUploadProgressResponse);
+    rpc FinalizeUpload(FinalizeUploadRequest) returns (FinalizeUploadResponse);
 }
 
 enum FileStatus {
@@ -58,6 +60,14 @@ enum UploadChunkResult {
     UPLOAD_CHUNK_RESULT_STORED = 1;
     UPLOAD_CHUNK_RESULT_REUSED = 2;
     UPLOAD_CHUNK_RESULT_IDEMPOTENCY_CONFLICT = 3;
+}
+
+enum FinalizeUploadResult {
+    FINALIZE_UPLOAD_RESULT_UNSPECIFIED = 0;
+    FINALIZE_UPLOAD_RESULT_COMPLETED = 1;
+    FINALIZE_UPLOAD_RESULT_REUSED = 2;
+    FINALIZE_UPLOAD_RESULT_NOT_READY = 3;
+    FINALIZE_UPLOAD_RESULT_CHECKSUM_MISMATCH = 4;
 }
 
 message FileRecord {
@@ -172,4 +182,46 @@ message UploadChunkResponse {
     UploadChunkResult result = 1;
     UploadChunkRecord chunk = 2;
     string message = 3;
+}
+
+
+message ChunkIndexRange {
+    uint64 start_index = 1;
+    uint64 end_index = 2;
+}
+
+message UploadProgressRecord {
+    uint64 expected_chunk_count = 1;
+    uint64 stored_chunk_count = 2;
+    uint64 reserved_chunk_count = 3;
+    repeated ChunkIndexRange missing_ranges = 4;
+    bool ready_to_finalize = 5;
+}
+
+message GetUploadProgressRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    uint64 upload_id = 3;
+}
+
+message GetUploadProgressResponse {
+    FileRecord file = 1;
+    UploadSessionRecord session = 2;
+    UploadProgressRecord progress = 3;
+    string message = 4;
+}
+
+message FinalizeUploadRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    uint64 upload_id = 3;
+}
+
+message FinalizeUploadResponse {
+    FinalizeUploadResult result = 1;
+    FileRecord file = 2;
+    UploadSessionRecord session = 3;
+    UploadProgressRecord progress = 4;
+    string verified_checksum = 5;
+    string message = 6;
 }

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -80,6 +81,95 @@ BeginUploadResult InvalidBegin(std::string message) {
 UploadChunkResult InvalidChunk(std::string message) {
     UploadChunkResult result;
     result.status = FileApplicationStatus::kInvalidArgument;
+    result.message = std::move(message);
+    return result;
+}
+
+void AppendMissingRange(
+    std::vector<ChunkIndexRange>* ranges,
+    std::uint64_t start_index,
+    std::uint64_t end_index
+) {
+    if (ranges == nullptr || start_index > end_index) return;
+    if (!ranges->empty() && ranges->back().end_index != std::numeric_limits<std::uint64_t>::max() &&
+        ranges->back().end_index + 1 == start_index) {
+        ranges->back().end_index = end_index;
+        return;
+    }
+    ranges->push_back({start_index, end_index});
+}
+
+std::optional<UploadProgressView> BuildProgress(const UploadSnapshotView& snapshot) {
+    const auto& file = snapshot.bundle.file;
+    const auto& session = snapshot.bundle.session;
+    if (file.file_id == 0 || session.upload_id == 0 || file.file_id != session.file_id ||
+        file.owner_user_id == 0 || file.owner_user_id != session.owner_user_id ||
+        file.total_size == 0 || file.total_size != session.total_size || session.chunk_size == 0) {
+        return std::nullopt;
+    }
+
+    UploadProgressView progress;
+    progress.bundle = snapshot.bundle;
+    progress.expected_chunk_count = 1 + ((session.total_size - 1) / session.chunk_size);
+
+    std::uint64_t cursor = 0;
+    bool first = true;
+    std::uint64_t previous_index = 0;
+    for (const auto& chunk : snapshot.chunks) {
+        if ((!first && chunk.chunk_index <= previous_index) ||
+            chunk.chunk_index >= progress.expected_chunk_count ||
+            chunk.upload_id != session.upload_id || chunk.file_id != file.file_id ||
+            chunk.owner_user_id != session.owner_user_id ||
+            chunk.checksum_algorithm != "sha256" || chunk.checksum.size() != 64) {
+            return std::nullopt;
+        }
+        const std::uint64_t expected_offset = chunk.chunk_index * session.chunk_size;
+        const std::uint64_t remaining = session.total_size - expected_offset;
+        const std::uint64_t expected_size = std::min(session.chunk_size, remaining);
+        if (chunk.byte_offset != expected_offset || chunk.chunk_size != expected_size) {
+            return std::nullopt;
+        }
+
+        if (cursor < chunk.chunk_index) {
+            AppendMissingRange(&progress.missing_ranges, cursor, chunk.chunk_index - 1);
+        }
+        if (chunk.status == UploadChunkStatus::kStored) {
+            ++progress.stored_chunk_count;
+        } else if (chunk.status == UploadChunkStatus::kReserved) {
+            ++progress.reserved_chunk_count;
+            AppendMissingRange(&progress.missing_ranges, chunk.chunk_index, chunk.chunk_index);
+        } else {
+            return std::nullopt;
+        }
+        cursor = chunk.chunk_index + 1;
+        previous_index = chunk.chunk_index;
+        first = false;
+    }
+
+    if (cursor < progress.expected_chunk_count) {
+        AppendMissingRange(
+            &progress.missing_ranges, cursor, progress.expected_chunk_count - 1
+        );
+    }
+
+    const bool mutable_or_finalizing =
+        (session.status == UploadSessionStatus::kActive && file.status == FileStatus::kUploading) ||
+        (session.status == UploadSessionStatus::kFinalizing && file.status == FileStatus::kVerifying);
+    progress.ready_to_finalize = mutable_or_finalizing && progress.missing_ranges.empty() &&
+        progress.stored_chunk_count == progress.expected_chunk_count;
+    return progress;
+}
+
+GetUploadProgressResult ProgressFailure(FileApplicationStatus status, std::string message) {
+    GetUploadProgressResult result;
+    result.status = status;
+    result.message = std::move(message);
+    return result;
+}
+
+FinalizeUploadResult FinalizeFailure(FileApplicationStatus status, std::string message) {
+    FinalizeUploadResult result;
+    result.status = status;
     result.message = std::move(message);
     return result;
 }
@@ -266,6 +356,190 @@ UploadChunkResult FileApplicationService::UploadChunk(UploadChunkCommand command
     result.message = reserved.outcome == ReserveChunkOutcome::kCreated
         ? "chunk durably stored"
         : "chunk retry safely reused durable identity";
+    return result;
+}
+
+GetUploadProgressResult FileApplicationService::GetUploadProgress(
+    const GetUploadProgressQuery& query
+) {
+    if (query.actor_user_id == 0 || query.upload_id == 0) {
+        return ProgressFailure(
+            FileApplicationStatus::kInvalidArgument,
+            "actor_user_id and upload_id must be non-zero"
+        );
+    }
+    if (repository_ == nullptr) {
+        return ProgressFailure(
+            FileApplicationStatus::kStorageError,
+            "file repository port is unavailable"
+        );
+    }
+
+    const auto snapshot = repository_->GetUploadSnapshot(query);
+    if (!snapshot.Found()) {
+        return ProgressFailure(snapshot.status, snapshot.message);
+    }
+    const auto progress = BuildProgress(*snapshot.snapshot);
+    if (!progress.has_value()) {
+        return ProgressFailure(
+            FileApplicationStatus::kInvalidRecord,
+            "upload snapshot violates durable chunk geometry"
+        );
+    }
+
+    GetUploadProgressResult result;
+    result.status = FileApplicationStatus::kSucceeded;
+    result.progress = *progress;
+    result.message = progress->ready_to_finalize
+        ? "all durable chunks are stored"
+        : "upload progress derived from durable chunk manifest";
+    return result;
+}
+
+FinalizeUploadResult FileApplicationService::FinalizeUpload(
+    const FinalizeUploadCommand& command
+) {
+    if (command.actor_user_id == 0 || command.upload_id == 0) {
+        return FinalizeFailure(
+            FileApplicationStatus::kInvalidArgument,
+            "actor_user_id and upload_id must be non-zero"
+        );
+    }
+    if (repository_ == nullptr || storage_ == nullptr) {
+        return FinalizeFailure(
+            FileApplicationStatus::kStorageError,
+            "finalize repository/storage dependency is unavailable"
+        );
+    }
+
+    const auto prepared = repository_->PrepareFinalize(command);
+    if (!prepared.Completed()) {
+        return FinalizeFailure(prepared.status, prepared.message);
+    }
+    if (!prepared.snapshot.has_value()) {
+        return FinalizeFailure(
+            FileApplicationStatus::kInvalidRecord,
+            "FinalizeUpload preparation returned no durable snapshot"
+        );
+    }
+
+    const auto progress = BuildProgress(*prepared.snapshot);
+    if (!progress.has_value()) {
+        return FinalizeFailure(
+            FileApplicationStatus::kInvalidRecord,
+            "FinalizeUpload snapshot violates durable chunk geometry"
+        );
+    }
+
+    if (prepared.outcome == FinalizePreparationOutcome::kNotReady) {
+        FinalizeUploadResult result;
+        result.status = FileApplicationStatus::kSucceeded;
+        result.outcome = FinalizeUploadOutcome::kNotReady;
+        result.progress = *progress;
+        result.bundle = prepared.snapshot->bundle;
+        result.message = "FinalizeUpload requires every expected chunk to be STORED";
+        return result;
+    }
+    if (prepared.outcome == FinalizePreparationOutcome::kChecksumMismatch) {
+        FinalizeUploadResult result;
+        result.status = FileApplicationStatus::kSucceeded;
+        result.outcome = FinalizeUploadOutcome::kChecksumMismatch;
+        result.progress = *progress;
+        result.bundle = prepared.snapshot->bundle;
+        result.verified_checksum = prepared.snapshot->bundle.file.verified_checksum;
+        result.message = "upload is durably failed because whole-file SHA-256 mismatched";
+        return result;
+    }
+    if (prepared.outcome == FinalizePreparationOutcome::kAlreadyCompleted) {
+        FinalizeUploadResult result;
+        result.status = FileApplicationStatus::kSucceeded;
+        result.outcome = FinalizeUploadOutcome::kReused;
+        result.progress = *progress;
+        result.bundle = prepared.snapshot->bundle;
+        result.verified_checksum = prepared.snapshot->bundle.file.verified_checksum;
+        result.message = "FinalizeUpload safely reused AVAILABLE durable state";
+        return result;
+    }
+    if (!progress->ready_to_finalize) {
+        return FinalizeFailure(
+            FileApplicationStatus::kInvalidRecord,
+            "FINALIZING upload no longer has a complete STORED manifest"
+        );
+    }
+
+    ComposeObjectRequest compose_request;
+    compose_request.storage_key = prepared.snapshot->bundle.file.storage_key;
+    compose_request.expected_total_size = prepared.snapshot->bundle.file.total_size;
+    compose_request.expected_sha256 = prepared.snapshot->bundle.file.expected_checksum;
+    compose_request.parts.reserve(prepared.snapshot->chunks.size());
+    for (const auto& chunk : prepared.snapshot->chunks) {
+        if (chunk.status != UploadChunkStatus::kStored) {
+            return FinalizeFailure(
+                FileApplicationStatus::kInvalidRecord,
+                "FinalizeUpload encountered non-STORED chunk after preparation"
+            );
+        }
+        compose_request.parts.push_back({
+            chunk.storage_part_key, chunk.chunk_size, chunk.checksum
+        });
+    }
+
+    const auto composed = storage_->ComposeObjectAtomically(compose_request);
+    if (composed.status == FileStorageStatus::kChecksumMismatch) {
+        const auto failed = repository_->FailFinalizeChecksum({
+            command.actor_user_id, command.upload_id, composed.verified_sha256
+        });
+        if (!failed.Completed()) {
+            return FinalizeFailure(failed.status, failed.message);
+        }
+        FinalizeUploadResult result;
+        result.status = FileApplicationStatus::kSucceeded;
+        result.outcome = FinalizeUploadOutcome::kChecksumMismatch;
+        auto final_progress = *progress;
+        if (failed.bundle.has_value()) {
+            final_progress.bundle = *failed.bundle;
+            final_progress.ready_to_finalize = false;
+        }
+        result.progress = std::move(final_progress);
+        result.bundle = failed.bundle;
+        result.verified_checksum = composed.verified_sha256;
+        result.message = "whole-file SHA-256 mismatch recorded as terminal FAILED file state";
+        return result;
+    }
+    if (!composed.Succeeded() ||
+        composed.bytes_written != prepared.snapshot->bundle.file.total_size ||
+        composed.verified_sha256 != prepared.snapshot->bundle.file.expected_checksum) {
+        return FinalizeFailure(
+            composed.status == FileStorageStatus::kInvalidArgument
+                ? FileApplicationStatus::kInvalidArgument
+                : FileApplicationStatus::kStorageError,
+            composed.message.empty() ? "final object assembly failed" : composed.message
+        );
+    }
+
+    const auto completed = repository_->CompleteFinalize({
+        command.actor_user_id, command.upload_id, composed.verified_sha256
+    });
+    if (!completed.Completed()) {
+        return FinalizeFailure(completed.status, completed.message);
+    }
+
+    FinalizeUploadResult result;
+    result.status = FileApplicationStatus::kSucceeded;
+    result.outcome = completed.outcome == CompleteFinalizeOutcome::kCompleted
+        ? FinalizeUploadOutcome::kCompleted
+        : FinalizeUploadOutcome::kReused;
+    result.bundle = completed.bundle;
+    result.verified_checksum = composed.verified_sha256;
+    auto final_progress = *progress;
+    if (completed.bundle.has_value()) {
+        final_progress.bundle = *completed.bundle;
+        final_progress.ready_to_finalize = false;
+    }
+    result.progress = std::move(final_progress);
+    result.message = completed.outcome == CompleteFinalizeOutcome::kCompleted
+        ? "final object atomically published and durable state marked AVAILABLE"
+        : "FinalizeUpload response-loss retry reused COMPLETED/AVAILABLE state";
     return result;
 }
 

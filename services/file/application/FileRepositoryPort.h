@@ -31,6 +31,22 @@ public:
     [[nodiscard]] virtual MarkChunkStoredResult MarkChunkStored(
         const MarkChunkStoredCommand& command
     ) = 0;
+
+    [[nodiscard]] virtual GetUploadSnapshotResult GetUploadSnapshot(
+        const GetUploadProgressQuery& query
+    ) = 0;
+
+    [[nodiscard]] virtual FinalizePreparationResult PrepareFinalize(
+        const FinalizeUploadCommand& command
+    ) = 0;
+
+    [[nodiscard]] virtual CompleteFinalizeResult CompleteFinalize(
+        const CompleteFinalizeCommand& command
+    ) = 0;
+
+    [[nodiscard]] virtual FailFinalizeChecksumResult FailFinalizeChecksum(
+        const FailFinalizeChecksumCommand& command
+    ) = 0;
 };
 
 }  // namespace tinyimx::file

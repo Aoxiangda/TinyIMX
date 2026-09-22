@@ -625,16 +625,18 @@ int main() {
   const auto* file_service =
       google::protobuf::DescriptorPool::generated_pool()->FindServiceByName(
           "tinyimx.file.v1.FileService");
-  Expect(file_service != nullptr && file_service->method_count() == 4,
-         "FileService 4-method M18-B1 contract frozen");
+  Expect(file_service != nullptr && file_service->method_count() == 6,
+         "FileService 6-method M18-B2 contract frozen");
   static const char* kExpectedFileMethods[] = {
       "BeginUpload",
       "GetUploadSession",
       "CancelUpload",
       "UploadChunk",
+      "GetUploadProgress",
+      "FinalizeUpload",
   };
   if (file_service != nullptr) {
-    for (int i = 0; i < file_service->method_count() && i < 4; ++i) {
+    for (int i = 0; i < file_service->method_count() && i < 6; ++i) {
       const std::string label =
           std::string("FileService method frozen: ") + kExpectedFileMethods[i];
       Expect(file_service->method(i)->name() == kExpectedFileMethods[i],
@@ -660,6 +662,26 @@ int main() {
   Expect(FindField(upload_chunk_descriptor, "checksum") != nullptr &&
              FindField(upload_chunk_descriptor, "checksum")->number() == 8,
          "UploadChunkRequest.checksum frozen at 8");
+
+  using tinyimx::file::v1::GetUploadProgressRequest;
+  using tinyimx::file::v1::FinalizeUploadResponse;
+  const auto* progress_request_descriptor = GetUploadProgressRequest::descriptor();
+  Expect(FindField(progress_request_descriptor, "actor_user_id") != nullptr &&
+             FindField(progress_request_descriptor, "actor_user_id")->number() == 2,
+         "GetUploadProgressRequest.actor_user_id frozen at 2");
+  Expect(FindField(progress_request_descriptor, "upload_id") != nullptr &&
+             FindField(progress_request_descriptor, "upload_id")->number() == 3,
+         "GetUploadProgressRequest.upload_id frozen at 3");
+  const auto* finalize_response_descriptor = FinalizeUploadResponse::descriptor();
+  Expect(FindField(finalize_response_descriptor, "result") != nullptr &&
+             FindField(finalize_response_descriptor, "result")->number() == 1,
+         "FinalizeUploadResponse.result frozen at 1");
+  Expect(FindField(finalize_response_descriptor, "progress") != nullptr &&
+             FindField(finalize_response_descriptor, "progress")->number() == 4,
+         "FinalizeUploadResponse.progress frozen at 4");
+  Expect(FindField(finalize_response_descriptor, "verified_checksum") != nullptr &&
+             FindField(finalize_response_descriptor, "verified_checksum")->number() == 5,
+         "FinalizeUploadResponse.verified_checksum frozen at 5");
 
   std::cout << "total_failed=" << g_failed << '\n';
 
