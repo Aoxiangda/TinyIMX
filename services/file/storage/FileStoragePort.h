@@ -59,11 +59,29 @@ struct ComposeObjectResult {
 
 
 
+struct VerifyObjectRequest {
+    std::string storage_key;
+    std::uint64_t expected_total_size{0};
+    std::string expected_sha256;
+};
+
+struct VerifyObjectResult {
+    FileStorageStatus status{FileStorageStatus::kIoError};
+    std::uint64_t bytes_verified{0};
+    std::string verified_sha256;
+    std::string message;
+
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return status == FileStorageStatus::kSucceeded;
+    }
+};
+
 struct ReadObjectRangeRequest {
     std::string storage_key;
     std::uint64_t offset{0};
     std::uint64_t length{0};
     std::uint64_t expected_total_size{0};
+    std::string expected_sha256;
 };
 
 struct ReadObjectRangeResult {
@@ -99,6 +117,13 @@ public:
     // not hold a database transaction across this potentially slow I/O.
     [[nodiscard]] virtual ComposeObjectResult ComposeObjectAtomically(
         const ComposeObjectRequest& request
+    ) = 0;
+
+    // Verify one immutable final object against durable size + whole-file
+    // SHA-256. This is intentionally an open/resume control-path operation,
+    // not a per-range hot-path scan.
+    [[nodiscard]] virtual VerifyObjectResult VerifyObject(
+        const VerifyObjectRequest& request
     ) = 0;
 
     // Read one bounded range from an immutable final object. Range reads are

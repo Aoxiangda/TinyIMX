@@ -266,6 +266,17 @@ public:
         result.message = "composed";
         return result;
     }
+    tinyimx::file::VerifyObjectResult VerifyObject(
+        const tinyimx::file::VerifyObjectRequest& request
+    ) override {
+        tinyimx::file::VerifyObjectResult result;
+        result.status = tinyimx::file::FileStorageStatus::kSucceeded;
+        result.bytes_verified = request.expected_total_size;
+        result.verified_sha256 = request.expected_sha256;
+        result.message = "verified";
+        return result;
+    }
+
     tinyimx::file::ReadObjectRangeResult ReadObjectRange(
         const tinyimx::file::ReadObjectRangeRequest& request
     ) override {

@@ -99,6 +99,16 @@ ReadObjectRangeResult RangeFailure(
     return result;
 }
 
+VerifyObjectResult VerifyFailure(
+    FileStorageStatus status,
+    std::string message
+) {
+    VerifyObjectResult result;
+    result.status = status;
+    result.message = std::move(message);
+    return result;
+}
+
 bool WriteAll(int fd, const char* data, std::size_t size, std::string* error) {
     std::size_t written = 0;
     while (written < size) {
@@ -141,6 +151,56 @@ std::filesystem::path TemporarySibling(const std::filesystem::path& destination)
     return destination.string() + ".tmp." +
         std::to_string(static_cast<unsigned long long>(::getpid())) + "." +
         std::to_string(sequence);
+}
+
+std::string StatFingerprint(const struct stat& metadata) {
+    return std::to_string(static_cast<unsigned long long>(metadata.st_dev)) + ":" +
+        std::to_string(static_cast<unsigned long long>(metadata.st_ino)) + ":" +
+        std::to_string(static_cast<unsigned long long>(metadata.st_size)) + ":" +
+        std::to_string(static_cast<long long>(metadata.st_mtim.tv_sec)) + ":" +
+        std::to_string(static_cast<long long>(metadata.st_mtim.tv_nsec)) + ":" +
+        std::to_string(static_cast<long long>(metadata.st_ctim.tv_sec)) + ":" +
+        std::to_string(static_cast<long long>(metadata.st_ctim.tv_nsec));
+}
+
+constexpr std::uint64_t kIntegrityBlockSize = 1024ULL * 1024ULL;
+constexpr std::size_t kMaxVerifiedObjectCacheEntries = 64;
+
+bool ReadExactAt(
+    int fd, std::uint64_t offset, std::size_t size,
+    std::string* output, std::string* error
+) {
+    if (fd < 0 || output == nullptr) {
+        if (error != nullptr) *error = "invalid positioned read arguments";
+        return false;
+    }
+    const auto max_off_t = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
+    if (size != 0 &&
+        (offset > max_off_t || static_cast<std::uint64_t>(size - 1) > max_off_t - offset)) {
+        if (error != nullptr) *error = "positioned read exceeds filesystem offset range";
+        return false;
+    }
+    output->assign(size, '\0');
+    std::size_t completed = 0;
+    while (completed < size) {
+        const ssize_t rc = ::pread(
+            fd, output->data() + completed, size - completed,
+            static_cast<off_t>(offset + completed)
+        );
+        if (rc < 0) {
+            if (errno == EINTR) continue;
+            if (error != nullptr) {
+                *error = std::string("pread failed: ") + std::strerror(errno);
+            }
+            return false;
+        }
+        if (rc == 0) {
+            if (error != nullptr) *error = "unexpected EOF during positioned read";
+            return false;
+        }
+        completed += static_cast<std::size_t>(rc);
+    }
+    return true;
 }
 
 }  // namespace
@@ -402,104 +462,273 @@ ComposeObjectResult LocalFilesystemStorage::ComposeObjectAtomically(
     return result;
 }
 
+VerifyObjectResult LocalFilesystemStorage::VerifyObject(
+    const VerifyObjectRequest& request
+) {
+    if (request.expected_total_size == 0 || !ValidSha256Hex(request.expected_sha256)) {
+        return VerifyFailure(FileStorageStatus::kInvalidArgument,
+                             "invalid immutable object verification request");
+    }
+    std::filesystem::path source;
+    if (!ResolveSafePath(request.storage_key, &source)) {
+        return VerifyFailure(FileStorageStatus::kInvalidArgument, "storage_key is unsafe");
+    }
+    const std::string cache_key = source.string();
+    const int fd = ::open(source.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) {
+        if (errno == ENOENT) {
+            std::lock_guard<std::mutex> lock(verification_mutex_);
+            verified_objects_.erase(cache_key);
+            return VerifyFailure(FileStorageStatus::kNotFound, "AVAILABLE final object is missing");
+        }
+        return VerifyFailure(FileStorageStatus::kIoError,
+                             std::string("open final object for verification failed: ") + std::strerror(errno));
+    }
+    struct stat before {};
+    if (::fstat(fd, &before) != 0) {
+        const std::string error = std::string("fstat final object failed: ") + std::strerror(errno);
+        (void)::close(fd); return VerifyFailure(FileStorageStatus::kIoError, error);
+    }
+    if (!S_ISREG(before.st_mode) || before.st_size < 0 ||
+        static_cast<std::uint64_t>(before.st_size) != request.expected_total_size) {
+        (void)::close(fd);
+        std::lock_guard<std::mutex> lock(verification_mutex_); verified_objects_.erase(cache_key);
+        return VerifyFailure(FileStorageStatus::kDataLoss,
+                             "AVAILABLE final object type/size disagrees with durable metadata");
+    }
+    const std::string before_fingerprint = StatFingerprint(before);
+    EvpMdCtx context(EVP_MD_CTX_new());
+    if (!context || EVP_DigestInit_ex(context.get(), EVP_sha256(), nullptr) != 1) {
+        (void)::close(fd); return VerifyFailure(FileStorageStatus::kIoError,
+                                                "initialize final-object SHA-256 failed");
+    }
+    std::vector<std::string> block_sha256;
+    std::uint64_t bytes = 0;
+    while (bytes < request.expected_total_size) {
+        const std::uint64_t remaining = request.expected_total_size - bytes;
+        const auto block_size = static_cast<std::size_t>(
+            std::min(kIntegrityBlockSize, remaining)
+        );
+        std::string block;
+        std::string read_error;
+        if (!ReadExactAt(fd, bytes, block_size, &block, &read_error)) {
+            (void)::close(fd);
+            return VerifyFailure(
+                FileStorageStatus::kDataLoss,
+                "read final object for verification failed: " + read_error
+            );
+        }
+        if (EVP_DigestUpdate(context.get(), block.data(), block.size()) != 1) {
+            (void)::close(fd); return VerifyFailure(FileStorageStatus::kIoError,
+                                                    "update final-object SHA-256 failed");
+        }
+        const std::string block_digest = Sha256Hex(block);
+        if (block_digest.empty()) {
+            (void)::close(fd); return VerifyFailure(FileStorageStatus::kIoError,
+                                                    "compute integrity block SHA-256 failed");
+        }
+        block_sha256.push_back(block_digest);
+        bytes += static_cast<std::uint64_t>(block_size);
+    }
+    struct stat after {};
+    if (::fstat(fd, &after) != 0) {
+        const std::string error = std::string("final fstat final object failed: ") + std::strerror(errno);
+        (void)::close(fd); return VerifyFailure(FileStorageStatus::kIoError, error);
+    }
+    (void)::close(fd);
+    const std::string after_fingerprint = StatFingerprint(after);
+    if (bytes != request.expected_total_size || before_fingerprint != after_fingerprint) {
+        std::lock_guard<std::mutex> lock(verification_mutex_); verified_objects_.erase(cache_key);
+        return VerifyFailure(FileStorageStatus::kDataLoss,
+                             "final object changed during whole-object verification");
+    }
+    unsigned char digest[EVP_MAX_MD_SIZE]{}; unsigned int digest_size = 0;
+    if (EVP_DigestFinal_ex(context.get(), digest, &digest_size) != 1 || digest_size == 0) {
+        return VerifyFailure(FileStorageStatus::kIoError, "finalize final-object SHA-256 failed");
+    }
+    const std::string actual = HexDigest(digest, digest_size);
+    if (actual != request.expected_sha256) {
+        std::lock_guard<std::mutex> lock(verification_mutex_); verified_objects_.erase(cache_key);
+        VerifyObjectResult result; result.status = FileStorageStatus::kChecksumMismatch;
+        result.bytes_verified = bytes; result.verified_sha256 = actual;
+        result.message = "AVAILABLE final object SHA-256 disagrees with durable metadata"; return result;
+    }
+    {
+        std::lock_guard<std::mutex> lock(verification_mutex_);
+        if (verified_objects_.find(cache_key) == verified_objects_.end() &&
+            verified_objects_.size() >= kMaxVerifiedObjectCacheEntries) {
+            verified_objects_.erase(verified_objects_.begin());
+        }
+        verified_objects_[cache_key] = {
+            after_fingerprint, actual, std::move(block_sha256)
+        };
+    }
+    VerifyObjectResult result; result.status = FileStorageStatus::kSucceeded;
+    result.bytes_verified = bytes; result.verified_sha256 = actual;
+    result.message = "final object size and SHA-256 verified"; return result;
+}
+
 ReadObjectRangeResult LocalFilesystemStorage::ReadObjectRange(
     const ReadObjectRangeRequest& request
 ) {
     if (request.length == 0 || request.expected_total_size == 0 ||
-        request.offset >= request.expected_total_size) {
-        return RangeFailure(
-            FileStorageStatus::kInvalidArgument,
-            "invalid immutable object range"
-        );
+        request.offset >= request.expected_total_size || !ValidSha256Hex(request.expected_sha256)) {
+        return RangeFailure(FileStorageStatus::kInvalidArgument, "invalid immutable object range");
     }
-
     std::filesystem::path source;
     if (!ResolveSafePath(request.storage_key, &source)) {
         return RangeFailure(FileStorageStatus::kInvalidArgument, "storage_key is unsafe");
     }
+    const std::string cache_key = source.string();
 
-    const int fd = ::open(source.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-    if (fd < 0) {
-        if (errno == ENOENT) {
-            return RangeFailure(
-                FileStorageStatus::kNotFound,
-                "AVAILABLE final object is missing"
-            );
+    auto open_checked = [&]() -> std::pair<int, std::string> {
+        const int fd = ::open(source.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+        if (fd < 0) return {-1, {}};
+        struct stat metadata {};
+        if (::fstat(fd, &metadata) != 0 || !S_ISREG(metadata.st_mode) || metadata.st_size < 0 ||
+            static_cast<std::uint64_t>(metadata.st_size) != request.expected_total_size) {
+            (void)::close(fd); return {-2, {}};
         }
-        return RangeFailure(
-            FileStorageStatus::kIoError,
-            std::string("open final object failed: ") + std::strerror(errno)
-        );
-    }
+        return {fd, StatFingerprint(metadata)};
+    };
 
-    struct stat metadata {};
-    if (::fstat(fd, &metadata) != 0) {
-        const std::string error = std::string("fstat final object failed: ") +
-            std::strerror(errno);
-        (void)::close(fd);
-        return RangeFailure(FileStorageStatus::kIoError, error);
+    auto opened = open_checked();
+    if (opened.first == -1) {
+        if (errno == ENOENT) return RangeFailure(FileStorageStatus::kNotFound, "AVAILABLE final object is missing");
+        return RangeFailure(FileStorageStatus::kIoError,
+                            std::string("open final object failed: ") + std::strerror(errno));
     }
-    if (!S_ISREG(metadata.st_mode) || metadata.st_size < 0 ||
-        static_cast<std::uint64_t>(metadata.st_size) != request.expected_total_size) {
+    if (opened.first == -2) {
+        return RangeFailure(FileStorageStatus::kDataLoss,
+                            "AVAILABLE final object type/size disagrees with durable metadata");
+    }
+    int fd = opened.first;
+    std::string fingerprint = opened.second;
+    bool cache_hit = false;
+    {
+        std::lock_guard<std::mutex> lock(verification_mutex_);
+        const auto it = verified_objects_.find(cache_key);
+        cache_hit = it != verified_objects_.end() &&
+                    it->second.fingerprint == fingerprint &&
+                    it->second.whole_sha256 == request.expected_sha256;
+    }
+    if (!cache_hit) {
         (void)::close(fd);
-        return RangeFailure(
-            FileStorageStatus::kDataLoss,
-            "AVAILABLE final object type/size disagrees with durable metadata"
-        );
+        const auto verified = VerifyObject({request.storage_key, request.expected_total_size,
+                                            request.expected_sha256});
+        if (!verified.Succeeded()) return RangeFailure(verified.status, verified.message);
+        opened = open_checked();
+        if (opened.first < 0) {
+            return RangeFailure(FileStorageStatus::kDataLoss,
+                                "final object changed immediately after integrity verification");
+        }
+        fd = opened.first; fingerprint = opened.second;
+        std::lock_guard<std::mutex> lock(verification_mutex_);
+        const auto it = verified_objects_.find(cache_key);
+        if (it == verified_objects_.end() ||
+            it->second.fingerprint != fingerprint ||
+            it->second.whole_sha256 != request.expected_sha256) {
+            (void)::close(fd);
+            return RangeFailure(FileStorageStatus::kDataLoss,
+                                "final object fingerprint changed after integrity verification");
+        }
     }
 
     const std::uint64_t available = request.expected_total_size - request.offset;
     const std::uint64_t wanted = std::min(request.length, available);
     const auto max_off_t = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
     if (request.offset > max_off_t || wanted - 1 > max_off_t - request.offset) {
-        (void)::close(fd);
-        return RangeFailure(
-            FileStorageStatus::kInvalidArgument,
-            "range offset cannot be represented by this filesystem backend"
-        );
+        (void)::close(fd); return RangeFailure(FileStorageStatus::kInvalidArgument,
+                                               "range offset cannot be represented by this filesystem backend");
     }
     if (wanted > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
-        (void)::close(fd);
-        return RangeFailure(FileStorageStatus::kInvalidArgument, "range length is too large");
+        (void)::close(fd); return RangeFailure(FileStorageStatus::kInvalidArgument, "range length is too large");
     }
+    const std::uint64_t request_end = request.offset + wanted;
+    const std::uint64_t start_block = request.offset / kIntegrityBlockSize;
+    const std::uint64_t end_block = (request_end - 1) / kIntegrityBlockSize;
+    const std::uint64_t expected_block_count =
+        1 + ((request.expected_total_size - 1) / kIntegrityBlockSize);
 
-    std::string data(static_cast<std::size_t>(wanted), '\0');
-    std::size_t completed = 0;
-    while (completed < data.size()) {
-        const ssize_t rc = ::pread(
-            fd,
-            data.data() + completed,
-            data.size() - completed,
-            static_cast<off_t>(request.offset + completed)
-        );
-        if (rc < 0) {
-            if (errno == EINTR) continue;
-            const std::string error = std::string("pread final object failed: ") +
-                std::strerror(errno);
+    std::vector<std::string> expected_block_hashes;
+    {
+        std::lock_guard<std::mutex> lock(verification_mutex_);
+        const auto it = verified_objects_.find(cache_key);
+        if (it == verified_objects_.end() ||
+            it->second.fingerprint != fingerprint ||
+            it->second.whole_sha256 != request.expected_sha256 ||
+            it->second.block_sha256.size() !=
+                static_cast<std::size_t>(expected_block_count)) {
             (void)::close(fd);
-            return RangeFailure(FileStorageStatus::kIoError, error);
+            return RangeFailure(FileStorageStatus::kDataLoss,
+                                "verified object cache is inconsistent");
         }
-        if (rc == 0) {
-            (void)::close(fd);
-            return RangeFailure(
-                FileStorageStatus::kDataLoss,
-                "AVAILABLE final object ended before durable total_size"
+        expected_block_hashes.reserve(
+            static_cast<std::size_t>(end_block - start_block + 1)
+        );
+        for (std::uint64_t block = start_block; block <= end_block; ++block) {
+            expected_block_hashes.push_back(
+                it->second.block_sha256[static_cast<std::size_t>(block)]
             );
         }
-        completed += static_cast<std::size_t>(rc);
+    }
+
+    std::string data;
+    data.reserve(static_cast<std::size_t>(wanted));
+    std::size_t hash_index = 0;
+    for (std::uint64_t block = start_block; block <= end_block; ++block, ++hash_index) {
+        const std::uint64_t block_offset = block * kIntegrityBlockSize;
+        const auto block_size = static_cast<std::size_t>(std::min(
+            kIntegrityBlockSize, request.expected_total_size - block_offset
+        ));
+        std::string block_data;
+        std::string read_error;
+        if (!ReadExactAt(fd, block_offset, block_size, &block_data, &read_error)) {
+            (void)::close(fd);
+            std::lock_guard<std::mutex> lock(verification_mutex_);
+            verified_objects_.erase(cache_key);
+            return RangeFailure(FileStorageStatus::kDataLoss,
+                                "read verified integrity block failed: " + read_error);
+        }
+        const std::string actual_block_hash = Sha256Hex(block_data);
+        if (actual_block_hash.empty() ||
+            hash_index >= expected_block_hashes.size() ||
+            actual_block_hash != expected_block_hashes[hash_index]) {
+            (void)::close(fd);
+            std::lock_guard<std::mutex> lock(verification_mutex_);
+            verified_objects_.erase(cache_key);
+            return RangeFailure(
+                FileStorageStatus::kChecksumMismatch,
+                "final object integrity block changed after whole-object verification"
+            );
+        }
+        const std::uint64_t slice_begin_abs = std::max(request.offset, block_offset);
+        const std::uint64_t slice_end_abs = std::min(
+            request_end, block_offset + static_cast<std::uint64_t>(block_size)
+        );
+        const auto slice_begin = static_cast<std::size_t>(slice_begin_abs - block_offset);
+        const auto slice_size = static_cast<std::size_t>(slice_end_abs - slice_begin_abs);
+        data.append(block_data.data() + slice_begin, slice_size);
+    }
+    if (data.size() != static_cast<std::size_t>(wanted)) {
+        (void)::close(fd);
+        return RangeFailure(FileStorageStatus::kDataLoss,
+                            "verified range produced unexpected byte count");
+    }
+    struct stat after {};
+    if (::fstat(fd, &after) != 0) {
+        const std::string error = std::string("post-read fstat final object failed: ") + std::strerror(errno);
+        (void)::close(fd); return RangeFailure(FileStorageStatus::kIoError, error);
     }
     (void)::close(fd);
-
-    const std::string range_sha256 = Sha256Hex(data);
-    if (range_sha256.empty()) {
-        return RangeFailure(FileStorageStatus::kIoError, "compute range SHA-256 failed");
+    if (StatFingerprint(after) != fingerprint) {
+        std::lock_guard<std::mutex> lock(verification_mutex_); verified_objects_.erase(cache_key);
+        return RangeFailure(FileStorageStatus::kDataLoss, "final object changed during range read");
     }
-
-    ReadObjectRangeResult result;
-    result.status = FileStorageStatus::kSucceeded;
-    result.offset = request.offset;
-    result.data = std::move(data);
-    result.range_sha256 = range_sha256;
+    const std::string range_sha256 = Sha256Hex(data);
+    if (range_sha256.empty()) return RangeFailure(FileStorageStatus::kIoError, "compute range SHA-256 failed");
+    ReadObjectRangeResult result; result.status = FileStorageStatus::kSucceeded;
+    result.offset = request.offset; result.data = std::move(data); result.range_sha256 = range_sha256;
     result.eof = request.offset + wanted == request.expected_total_size;
     result.message = result.eof ? "final object EOF range read" : "final object range read";
     return result;

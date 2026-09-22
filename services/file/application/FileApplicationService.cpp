@@ -593,10 +593,10 @@ GetDownloadInfoResult FileApplicationService::GetDownloadInfo(
             "actor_user_id and file_id must be non-zero"
         );
     }
-    if (repository_ == nullptr) {
+    if (repository_ == nullptr || storage_ == nullptr) {
         return DownloadInfoFailure(
             FileApplicationStatus::kStorageError,
-            "file repository port is unavailable"
+            "download repository/storage dependency is unavailable"
         );
     }
 
@@ -622,6 +622,34 @@ GetDownloadInfoResult FileApplicationService::GetDownloadInfo(
         return DownloadInfoFailure(
             FileApplicationStatus::kInvalidRecord,
             "AVAILABLE file metadata/checksum invariants are invalid"
+        );
+    }
+
+    const auto verified = storage_->VerifyObject({
+        file.storage_key, info->total_size, info->verified_checksum
+    });
+    if (!verified.Succeeded()) {
+        if (verified.status == FileStorageStatus::kInvalidArgument ||
+            verified.status == FileStorageStatus::kNotFound ||
+            verified.status == FileStorageStatus::kDataLoss ||
+            verified.status == FileStorageStatus::kChecksumMismatch) {
+            return DownloadInfoFailure(
+                FileApplicationStatus::kInvalidRecord,
+                verified.message.empty()
+                    ? "AVAILABLE final object failed integrity verification"
+                    : verified.message
+            );
+        }
+        return DownloadInfoFailure(
+            FileApplicationStatus::kStorageError,
+            verified.message.empty() ? "final object verification failed" : verified.message
+        );
+    }
+    if (verified.bytes_verified != info->total_size ||
+        verified.verified_sha256 != info->verified_checksum) {
+        return DownloadInfoFailure(
+            FileApplicationStatus::kInvalidRecord,
+            "storage verification result disagrees with durable AVAILABLE metadata"
         );
     }
 
@@ -700,14 +728,16 @@ ReadFileRangeResult FileApplicationService::ReadFileRange(ReadFileRangeQuery que
     );
 
     const auto read = storage_->ReadObjectRange({
-        file.storage_key, query.offset, effective_length, info->total_size
+        file.storage_key, query.offset, effective_length, info->total_size,
+        info->verified_checksum
     });
     if (!read.Succeeded()) {
         if (read.status == FileStorageStatus::kInvalidArgument) {
             return RangeFailure(FileApplicationStatus::kInvalidArgument, read.message);
         }
         if (read.status == FileStorageStatus::kNotFound ||
-            read.status == FileStorageStatus::kDataLoss) {
+            read.status == FileStorageStatus::kDataLoss ||
+            read.status == FileStorageStatus::kChecksumMismatch) {
             return RangeFailure(
                 FileApplicationStatus::kInvalidRecord,
                 read.message.empty() ? "AVAILABLE storage object is missing or corrupt" : read.message

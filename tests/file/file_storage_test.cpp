@@ -105,17 +105,63 @@ int main() {
                 std::filesystem::file_size(final_path) == 10,
                 "LocalFilesystemStorage.compose-retry-does-not-append") && ok;
 
+    tinyimx::file::VerifyObjectRequest verify_request;
+    verify_request.storage_key = "files/7001";
+    verify_request.expected_total_size = 10;
+    verify_request.expected_sha256 = compose.expected_sha256;
+    const auto verified_object = storage.VerifyObject(verify_request);
+    ok = Expect(verified_object.Succeeded() && verified_object.bytes_verified == 10 &&
+                verified_object.verified_sha256 == compose.expected_sha256,
+                "LocalFilesystemStorage.verify-final-object") && ok;
+
+    {
+        std::fstream corrupt(final_path, std::ios::in | std::ios::out | std::ios::binary);
+        corrupt.seekp(0);
+        corrupt.put('H');
+    }
+    const auto corrupted_object = storage.VerifyObject(verify_request);
+    ok = Expect(corrupted_object.status == tinyimx::file::FileStorageStatus::kChecksumMismatch &&
+                corrupted_object.verified_sha256 != compose.expected_sha256,
+                "LocalFilesystemStorage.same-size-corruption-detected") && ok;
+
+    {
+        std::ofstream restore(final_path, std::ios::binary | std::ios::trunc);
+        restore << "helloworld";
+    }
+    ok = Expect(storage.VerifyObject(verify_request).Succeeded(),
+                "LocalFilesystemStorage.corruption-recovery-reverified") && ok;
+
     tinyimx::file::ReadObjectRangeRequest range;
     range.storage_key = "files/7001";
     range.offset = 2;
     range.length = 4;
     range.expected_total_size = 10;
+    range.expected_sha256 = compose.expected_sha256;
     const auto middle = storage.ReadObjectRange(range);
     ok = Expect(middle.Succeeded() && middle.offset == 2 && middle.data == "llow" &&
                 middle.range_sha256 ==
                     "ecfb725fceebce1ddc2602061742ba6add1a19af8a344d2c91168b118e14e933" &&
                 !middle.eof,
                 "LocalFilesystemStorage.bounded-range-read") && ok;
+
+    {
+        std::fstream mutate(final_path, std::ios::in | std::ios::out | std::ios::binary);
+        mutate.seekp(1);
+        mutate.put('X');
+        mutate.flush();
+    }
+    range.offset = 0;
+    range.length = 4;
+    const auto cache_invalidated = storage.ReadObjectRange(range);
+    ok = Expect(cache_invalidated.status == tinyimx::file::FileStorageStatus::kChecksumMismatch ||
+                cache_invalidated.status == tinyimx::file::FileStorageStatus::kDataLoss,
+                "LocalFilesystemStorage.cached-integrity-invalidated-on-mutation") && ok;
+    {
+        std::ofstream restore(final_path, std::ios::binary | std::ios::trunc);
+        restore << "helloworld";
+    }
+    ok = Expect(storage.ReadObjectRange(range).Succeeded(),
+                "LocalFilesystemStorage.range-recovers-after-exact-object-restore") && ok;
 
     range.offset = 8;
     range.length = 1024;

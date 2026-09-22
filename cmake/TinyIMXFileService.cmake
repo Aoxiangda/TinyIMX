@@ -158,3 +158,26 @@ target_link_libraries(file_service_demo PRIVATE
   tinyimx_file_grpc
   tinyimx_service_registry
 )
+
+# M18-C2 release/closeout clients. These are explicit acceptance tools and are
+# intentionally excluded from ordinary CTest because they require a live
+# FileService process plus real MySQL/filesystem state.
+add_executable(file_transfer_release_e2e_client
+  examples/file_transfer_release_e2e_client.cpp
+)
+target_compile_features(file_transfer_release_e2e_client PRIVATE cxx_std_20)
+target_link_libraries(file_transfer_release_e2e_client PRIVATE
+  tinyimx_rpc_proto
+  gRPC::grpc++
+  OpenSSL::Crypto
+)
+
+add_executable(file_download_stress_client
+  tests/file/file_download_stress_client.cpp
+)
+target_compile_features(file_download_stress_client PRIVATE cxx_std_20)
+target_link_libraries(file_download_stress_client PRIVATE
+  tinyimx_rpc_proto
+  gRPC::grpc++
+  OpenSSL::Crypto
+)

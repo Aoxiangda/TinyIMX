@@ -119,6 +119,19 @@ public:
         return result;
     }
 
+    tinyimx::file::VerifyObjectResult VerifyObject(
+        const tinyimx::file::VerifyObjectRequest& request
+    ) override {
+        tinyimx::file::VerifyObjectResult result;
+        result.status = verify_status;
+        result.bytes_verified = request.expected_total_size;
+        result.verified_sha256 = verify_status == tinyimx::file::FileStorageStatus::kSucceeded
+            ? request.expected_sha256 : std::string(64, 'f');
+        result.message = verify_status == tinyimx::file::FileStorageStatus::kSucceeded
+            ? "verified" : "corrupt";
+        return result;
+    }
+
     tinyimx::file::ReadObjectRangeResult ReadObjectRange(
         const tinyimx::file::ReadObjectRangeRequest& request
     ) override {
@@ -142,6 +155,7 @@ public:
     tinyimx::file::FileStorageStatus status{tinyimx::file::FileStorageStatus::kSucceeded};
     tinyimx::file::FileStorageStatus compose_status{tinyimx::file::FileStorageStatus::kSucceeded};
     tinyimx::file::FileStorageStatus range_status{tinyimx::file::FileStorageStatus::kSucceeded};
+    tinyimx::file::FileStorageStatus verify_status{tinyimx::file::FileStorageStatus::kSucceeded};
     std::string last_key;
     std::string last_data;
     std::string last_checksum;
@@ -343,6 +357,12 @@ int main() {
         return Fail("GetDownloadInfo did not authorize AVAILABLE metadata");
     }
 
+    storage.verify_status = FileStorageStatus::kChecksumMismatch;
+    if (service.GetDownloadInfo({10001, 7001}).status != FileApplicationStatus::kInvalidRecord) {
+        return Fail("GetDownloadInfo did not fail closed on final-object corruption");
+    }
+    storage.verify_status = FileStorageStatus::kSucceeded;
+
     ReadFileRangeQuery range;
     range.actor_user_id = 10001;
     range.file_id = 7001;
@@ -361,6 +381,12 @@ int main() {
         return Fail("ReadFileRange trusted a storage digest that disagrees with payload bytes");
     }
     storage.corrupt_range_digest = false;
+
+    storage.range_status = FileStorageStatus::kChecksumMismatch;
+    if (service.ReadFileRange(range).status != FileApplicationStatus::kInvalidRecord) {
+        return Fail("ReadFileRange did not map immutable-object checksum failure to data loss");
+    }
+    storage.range_status = FileStorageStatus::kSucceeded;
 
     range.if_match_sha256 = std::string(64, 'a');
     if (service.ReadFileRange(range).status != FileApplicationStatus::kFailedPrecondition)
