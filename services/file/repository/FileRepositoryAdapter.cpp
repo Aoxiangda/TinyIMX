@@ -6,6 +6,8 @@
 
 #include <openssl/evp.h>
 
+#include <algorithm>
+#include <climits>
 #include <iomanip>
 #include <optional>
 #include <sstream>
@@ -53,6 +55,40 @@ std::optional<UploadSessionStatus> MapUploadStatus(std::uint32_t status) {
         case 5: return UploadSessionStatus::kExpired;
         default: return std::nullopt;
     }
+}
+
+std::optional<UploadChunkStatus> MapChunkStatus(std::uint32_t status) {
+    switch (status) {
+        case 1: return UploadChunkStatus::kReserved;
+        case 2: return UploadChunkStatus::kStored;
+        default: return std::nullopt;
+    }
+}
+
+std::optional<UploadChunkView> ToChunkView(const tinyimx::FileUploadChunkRecord& record) {
+    const auto status = MapChunkStatus(record.status);
+    if (!status.has_value() || record.upload_id == 0 || record.file_id == 0 ||
+        record.owner_user_id == 0 || record.chunk_size == 0 ||
+        record.checksum_algorithm != "sha256" || record.checksum.size() != 64 ||
+        record.storage_part_key.empty()) {
+        return std::nullopt;
+    }
+    UploadChunkView view;
+    view.upload_id = record.upload_id;
+    view.chunk_index = record.chunk_index;
+    view.file_id = record.file_id;
+    view.owner_user_id = record.owner_user_id;
+    view.byte_offset = record.byte_offset;
+    view.chunk_size = record.chunk_size;
+    view.checksum_algorithm = record.checksum_algorithm;
+    view.checksum = record.checksum;
+    view.storage_part_key = record.storage_part_key;
+    view.status = *status;
+    view.version = record.version;
+    view.created_at = record.created_at;
+    view.updated_at = record.updated_at;
+    view.stored_at = record.stored_at;
+    return view;
 }
 
 std::optional<UploadBundleView> ToView(const tinyimx::FileUploadBundleRecord& record) {
@@ -136,6 +172,11 @@ std::string BuildStorageKey(std::uint64_t file_id) {
     return "files/" + std::to_string(file_id);
 }
 
+std::string BuildStoragePartKey(std::uint64_t upload_id, std::uint64_t chunk_index) {
+    return "uploads/" + std::to_string(upload_id) + "/chunks/" +
+           std::to_string(chunk_index) + ".part";
+}
+
 void RollbackIfNeeded(tinyimx::MySqlConnection* connection) {
     if (connection != nullptr && connection->InTransaction()) {
         connection->Rollback();
@@ -158,6 +199,20 @@ GetUploadSessionResult GetStorageFailure(FileApplicationStatus status, std::stri
 
 CancelUploadResult CancelStorageFailure(FileApplicationStatus status, std::string message) {
     CancelUploadResult result;
+    result.status = status;
+    result.message = std::move(message);
+    return result;
+}
+
+ReserveChunkResult ReserveFailure(FileApplicationStatus status, std::string message) {
+    ReserveChunkResult result;
+    result.status = status;
+    result.message = std::move(message);
+    return result;
+}
+
+MarkChunkStoredResult MarkFailure(FileApplicationStatus status, std::string message) {
+    MarkChunkStoredResult result;
     result.status = status;
     result.message = std::move(message);
     return result;
@@ -518,6 +573,262 @@ CancelUploadResult FileRepositoryAdapter::CancelUpload(
         message += ": " + commit_error;
     }
     return CancelStorageFailure(FileApplicationStatus::kStorageError, std::move(message));
+}
+
+
+ReserveChunkResult FileRepositoryAdapter::ReserveChunk(
+    const ReserveChunkCommand& command
+) {
+    if (repository_ == nullptr || pool_ == nullptr) {
+        return ReserveFailure(FileApplicationStatus::kStorageError,
+                              "file repository adapter dependencies are unavailable");
+    }
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        return ReserveFailure(FileApplicationStatus::kStorageError,
+                              "ReserveChunk failed to acquire database connection");
+    }
+    if (!connection->BeginTransaction()) {
+        return ReserveFailure(FileApplicationStatus::kStorageError,
+                              "ReserveChunk failed to begin transaction: " + connection->LastError());
+    }
+
+    const auto bundle = repository_->FindUploadBundleOnConnection(
+        connection.operator->(), command.actor_user_id, command.upload_id, true
+    );
+    if (!bundle.Succeeded()) {
+        RollbackIfNeeded(connection.operator->());
+        return ReserveFailure(MapStorageStatus(bundle.status), bundle.message);
+    }
+    if (!bundle.found) {
+        RollbackIfNeeded(connection.operator->());
+        return ReserveFailure(FileApplicationStatus::kNotFound, "upload session not found");
+    }
+    const auto view = ToView(bundle.record);
+    if (!view.has_value()) {
+        RollbackIfNeeded(connection.operator->());
+        return ReserveFailure(FileApplicationStatus::kInvalidRecord,
+                              "upload session contains inconsistent durable records");
+    }
+    if (view->session.status != UploadSessionStatus::kActive ||
+        view->file.status != FileStatus::kUploading) {
+        RollbackIfNeeded(connection.operator->());
+        return ReserveFailure(FileApplicationStatus::kFailedPrecondition,
+                              "UploadChunk requires ACTIVE upload and UPLOADING file state");
+    }
+    if (view->session.chunk_size == 0 || view->session.total_size == 0) {
+        RollbackIfNeeded(connection.operator->());
+        return ReserveFailure(FileApplicationStatus::kInvalidRecord,
+                              "upload session has invalid chunk geometry");
+    }
+    if (command.chunk_index > (UINT64_MAX / view->session.chunk_size)) {
+        RollbackIfNeeded(connection.operator->());
+        return ReserveFailure(FileApplicationStatus::kInvalidArgument, "chunk index overflows byte offset");
+    }
+    const std::uint64_t expected_offset = command.chunk_index * view->session.chunk_size;
+    if (expected_offset >= view->session.total_size) {
+        RollbackIfNeeded(connection.operator->());
+        return ReserveFailure(FileApplicationStatus::kInvalidArgument, "chunk index is outside upload size");
+    }
+    const std::uint64_t remaining = view->session.total_size - expected_offset;
+    const std::uint64_t expected_size = std::min(view->session.chunk_size, remaining);
+    if (command.byte_offset != expected_offset || command.chunk_size != expected_size) {
+        RollbackIfNeeded(connection.operator->());
+        return ReserveFailure(FileApplicationStatus::kInvalidArgument,
+                              "chunk offset/size does not match durable upload geometry");
+    }
+
+    const std::string storage_part_key = BuildStoragePartKey(command.upload_id, command.chunk_index);
+    const auto inserted = repository_->InsertChunkIdempotentOnConnection(
+        connection.operator->(), command.upload_id, command.chunk_index, view->file.file_id,
+        command.actor_user_id, command.byte_offset, command.chunk_size,
+        command.checksum_algorithm, command.checksum, storage_part_key
+    );
+    if (!inserted.Succeeded()) {
+        RollbackIfNeeded(connection.operator->());
+        return ReserveFailure(MapStorageStatus(inserted.status), inserted.message);
+    }
+
+    const auto current = repository_->FindChunkOnConnection(
+        connection.operator->(), command.actor_user_id, command.upload_id,
+        command.chunk_index, true
+    );
+    if (!current.Succeeded() || !current.found) {
+        RollbackIfNeeded(connection.operator->());
+        return ReserveFailure(current.Succeeded() ? FileApplicationStatus::kInvalidRecord
+                                                  : MapStorageStatus(current.status),
+                              current.Succeeded() ? "reserved chunk could not be re-read" : current.message);
+    }
+    const auto chunk = ToChunkView(current.record);
+    if (!chunk.has_value()) {
+        RollbackIfNeeded(connection.operator->());
+        return ReserveFailure(FileApplicationStatus::kInvalidRecord,
+                              "reserved chunk contains invalid durable fields");
+    }
+    const bool same_identity =
+        chunk->file_id == view->file.file_id &&
+        chunk->owner_user_id == command.actor_user_id &&
+        chunk->byte_offset == command.byte_offset &&
+        chunk->chunk_size == command.chunk_size &&
+        chunk->checksum_algorithm == command.checksum_algorithm &&
+        chunk->checksum == command.checksum &&
+        chunk->storage_part_key == storage_part_key;
+    if (!same_identity) {
+        RollbackIfNeeded(connection.operator->());
+        ReserveChunkResult conflict;
+        conflict.status = FileApplicationStatus::kSucceeded;
+        conflict.outcome = ReserveChunkOutcome::kIdempotencyConflict;
+        conflict.chunk = *chunk;
+        conflict.message = "chunk_index was already reserved for different bytes or geometry";
+        return conflict;
+    }
+
+    if (!connection->Commit()) {
+        RollbackIfNeeded(connection.operator->());
+        connection.Reset();
+        const auto recovered = repository_->FindChunk(
+            command.actor_user_id, command.upload_id, command.chunk_index
+        );
+        if (recovered.Found()) {
+            const auto recovered_view = ToChunkView(recovered.record);
+            if (recovered_view.has_value() && recovered_view->byte_offset == command.byte_offset &&
+                recovered_view->chunk_size == command.chunk_size &&
+                recovered_view->checksum == command.checksum) {
+                ReserveChunkResult result;
+                result.status = FileApplicationStatus::kSucceeded;
+                result.outcome = ReserveChunkOutcome::kReused;
+                result.chunk = *recovered_view;
+                result.message = "ambiguous chunk reservation commit recovered from durable manifest";
+                return result;
+            }
+        }
+        return ReserveFailure(FileApplicationStatus::kStorageError,
+                              "ReserveChunk transaction commit failed");
+    }
+
+    ReserveChunkResult result;
+    result.status = FileApplicationStatus::kSucceeded;
+    result.outcome = inserted.inserted ? ReserveChunkOutcome::kCreated : ReserveChunkOutcome::kReused;
+    result.chunk = *chunk;
+    result.message = inserted.inserted ? "chunk identity durably reserved"
+                                       : "chunk identity safely reused";
+    return result;
+}
+
+MarkChunkStoredResult FileRepositoryAdapter::MarkChunkStored(
+    const MarkChunkStoredCommand& command
+) {
+    if (repository_ == nullptr || pool_ == nullptr) {
+        return MarkFailure(FileApplicationStatus::kStorageError,
+                           "file repository adapter dependencies are unavailable");
+    }
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        return MarkFailure(FileApplicationStatus::kStorageError,
+                           "MarkChunkStored failed to acquire database connection");
+    }
+    if (!connection->BeginTransaction()) {
+        return MarkFailure(FileApplicationStatus::kStorageError,
+                           "MarkChunkStored failed to begin transaction: " + connection->LastError());
+    }
+    const auto bundle = repository_->FindUploadBundleOnConnection(
+        connection.operator->(), command.actor_user_id, command.upload_id, true
+    );
+    if (!bundle.Succeeded() || !bundle.found) {
+        RollbackIfNeeded(connection.operator->());
+        return MarkFailure(bundle.Succeeded() ? FileApplicationStatus::kNotFound
+                                              : MapStorageStatus(bundle.status),
+                           bundle.Succeeded() ? "upload session not found" : bundle.message);
+    }
+    const auto bundle_view = ToView(bundle.record);
+    if (!bundle_view.has_value()) {
+        RollbackIfNeeded(connection.operator->());
+        return MarkFailure(FileApplicationStatus::kInvalidRecord,
+                           "upload session contains inconsistent durable records");
+    }
+    if (bundle_view->session.status != UploadSessionStatus::kActive ||
+        bundle_view->file.status != FileStatus::kUploading) {
+        RollbackIfNeeded(connection.operator->());
+        return MarkFailure(FileApplicationStatus::kFailedPrecondition,
+                           "upload state changed before chunk storage commit");
+    }
+
+    const auto current = repository_->FindChunkOnConnection(
+        connection.operator->(), command.actor_user_id, command.upload_id,
+        command.chunk_index, true
+    );
+    if (!current.Succeeded() || !current.found) {
+        RollbackIfNeeded(connection.operator->());
+        return MarkFailure(current.Succeeded() ? FileApplicationStatus::kNotFound
+                                               : MapStorageStatus(current.status),
+                           current.Succeeded() ? "chunk reservation not found" : current.message);
+    }
+    const auto current_view = ToChunkView(current.record);
+    if (!current_view.has_value() || current_view->chunk_size != command.chunk_size ||
+        current_view->checksum != command.checksum) {
+        RollbackIfNeeded(connection.operator->());
+        return MarkFailure(FileApplicationStatus::kInvalidRecord,
+                           "chunk storage commit does not match durable reservation");
+    }
+    if (current_view->status == UploadChunkStatus::kStored) {
+        RollbackIfNeeded(connection.operator->());
+        MarkChunkStoredResult result;
+        result.status = FileApplicationStatus::kSucceeded;
+        result.chunk = *current_view;
+        result.message = "chunk was already durably stored";
+        return result;
+    }
+
+    const auto mutation = repository_->MarkChunkStoredOnConnection(
+        connection.operator->(), command.actor_user_id, command.upload_id,
+        command.chunk_index, command.chunk_size, command.checksum
+    );
+    if (!mutation.Succeeded()) {
+        RollbackIfNeeded(connection.operator->());
+        return MarkFailure(MapStorageStatus(mutation.status), mutation.message);
+    }
+    const auto updated = repository_->FindChunkOnConnection(
+        connection.operator->(), command.actor_user_id, command.upload_id,
+        command.chunk_index, false
+    );
+    if (!updated.Succeeded() || !updated.found) {
+        RollbackIfNeeded(connection.operator->());
+        return MarkFailure(updated.Succeeded() ? FileApplicationStatus::kInvalidRecord
+                                               : MapStorageStatus(updated.status),
+                           updated.Succeeded() ? "stored chunk could not be re-read" : updated.message);
+    }
+    const auto updated_view = ToChunkView(updated.record);
+    if (!updated_view.has_value() || updated_view->status != UploadChunkStatus::kStored) {
+        RollbackIfNeeded(connection.operator->());
+        return MarkFailure(FileApplicationStatus::kInvalidRecord,
+                           "stored chunk durable state is invalid");
+    }
+    if (!connection->Commit()) {
+        RollbackIfNeeded(connection.operator->());
+        connection.Reset();
+        const auto recovered = repository_->FindChunk(
+            command.actor_user_id, command.upload_id, command.chunk_index
+        );
+        if (recovered.Found()) {
+            const auto recovered_view = ToChunkView(recovered.record);
+            if (recovered_view.has_value() && recovered_view->status == UploadChunkStatus::kStored &&
+                recovered_view->checksum == command.checksum) {
+                MarkChunkStoredResult result;
+                result.status = FileApplicationStatus::kSucceeded;
+                result.chunk = *recovered_view;
+                result.message = "ambiguous stored commit recovered from durable manifest";
+                return result;
+            }
+        }
+        return MarkFailure(FileApplicationStatus::kStorageError,
+                           "MarkChunkStored transaction commit failed");
+    }
+
+    MarkChunkStoredResult result;
+    result.status = FileApplicationStatus::kSucceeded;
+    result.chunk = *updated_view;
+    result.message = "chunk storage completion committed";
+    return result;
 }
 
 }  // namespace tinyimx::file

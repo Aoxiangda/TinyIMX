@@ -29,6 +29,10 @@ bool FileServiceServer::Start(const std::string& listen_target) {
     if (service_ == nullptr || listen_target.empty() || server_ != nullptr) return false;
 
     grpc::ServerBuilder builder;
+    // M18-B chunks can be up to 8MiB; keep bounded headroom for protobuf/RPC
+    // framing while avoiding an unbounded large-message configuration.
+    builder.SetMaxReceiveMessageSize(16 * 1024 * 1024);
+    builder.SetMaxSendMessageSize(16 * 1024 * 1024);
     int selected_port = 0;
     builder.AddListeningPort(listen_target, grpc::InsecureServerCredentials(), &selected_port);
     builder.RegisterService(service_);

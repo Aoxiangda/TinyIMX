@@ -104,6 +104,53 @@ FileUploadBundleFindResult ParseBundleResult(const MySqlQueryResult& query) {
     return result;
 }
 
+
+FileUploadChunkFindResult ParseChunkResult(const MySqlQueryResult& query) {
+    FileUploadChunkFindResult result;
+    result.status = FileRepositoryStatus::kSucceeded;
+    if (query.rows.empty()) {
+        result.found = false;
+        result.message = "file upload chunk not found";
+        return result;
+    }
+    if (query.rows.size() != 1 || query.rows.front().size() != 14) {
+        result.status = FileRepositoryStatus::kInvalidRecord;
+        result.message = "file upload chunk query returned invalid shape";
+        return result;
+    }
+    const auto& row = query.rows.front();
+    auto& chunk = result.record;
+    if (!ParseU64(row[0], &chunk.upload_id) ||
+        !ParseU64(row[1], &chunk.chunk_index) ||
+        !ParseU64(row[2], &chunk.file_id) ||
+        !ParseU64(row[3], &chunk.owner_user_id) ||
+        !ParseU64(row[4], &chunk.byte_offset) ||
+        !ParseU64(row[5], &chunk.chunk_size) ||
+        !ParseU32(row[9], &chunk.status) ||
+        !ParseU64(row[10], &chunk.version)) {
+        result.status = FileRepositoryStatus::kInvalidRecord;
+        result.message = "file upload chunk contains invalid numeric fields";
+        return result;
+    }
+    chunk.checksum_algorithm = row[6];
+    chunk.checksum = row[7];
+    chunk.storage_part_key = row[8];
+    chunk.created_at = row[11];
+    chunk.updated_at = row[12];
+    chunk.stored_at = row[13];
+    if (chunk.upload_id == 0 || chunk.file_id == 0 || chunk.owner_user_id == 0 ||
+        chunk.chunk_size == 0 || chunk.checksum_algorithm != "sha256" ||
+        chunk.checksum.size() != 64 || chunk.storage_part_key.empty() ||
+        (chunk.status != 1 && chunk.status != 2)) {
+        result.status = FileRepositoryStatus::kInvalidRecord;
+        result.message = "file upload chunk violates durable invariants";
+        return result;
+    }
+    result.found = true;
+    result.message = "file upload chunk found";
+    return result;
+}
+
 std::string BundleSelectPrefix() {
     return
         "SELECT f.file_id, f.owner_user_id, f.file_name, f.content_type, f.total_size, "
@@ -161,6 +208,28 @@ FileUploadBundleFindResult FileRepository::FindUploadBundle(
     }
     return FindUploadBundleOnConnection(
         connection.operator->(), owner_user_id, upload_id, false
+    );
+}
+
+FileUploadChunkFindResult FileRepository::FindChunk(
+    std::uint64_t owner_user_id,
+    std::uint64_t upload_id,
+    std::uint64_t chunk_index
+) {
+    FileUploadChunkFindResult result;
+    if (pool_ == nullptr || owner_user_id == 0 || upload_id == 0) {
+        result.status = FileRepositoryStatus::kInvalidArgument;
+        result.message = "invalid FindChunk arguments";
+        return result;
+    }
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        result.status = FileRepositoryStatus::kStorageError;
+        result.message = "FindChunk failed to acquire connection";
+        return result;
+    }
+    return FindChunkOnConnection(
+        connection.operator->(), owner_user_id, upload_id, chunk_index, false
     );
 }
 
@@ -357,6 +426,114 @@ FileUploadBundleFindResult FileRepository::FindUploadBundleOnConnection(
         return result;
     }
     return ParseBundleResult(query);
+}
+
+
+FileUploadChunkInsertResult FileRepository::InsertChunkIdempotentOnConnection(
+    MySqlConnection* connection,
+    std::uint64_t upload_id,
+    std::uint64_t chunk_index,
+    std::uint64_t file_id,
+    std::uint64_t owner_user_id,
+    std::uint64_t byte_offset,
+    std::uint64_t chunk_size,
+    const std::string& checksum_algorithm,
+    const std::string& checksum,
+    const std::string& storage_part_key
+) {
+    FileUploadChunkInsertResult result;
+    if (connection == nullptr || upload_id == 0 || file_id == 0 || owner_user_id == 0 ||
+        chunk_size == 0 || checksum_algorithm != "sha256" || checksum.size() != 64 ||
+        storage_part_key.empty()) {
+        result.status = FileRepositoryStatus::kInvalidArgument;
+        result.message = "invalid InsertChunkIdempotentOnConnection arguments";
+        return result;
+    }
+
+    const std::string sql =
+        "INSERT INTO im_file_upload_chunks (upload_id, chunk_index, file_id, owner_user_id, "
+        "byte_offset, chunk_size, checksum_algorithm, checksum, storage_part_key, status, version) VALUES (" +
+        std::to_string(upload_id) + ", " + std::to_string(chunk_index) + ", " +
+        std::to_string(file_id) + ", " + std::to_string(owner_user_id) + ", " +
+        std::to_string(byte_offset) + ", " + std::to_string(chunk_size) + ", 'sha256', '" +
+        connection->EscapeString(checksum) + "', '" + connection->EscapeString(storage_part_key) +
+        "', 1, 1) ON DUPLICATE KEY UPDATE upload_id = upload_id";
+    if (!connection->Execute(sql)) {
+        result.status = FileRepositoryStatus::kStorageError;
+        result.message = "insert upload chunk failed: " + connection->LastError();
+        return result;
+    }
+    result.inserted = connection->AffectedRows() == 1;
+    result.status = FileRepositoryStatus::kSucceeded;
+    result.message = result.inserted ? "upload chunk reserved" : "upload chunk already reserved";
+    return result;
+}
+
+FileUploadChunkFindResult FileRepository::FindChunkOnConnection(
+    MySqlConnection* connection,
+    std::uint64_t owner_user_id,
+    std::uint64_t upload_id,
+    std::uint64_t chunk_index,
+    bool for_update
+) {
+    FileUploadChunkFindResult result;
+    if (connection == nullptr || owner_user_id == 0 || upload_id == 0) {
+        result.status = FileRepositoryStatus::kInvalidArgument;
+        result.message = "invalid FindChunkOnConnection arguments";
+        return result;
+    }
+    std::string sql =
+        "SELECT upload_id, chunk_index, file_id, owner_user_id, byte_offset, chunk_size, "
+        "checksum_algorithm, checksum, storage_part_key, status, version, created_at, updated_at, "
+        "IFNULL(stored_at, '') FROM im_file_upload_chunks WHERE owner_user_id = " +
+        std::to_string(owner_user_id) + " AND upload_id = " + std::to_string(upload_id) +
+        " AND chunk_index = " + std::to_string(chunk_index) + " LIMIT 1";
+    if (for_update) sql += " FOR UPDATE";
+    MySqlQueryResult query;
+    if (!connection->Query(sql, &query)) {
+        result.status = FileRepositoryStatus::kStorageError;
+        result.message = "FindChunkOnConnection query failed: " + connection->LastError();
+        return result;
+    }
+    return ParseChunkResult(query);
+}
+
+FileMutationResult FileRepository::MarkChunkStoredOnConnection(
+    MySqlConnection* connection,
+    std::uint64_t owner_user_id,
+    std::uint64_t upload_id,
+    std::uint64_t chunk_index,
+    std::uint64_t chunk_size,
+    const std::string& checksum
+) {
+    FileMutationResult result;
+    if (connection == nullptr || owner_user_id == 0 || upload_id == 0 ||
+        chunk_size == 0 || checksum.size() != 64) {
+        result.status = FileRepositoryStatus::kInvalidArgument;
+        result.message = "invalid MarkChunkStoredOnConnection arguments";
+        return result;
+    }
+    const std::string sql =
+        "UPDATE im_file_upload_chunks SET status = 2, version = version + 1, "
+        "stored_at = COALESCE(stored_at, CURRENT_TIMESTAMP(3)) WHERE owner_user_id = " +
+        std::to_string(owner_user_id) + " AND upload_id = " + std::to_string(upload_id) +
+        " AND chunk_index = " + std::to_string(chunk_index) + " AND chunk_size = " +
+        std::to_string(chunk_size) + " AND checksum = '" + connection->EscapeString(checksum) +
+        "' AND status = 1";
+    if (!connection->Execute(sql)) {
+        result.status = FileRepositoryStatus::kStorageError;
+        result.message = "mark upload chunk stored failed: " + connection->LastError();
+        return result;
+    }
+    result.affected_rows = connection->AffectedRows();
+    if (result.affected_rows > 1) {
+        result.status = FileRepositoryStatus::kInvalidRecord;
+        result.message = "mark upload chunk stored affected unexpected row count";
+        return result;
+    }
+    result.status = FileRepositoryStatus::kSucceeded;
+    result.message = result.affected_rows == 1 ? "upload chunk marked stored" : "upload chunk already stored";
+    return result;
 }
 
 FileMutationResult FileRepository::CancelUploadOnConnection(

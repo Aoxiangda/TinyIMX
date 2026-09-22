@@ -100,6 +100,48 @@ struct FileUploadBundleFindResult {
     }
 };
 
+
+struct FileUploadChunkRecord {
+    std::uint64_t upload_id{0};
+    std::uint64_t chunk_index{0};
+    std::uint64_t file_id{0};
+    std::uint64_t owner_user_id{0};
+    std::uint64_t byte_offset{0};
+    std::uint64_t chunk_size{0};
+    std::string checksum_algorithm;
+    std::string checksum;
+    std::string storage_part_key;
+    std::uint32_t status{0};
+    std::uint64_t version{0};
+    std::string created_at;
+    std::string updated_at;
+    std::string stored_at;
+};
+
+struct FileUploadChunkFindResult {
+    FileRepositoryStatus status{FileRepositoryStatus::kStorageError};
+    bool found{false};
+    FileUploadChunkRecord record;
+    std::string message;
+
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return status == FileRepositoryStatus::kSucceeded;
+    }
+    [[nodiscard]] bool Found() const noexcept {
+        return Succeeded() && found;
+    }
+};
+
+struct FileUploadChunkInsertResult {
+    FileRepositoryStatus status{FileRepositoryStatus::kStorageError};
+    bool inserted{false};
+    std::string message;
+
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return status == FileRepositoryStatus::kSucceeded;
+    }
+};
+
 struct FileMutationResult {
     FileRepositoryStatus status{FileRepositoryStatus::kStorageError};
     std::uint64_t affected_rows{0};
@@ -125,6 +167,12 @@ public:
     [[nodiscard]] FileUploadBundleFindResult FindUploadBundle(
         std::uint64_t owner_user_id,
         std::uint64_t upload_id
+    );
+
+    [[nodiscard]] FileUploadChunkFindResult FindChunk(
+        std::uint64_t owner_user_id,
+        std::uint64_t upload_id,
+        std::uint64_t chunk_index
     );
 
     [[nodiscard]] FileBooleanResult UserExistsOnConnection(
@@ -170,6 +218,37 @@ public:
         std::uint64_t owner_user_id,
         std::uint64_t upload_id,
         bool for_update
+    );
+
+
+    [[nodiscard]] FileUploadChunkInsertResult InsertChunkIdempotentOnConnection(
+        MySqlConnection* connection,
+        std::uint64_t upload_id,
+        std::uint64_t chunk_index,
+        std::uint64_t file_id,
+        std::uint64_t owner_user_id,
+        std::uint64_t byte_offset,
+        std::uint64_t chunk_size,
+        const std::string& checksum_algorithm,
+        const std::string& checksum,
+        const std::string& storage_part_key
+    );
+
+    [[nodiscard]] FileUploadChunkFindResult FindChunkOnConnection(
+        MySqlConnection* connection,
+        std::uint64_t owner_user_id,
+        std::uint64_t upload_id,
+        std::uint64_t chunk_index,
+        bool for_update
+    );
+
+    [[nodiscard]] FileMutationResult MarkChunkStoredOnConnection(
+        MySqlConnection* connection,
+        std::uint64_t owner_user_id,
+        std::uint64_t upload_id,
+        std::uint64_t chunk_index,
+        std::uint64_t chunk_size,
+        const std::string& checksum
     );
 
     [[nodiscard]] FileMutationResult CancelUploadOnConnection(

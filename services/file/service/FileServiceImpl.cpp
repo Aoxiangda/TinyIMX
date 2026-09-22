@@ -60,6 +60,37 @@ tinyimx::file::v1::UploadSessionStatus ToProtoStatus(UploadSessionStatus status)
     return tinyimx::file::v1::UPLOAD_SESSION_STATUS_UNSPECIFIED;
 }
 
+tinyimx::file::v1::UploadChunkStatus ToProtoStatus(UploadChunkStatus status) {
+    switch (status) {
+        case UploadChunkStatus::kReserved:
+            return tinyimx::file::v1::UPLOAD_CHUNK_STATUS_RESERVED;
+        case UploadChunkStatus::kStored:
+            return tinyimx::file::v1::UPLOAD_CHUNK_STATUS_STORED;
+    }
+    return tinyimx::file::v1::UPLOAD_CHUNK_STATUS_UNSPECIFIED;
+}
+
+void FillProtoChunk(
+    const UploadChunkView& input,
+    tinyimx::file::v1::UploadChunkRecord* output
+) {
+    if (output == nullptr) return;
+    output->set_upload_id(input.upload_id);
+    output->set_chunk_index(input.chunk_index);
+    output->set_file_id(input.file_id);
+    output->set_owner_user_id(input.owner_user_id);
+    output->set_byte_offset(input.byte_offset);
+    output->set_chunk_size(input.chunk_size);
+    output->set_checksum_algorithm(input.checksum_algorithm);
+    output->set_checksum(input.checksum);
+    output->set_storage_part_key(input.storage_part_key);
+    output->set_status(ToProtoStatus(input.status));
+    output->set_version(input.version);
+    output->set_created_at(input.created_at);
+    output->set_updated_at(input.updated_at);
+    output->set_stored_at(input.stored_at);
+}
+
 void FillProtoFile(const FileView& input, tinyimx::file::v1::FileRecord* output) {
     if (output == nullptr) return;
     output->set_file_id(input.file_id);
@@ -208,6 +239,48 @@ grpc::Status FileServiceImpl::CancelUpload(
     if (result.bundle.has_value()) {
         FillBundle(*result.bundle, response->mutable_file(), response->mutable_session());
     }
+    return grpc::Status::OK;
+}
+
+
+grpc::Status FileServiceImpl::UploadChunk(
+    grpc::ServerContext* context,
+    const tinyimx::file::v1::UploadChunkRequest* request,
+    tinyimx::file::v1::UploadChunkResponse* response
+) {
+    if (context == nullptr || request == nullptr || response == nullptr) {
+        return {grpc::StatusCode::INVALID_ARGUMENT, "invalid UploadChunk RPC arguments"};
+    }
+    if (application_service_ == nullptr) {
+        return {grpc::StatusCode::UNAVAILABLE, "FileService application service is unavailable"};
+    }
+
+    UploadChunkCommand command;
+    command.actor_user_id = request->actor_user_id();
+    command.upload_id = request->upload_id();
+    command.chunk_index = request->chunk_index();
+    command.byte_offset = request->byte_offset();
+    command.data = request->data();
+    command.checksum_algorithm = request->checksum_algorithm();
+    command.checksum = request->checksum();
+
+    const auto result = application_service_->UploadChunk(std::move(command));
+    if (!result.Completed()) {
+        return MapApplicationFailure(result.status, result.message);
+    }
+    switch (result.outcome) {
+        case UploadChunkOutcome::kStored:
+            response->set_result(tinyimx::file::v1::UPLOAD_CHUNK_RESULT_STORED);
+            break;
+        case UploadChunkOutcome::kReused:
+            response->set_result(tinyimx::file::v1::UPLOAD_CHUNK_RESULT_REUSED);
+            break;
+        case UploadChunkOutcome::kIdempotencyConflict:
+            response->set_result(tinyimx::file::v1::UPLOAD_CHUNK_RESULT_IDEMPOTENCY_CONFLICT);
+            break;
+    }
+    response->set_message(result.message);
+    if (result.chunk.has_value()) FillProtoChunk(*result.chunk, response->mutable_chunk());
     return grpc::Status::OK;
 }
 

@@ -625,21 +625,41 @@ int main() {
   const auto* file_service =
       google::protobuf::DescriptorPool::generated_pool()->FindServiceByName(
           "tinyimx.file.v1.FileService");
-  Expect(file_service != nullptr && file_service->method_count() == 3,
-         "FileService 3-method M18-A1 control-plane contract frozen");
+  Expect(file_service != nullptr && file_service->method_count() == 4,
+         "FileService 4-method M18-B1 contract frozen");
   static const char* kExpectedFileMethods[] = {
       "BeginUpload",
       "GetUploadSession",
       "CancelUpload",
+      "UploadChunk",
   };
   if (file_service != nullptr) {
-    for (int i = 0; i < file_service->method_count() && i < 3; ++i) {
+    for (int i = 0; i < file_service->method_count() && i < 4; ++i) {
       const std::string label =
           std::string("FileService method frozen: ") + kExpectedFileMethods[i];
       Expect(file_service->method(i)->name() == kExpectedFileMethods[i],
              label.c_str());
     }
   }
+
+
+  using tinyimx::file::v1::UploadChunkRequest;
+  const auto* upload_chunk_descriptor = UploadChunkRequest::descriptor();
+  Expect(FindField(upload_chunk_descriptor, "upload_id") != nullptr &&
+             FindField(upload_chunk_descriptor, "upload_id")->number() == 3,
+         "UploadChunkRequest.upload_id frozen at 3");
+  Expect(FindField(upload_chunk_descriptor, "chunk_index") != nullptr &&
+             FindField(upload_chunk_descriptor, "chunk_index")->number() == 4,
+         "UploadChunkRequest.chunk_index frozen at 4");
+  Expect(FindField(upload_chunk_descriptor, "byte_offset") != nullptr &&
+             FindField(upload_chunk_descriptor, "byte_offset")->number() == 5,
+         "UploadChunkRequest.byte_offset frozen at 5");
+  Expect(FindField(upload_chunk_descriptor, "data") != nullptr &&
+             FindField(upload_chunk_descriptor, "data")->number() == 6,
+         "UploadChunkRequest.data frozen at 6");
+  Expect(FindField(upload_chunk_descriptor, "checksum") != nullptr &&
+             FindField(upload_chunk_descriptor, "checksum")->number() == 8,
+         "UploadChunkRequest.checksum frozen at 8");
 
   std::cout << "total_failed=" << g_failed << '\n';
 

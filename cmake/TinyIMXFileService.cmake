@@ -12,6 +12,18 @@ foreach(required_target IN ITEMS
   endif()
 endforeach()
 
+
+add_library(tinyimx_file_storage
+  services/file/storage/LocalFilesystemStorage.cpp
+)
+
+target_include_directories(tinyimx_file_storage PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_compile_features(tinyimx_file_storage PUBLIC cxx_std_20)
+target_link_libraries(tinyimx_file_storage PUBLIC OpenSSL::Crypto)
+
 add_library(tinyimx_file_core
   services/file/application/FileApplicationService.cpp
   services/file/repository/FileRepositoryAdapter.cpp
@@ -53,6 +65,13 @@ target_compile_features(file_application_service_tests PRIVATE cxx_std_20)
 target_link_libraries(file_application_service_tests PRIVATE tinyimx_file_core)
 add_test(NAME file_application_service_tests COMMAND file_application_service_tests)
 
+add_executable(file_storage_tests
+  tests/file/file_storage_test.cpp
+)
+target_compile_features(file_storage_tests PRIVATE cxx_std_20)
+target_link_libraries(file_storage_tests PRIVATE tinyimx_file_storage)
+add_test(NAME file_storage_tests COMMAND file_storage_tests)
+
 add_executable(file_service_integration_tests
   tests/file/file_service_integration_test.cpp
 )
@@ -78,6 +97,20 @@ target_link_libraries(file_repository_integration_tests PRIVATE
   tinyimx_file_core
 )
 
+add_executable(file_chunk_integration_tests
+  tests/file/file_chunk_integration_test.cpp
+)
+target_compile_features(file_chunk_integration_tests PRIVATE cxx_std_20)
+target_link_libraries(file_chunk_integration_tests PRIVATE
+  tinyimx_config
+  tinyimx_logging
+  tinyimx_db
+  tinyimx_repository
+  tinyimx_file_core
+  tinyimx_file_storage
+  OpenSSL::Crypto
+)
+
 # External-MySQL test: intentionally not added to ordinary CTest. Apply
 # migration 009 and run explicitly in the M18-A1 acceptance workflow.
 
@@ -93,6 +126,7 @@ target_link_libraries(file_service_demo PRIVATE
   tinyimx_db
   tinyimx_repository
   tinyimx_file_core
+  tinyimx_file_storage
   tinyimx_file_grpc
   tinyimx_service_registry
 )

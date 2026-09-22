@@ -28,6 +28,14 @@ public:
         const CancelUploadCommand& command
     ) override;
 
+    [[nodiscard]] ReserveChunkResult ReserveChunk(
+        const ReserveChunkCommand& command
+    ) override;
+
+    [[nodiscard]] MarkChunkStoredResult MarkChunkStored(
+        const MarkChunkStoredCommand& command
+    ) override;
+
 private:
     tinyimx::FileRepository* repository_{nullptr};  // non-owning
     tinyimx::MySqlConnectionPool* pool_{nullptr};  // non-owning

@@ -6,6 +6,7 @@
 #include "services/file/repository/FileRepositoryAdapter.h"
 #include "services/file/server/FileServiceServer.h"
 #include "services/file/service/FileServiceImpl.h"
+#include "services/file/storage/LocalFilesystemStorage.h"
 #include "services/registry/zookeeper/ServiceInstance.h"
 #include "services/registry/zookeeper/ZooKeeperClient.h"
 #include "services/registry/zookeeper/ZooKeeperServiceRegistrar.h"
@@ -28,6 +29,12 @@ std::string ResolveListenTarget(int argc, char* argv[]) {
     if (argc >= 3) return argv[2];
     const char* env = std::getenv("TINYIMX_FILE_LISTEN_TARGET");
     return env && env[0] ? std::string(env) : std::string("127.0.0.1:50055");
+}
+
+std::string ResolveStorageRoot(int argc, char* argv[]) {
+    if (argc >= 4) return argv[3];
+    const char* env = std::getenv("TINYIMX_FILE_STORAGE_ROOT");
+    return env && env[0] ? std::string(env) : std::string("data/file-storage");
 }
 
 tinyimx::registry::zookeeper::ServiceInstance BuildServiceInstance(
@@ -57,7 +64,8 @@ int main(int argc, char* argv[]) {
     if (!pool.Initialize(config.MySql())) { LOG_ERROR("FileService mysql pool initialize failed"); return 1; }
     tinyimx::FileRepository repository(&pool);
     tinyimx::file::FileRepositoryAdapter adapter(&repository, &pool);
-    tinyimx::file::FileApplicationService application(&adapter);
+    tinyimx::file::LocalFilesystemStorage storage(ResolveStorageRoot(argc, argv));
+    tinyimx::file::FileApplicationService application(&adapter, &storage);
     tinyimx::file::FileServiceImpl service_impl(&application);
     tinyimx::file::FileServiceServer server(&service_impl);
     const std::string target = ResolveListenTarget(argc, argv);
@@ -79,6 +87,7 @@ int main(int argc, char* argv[]) {
     }
 
     LOG_INFO("FileService ready" << ", target=" << server.BoundTarget()
+             << ", storage_root=" << storage.Root().string()
              << ", zookeeper_registered=" << (registrar ? 1 : 0));
     auto* registrar_for_signal = registrar.get();
     std::thread signal_thread([&server, registrar_for_signal, signal_set]() mutable {

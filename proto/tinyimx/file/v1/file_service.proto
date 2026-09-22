@@ -4,13 +4,14 @@ package tinyimx.file.v1;
 
 import "tinyimx/common/v1/common.proto";
 
-// M18-A1 control-plane contract only. File payload/chunk transfer is introduced
-// in M18-B. actor_user_id is an authenticated identity injected by Gateway;
-// Internet clients must never be authoritative for this field.
+// FileService keeps metadata/control RPCs and the M18-B1 internal chunk-write
+// contract. actor_user_id is trusted only when injected by an authenticated
+// TinyIMX ingress; an Internet client must never be authoritative for it.
 service FileService {
     rpc BeginUpload(BeginUploadRequest) returns (BeginUploadResponse);
     rpc GetUploadSession(GetUploadSessionRequest) returns (GetUploadSessionResponse);
     rpc CancelUpload(CancelUploadRequest) returns (CancelUploadResponse);
+    rpc UploadChunk(UploadChunkRequest) returns (UploadChunkResponse);
 }
 
 enum FileStatus {
@@ -33,6 +34,12 @@ enum UploadSessionStatus {
     UPLOAD_SESSION_STATUS_EXPIRED = 5;
 }
 
+enum UploadChunkStatus {
+    UPLOAD_CHUNK_STATUS_UNSPECIFIED = 0;
+    UPLOAD_CHUNK_STATUS_RESERVED = 1;
+    UPLOAD_CHUNK_STATUS_STORED = 2;
+}
+
 enum BeginUploadResult {
     BEGIN_UPLOAD_RESULT_UNSPECIFIED = 0;
     BEGIN_UPLOAD_RESULT_CREATED = 1;
@@ -44,6 +51,13 @@ enum CancelUploadResult {
     CANCEL_UPLOAD_RESULT_UNSPECIFIED = 0;
     CANCEL_UPLOAD_RESULT_APPLIED = 1;
     CANCEL_UPLOAD_RESULT_REUSED = 2;
+}
+
+enum UploadChunkResult {
+    UPLOAD_CHUNK_RESULT_UNSPECIFIED = 0;
+    UPLOAD_CHUNK_RESULT_STORED = 1;
+    UPLOAD_CHUNK_RESULT_REUSED = 2;
+    UPLOAD_CHUNK_RESULT_IDEMPOTENCY_CONFLICT = 3;
 }
 
 message FileRecord {
@@ -78,6 +92,23 @@ message UploadSessionRecord {
     string updated_at = 10;
     string expires_at = 11;
     string completed_at = 12;
+}
+
+message UploadChunkRecord {
+    uint64 upload_id = 1;
+    uint64 chunk_index = 2;
+    uint64 file_id = 3;
+    uint64 owner_user_id = 4;
+    uint64 byte_offset = 5;
+    uint64 chunk_size = 6;
+    string checksum_algorithm = 7;
+    string checksum = 8;
+    string storage_part_key = 9;
+    UploadChunkStatus status = 10;
+    uint64 version = 11;
+    string created_at = 12;
+    string updated_at = 13;
+    string stored_at = 14;
 }
 
 message BeginUploadRequest {
@@ -121,4 +152,24 @@ message CancelUploadResponse {
     FileRecord file = 2;
     UploadSessionRecord session = 3;
     string message = 4;
+}
+
+// chunk_index is zero-based. byte_offset and data length are checked against
+// the durable session chunk_size/total_size, so out-of-order writes are safe
+// while overlaps/gaps cannot redefine durable chunk identity.
+message UploadChunkRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    uint64 upload_id = 3;
+    uint64 chunk_index = 4;
+    uint64 byte_offset = 5;
+    bytes data = 6;
+    string checksum_algorithm = 7;
+    string checksum = 8;
+}
+
+message UploadChunkResponse {
+    UploadChunkResult result = 1;
+    UploadChunkRecord chunk = 2;
+    string message = 3;
 }

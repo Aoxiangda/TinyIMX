@@ -23,6 +23,14 @@ public:
     [[nodiscard]] virtual CancelUploadResult CancelUpload(
         const CancelUploadCommand& command
     ) = 0;
+
+    [[nodiscard]] virtual ReserveChunkResult ReserveChunk(
+        const ReserveChunkCommand& command
+    ) = 0;
+
+    [[nodiscard]] virtual MarkChunkStoredResult MarkChunkStored(
+        const MarkChunkStoredCommand& command
+    ) = 0;
 };
 
 }  // namespace tinyimx::file

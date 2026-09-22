@@ -27,6 +27,12 @@ public:
         tinyimx::file::v1::CancelUploadResponse* response
     ) override;
 
+    grpc::Status UploadChunk(
+        grpc::ServerContext* context,
+        const tinyimx::file::v1::UploadChunkRequest* request,
+        tinyimx::file::v1::UploadChunkResponse* response
+    ) override;
+
 private:
     FileApplicationService* application_service_{nullptr};  // non-owning
 };
