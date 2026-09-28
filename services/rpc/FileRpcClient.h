@@ -28,6 +28,8 @@ public:
         const GetUploadSessionRpcRequest&, const RpcCallOptions&) const;
     [[nodiscard]] RpcResult<CancelUploadRpcResponse> CancelUpload(
         const CancelUploadRpcRequest&, const RpcCallOptions&) const;
+    [[nodiscard]] RpcResult<GetDownloadInfoRpcResponse> GetDownloadInfo(
+        const GetDownloadInfoRpcRequest&, const RpcCallOptions&) const;
 
     [[nodiscard]] std::size_t CachedTargetCountForTest() const;
     [[nodiscard]] std::uint64_t StubCreationCountForTest() const;

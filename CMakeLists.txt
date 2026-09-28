@@ -1437,3 +1437,14 @@ include(
 # M16 final CTest labels / external-resource policy
 # ============================================================================
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXM16TestPolicy.cmake")
+
+# M19: AI / MCPServer enterprise integration foundation.
+# Reuses TinyIMX EventLoop/TcpServer/ThreadPool; no new third-party HTTP stack.
+include(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXMcp.cmake"
+)
+
+# M19: native MCP client + AI provider + bounded Agent tool-calling runtime.
+include(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXAI.cmake"
+)

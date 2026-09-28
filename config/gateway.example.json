@@ -128,7 +128,18 @@
   },
   "mcp": {
     "enable": false,
-    "endpoint": "http://127.0.0.1:8080",
-    "timeout_ms": 5000
+    "endpoint": "http://127.0.0.1:8080/mcp",
+    "timeout_ms": 5000,
+    "listen_host": "127.0.0.1",
+    "listen_port": 8080,
+    "endpoint_path": "/mcp",
+    "io_threads": 1,
+    "worker_threads": 4,
+    "queue_capacity": 128,
+    "max_request_bytes": 1048576,
+    "allowed_origins": [],
+    "auth_token_env": "TINYIMX_MCP_TOKEN",
+    "static_user_id": 1,
+    "static_subject": "tinyimx:mcp:development"
   }
 }

@@ -562,6 +562,19 @@ bool Config::ApplyJsonConfig(const std::string& json_content) {
             ReadIfExists(section, "enable", &mcp_.enable);
             ReadIfExists(section, "endpoint", &mcp_.endpoint);
             ReadIfExists(section, "timeout_ms", &mcp_.timeout_ms);
+            ReadIfExists(section, "listen_host", &mcp_.listen_host);
+            ReadIfExists(section, "listen_port", &mcp_.listen_port);
+            ReadIfExists(section, "endpoint_path", &mcp_.endpoint_path);
+            ReadIfExists(section, "io_threads", &mcp_.io_threads);
+            ReadIfExists(section, "worker_threads", &mcp_.worker_threads);
+            ReadIfExists(section, "queue_capacity", &mcp_.queue_capacity);
+            ReadIfExists(section, "max_request_bytes", &mcp_.max_request_bytes);
+            ReadIfExists(section, "auth_token_env", &mcp_.auth_token_env);
+            ReadIfExists(section, "static_user_id", &mcp_.static_user_id);
+            ReadIfExists(section, "static_subject", &mcp_.static_subject);
+            if (section.contains("allowed_origins")) {
+                mcp_.allowed_origins = section.at("allowed_origins").get<std::vector<std::string>>();
+            }
         }
 
         return true;
@@ -1076,6 +1089,23 @@ bool Config::Validate() {
 
         if (mcp_.timeout_ms <= 0) {
             return SetError("mcp.timeout_ms must be greater than 0");
+        }
+
+        if (mcp_.listen_host.empty() || mcp_.listen_port == 0) {
+            return SetError("mcp.listen_host/listen_port must be valid when mcp.enable=true");
+        }
+
+        if (mcp_.endpoint_path.empty() || mcp_.endpoint_path.front() != '/') {
+            return SetError("mcp.endpoint_path must start with '/'");
+        }
+
+        if (mcp_.worker_threads == 0 || mcp_.queue_capacity == 0 ||
+            mcp_.max_request_bytes < 1024) {
+            return SetError("mcp worker/queue/request limits must be positive");
+        }
+
+        if (mcp_.auth_token_env.empty() || mcp_.static_subject.empty()) {
+            return SetError("mcp auth_token_env/static_subject cannot be empty");
         }
     }
 

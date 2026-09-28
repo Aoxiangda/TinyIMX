@@ -61,6 +61,26 @@ public:
         response->set_result(tinyimx::file::v1::CANCEL_UPLOAD_RESULT_APPLIED); response->set_message("canceled");
         return grpc::Status::OK;
     }
+    grpc::Status GetDownloadInfo(
+        grpc::ServerContext*,
+        const tinyimx::file::v1::GetDownloadInfoRequest* request,
+        tinyimx::file::v1::GetDownloadInfoResponse* response
+    ) override {
+        if (request->file_id() == 404) {
+            return grpc::Status(grpc::StatusCode::NOT_FOUND, "missing file");
+        }
+        auto* info = response->mutable_info();
+        info->set_file_id(request->file_id());
+        info->set_file_name("a.bin");
+        info->set_content_type("application/octet-stream");
+        info->set_total_size(1024);
+        info->set_checksum_algorithm("sha256");
+        info->set_verified_checksum(std::string(64, 'b'));
+        info->set_version(3);
+        info->set_available_at("2026-09-27T00:00:00Z");
+        response->set_message("authorized");
+        return grpc::Status::OK;
+    }
 };
 
 }  // namespace
@@ -105,6 +125,15 @@ int main() {
     const auto canceled=client.CancelUpload({10001,77},Options(std::chrono::milliseconds(1000)));
     ok &= Expect(canceled.ok() && canceled.value->bundle.file.owner_user_id==10001,
                  "FileRpcClient CancelUpload mapping");
+
+    const auto download=client.GetDownloadInfo({10001,7001},Options(std::chrono::milliseconds(1000)));
+    ok &= Expect(download.ok() && download.value->info.file_id==7001 &&
+                 download.value->info.verified_checksum==std::string(64,'b'),
+                 "FileRpcClient GetDownloadInfo real gRPC mapping");
+
+    const auto missing_download=client.GetDownloadInfo({10001,404},Options(std::chrono::milliseconds(1000)));
+    ok &= Expect(!missing_download.ok() && missing_download.status.code==RpcErrorCode::kNotFound,
+                 "FileRpcClient GetDownloadInfo maps NOT_FOUND");
 
     auto no_file_provider=std::make_shared<StaticServiceEndpointProvider>("","","");
     FileRpcClient no_file(no_file_provider);

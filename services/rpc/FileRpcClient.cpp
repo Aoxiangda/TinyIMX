@@ -94,6 +94,26 @@ std::optional<FileUploadBundleRpcView> ToBundle(
     return out;
 }
 
+std::optional<DownloadInfoRpcView> ToDownloadInfo(
+    const tinyimx::file::v1::DownloadInfoRecord& info
+) {
+    if (info.file_id() == 0 || info.file_name().empty() ||
+        info.total_size() == 0 || info.checksum_algorithm().empty() ||
+        info.verified_checksum().empty() || info.version() == 0) {
+        return std::nullopt;
+    }
+    DownloadInfoRpcView out;
+    out.file_id = info.file_id();
+    out.file_name = info.file_name();
+    out.content_type = info.content_type();
+    out.total_size = info.total_size();
+    out.checksum_algorithm = info.checksum_algorithm();
+    out.verified_checksum = info.verified_checksum();
+    out.version = info.version();
+    out.available_at = info.available_at();
+    return out;
+}
+
 }  // namespace
 
 FileRpcClient::FileRpcClient(std::shared_ptr<const ServiceEndpointProvider> endpoint_provider)
@@ -222,6 +242,70 @@ RpcResult<CancelUploadRpcResponse> FileRpcClient::CancelUpload(
                                                          "FileService returned invalid upload bundle");
     response.bundle = std::move(*bundle); response.message = out.message();
     return RpcResult<CancelUploadRpcResponse>::Success(std::move(response));
+}
+
+RpcResult<GetDownloadInfoRpcResponse> FileRpcClient::GetDownloadInfo(
+    const GetDownloadInfoRpcRequest& request,
+    const RpcCallOptions& options
+) const {
+    if (request.actor_user_id == 0 || request.file_id == 0) {
+        return Failure<GetDownloadInfoRpcResponse>(
+            RpcErrorCode::kInvalidArgument,
+            "invalid GetDownloadInfo request"
+        );
+    }
+    if (options.remaining_timeout <= std::chrono::milliseconds::zero()) {
+        return Failure<GetDownloadInfoRpcResponse>(
+            RpcErrorCode::kDeadlineExceeded,
+            "GetDownloadInfo remaining RPC budget is exhausted"
+        );
+    }
+    if (!endpoint_provider_) {
+        return Failure<GetDownloadInfoRpcResponse>(
+            RpcErrorCode::kUnavailable,
+            "FileService endpoint provider is not configured"
+        );
+    }
+    const auto endpoint = endpoint_provider_->Resolve(ServiceKind::kFile);
+    if (!endpoint || endpoint->target.empty()) {
+        return Failure<GetDownloadInfoRpcResponse>(
+            RpcErrorCode::kUnavailable,
+            "FileService endpoint is unavailable"
+        );
+    }
+    auto stub = GetOrCreateStub(*endpoint);
+    if (!stub) {
+        return Failure<GetDownloadInfoRpcResponse>(
+            RpcErrorCode::kUnavailable,
+            "FileService gRPC stub could not be created"
+        );
+    }
+
+    tinyimx::file::v1::GetDownloadInfoRequest in;
+    FillMeta(options, in.mutable_meta());
+    in.set_actor_user_id(request.actor_user_id);
+    in.set_file_id(request.file_id);
+    tinyimx::file::v1::GetDownloadInfoResponse out;
+    grpc::ClientContext context;
+    context.set_deadline(
+        std::chrono::system_clock::now() + options.remaining_timeout
+    );
+    const auto status = stub->GetDownloadInfo(&context, in, &out);
+    if (!status.ok()) {
+        const auto mapped = MapGrpcStatus(status);
+        return Failure<GetDownloadInfoRpcResponse>(mapped.code, mapped.message);
+    }
+    auto info = ToDownloadInfo(out.info());
+    if (!info) {
+        return Failure<GetDownloadInfoRpcResponse>(
+            RpcErrorCode::kDataLoss,
+            "FileService returned invalid download metadata"
+        );
+    }
+    GetDownloadInfoRpcResponse response;
+    response.info = std::move(*info);
+    response.message = out.message();
+    return RpcResult<GetDownloadInfoRpcResponse>::Success(std::move(response));
 }
 
 std::size_t FileRpcClient::CachedTargetCountForTest() const { std::lock_guard<std::mutex> lock(cache_mutex_); return stub_cache_.size(); }

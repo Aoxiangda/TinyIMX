@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <string>
+#include <vector>
 
 namespace tinyimx {
 
@@ -171,8 +172,27 @@ struct ServiceDiscoveryConfig {
 
 struct McpConfig {
     bool enable{false};
-    std::string endpoint{"http://127.0.0.1:8080"};
+
+    // Retained for forward-compatible MCP client/agent usage.
+    std::string endpoint{"http://127.0.0.1:8080/mcp"};
     int timeout_ms{5000};
+
+    // M19 MCPServer control-plane listener.
+    std::string listen_host{"127.0.0.1"};
+    std::uint16_t listen_port{8080};
+    std::string endpoint_path{"/mcp"};
+    std::size_t io_threads{1};
+    std::size_t worker_threads{4};
+    std::size_t queue_capacity{128};
+    std::size_t max_request_bytes{1024 * 1024};
+
+    // Browser Origin headers are denied unless explicitly listed.
+    std::vector<std::string> allowed_origins;
+
+    // Development/E2E verifier. Secrets are read from environment only.
+    std::string auth_token_env{"TINYIMX_MCP_TOKEN"};
+    std::uint64_t static_user_id{1};
+    std::string static_subject{"tinyimx:mcp:development"};
 };
 
 }  // namespace tinyimx

@@ -110,4 +110,25 @@ struct CancelUploadRpcResponse {
     std::string message;
 };
 
+struct DownloadInfoRpcView {
+    std::uint64_t file_id{0};
+    std::string file_name;
+    std::string content_type;
+    std::uint64_t total_size{0};
+    std::string checksum_algorithm;
+    std::string verified_checksum;
+    std::uint64_t version{0};
+    std::string available_at;
+};
+
+struct GetDownloadInfoRpcRequest {
+    std::uint64_t actor_user_id{0};
+    std::uint64_t file_id{0};
+};
+
+struct GetDownloadInfoRpcResponse {
+    DownloadInfoRpcView info;
+    std::string message;
+};
+
 }  // namespace tinyimx::rpc

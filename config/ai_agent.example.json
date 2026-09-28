@@ -1,0 +1,37 @@
+{
+  "ai": {
+    "provider": "openai_compatible",
+    "endpoint": "http://127.0.0.1:11434/v1/chat/completions",
+    "api_key_env": "TINYIMX_AI_API_KEY",
+    "connect_timeout_ms": 2000,
+    "request_timeout_ms": 20000,
+    "max_response_bytes": 4194304
+  },
+  "mcp": {
+    "endpoint": "http://127.0.0.1:8080/mcp",
+    "token_env": "TINYIMX_MCP_TOKEN",
+    "client_name": "tinyimx-ai-agent",
+    "client_version": "m19",
+    "connect_timeout_ms": 2000,
+    "request_timeout_ms": 10000,
+    "max_response_bytes": 4194304
+  },
+  "agent": {
+    "model": "qwen3:8b",
+    "system_prompt": "You are the TinyIMX assistant. Use only the provided read-only tools for TinyIMX private context. Never invent tool results or claim an action was performed without a tool result.",
+    "allowed_tools": [
+      "tinyimx.user.get_self_profile",
+      "tinyimx.social.list_friends",
+      "tinyimx.message.list_conversations",
+      "tinyimx.message.list_history",
+      "tinyimx.group.get",
+      "tinyimx.group.list_my_groups",
+      "tinyimx.group.list_members",
+      "tinyimx.file.get_metadata"
+    ],
+    "max_tool_rounds": 4,
+    "max_tool_calls_per_round": 8,
+    "max_total_tool_calls": 16,
+    "repeated_identical_call_limit": 3
+  }
+}
