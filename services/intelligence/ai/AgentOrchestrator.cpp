@@ -1,6 +1,9 @@
 #include "services/intelligence/ai/AgentOrchestrator.h"
 
+#include "common/observability/Trace.h"
+
 #include <algorithm>
+#include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -60,6 +63,13 @@ AgentResult AgentOrchestrator::Run(const std::string& user_prompt) {
         return {false, {}, 0, 0, "agent safety limits must be positive"};
     }
 
+    auto agent_span = observability::StartSpan(
+        "tinyimx.ai.agent.run",
+        observability::SpanKind::kInternal
+    );
+    agent_span.SetAttribute("ai.model", options_.model);
+    agent_span.SetDefaultErrorOnEnd("agent.error");
+
     const auto discovery = mcp_client_->Discover();
     if (!discovery.ok) return {false, {}, 0, 0, "MCP discovery failed: " + discovery.error};
     if (std::find(discovery.supported_versions.begin(), discovery.supported_versions.end(),
@@ -91,6 +101,15 @@ AgentResult AgentOrchestrator::Run(const std::string& user_prompt) {
             if (completion.content.empty()) {
                 return {false, {}, round, total_tool_calls, "AI completion returned an empty final answer"};
             }
+            agent_span.SetAttribute(
+                "ai.tool_calls",
+                static_cast<std::int64_t>(total_tool_calls)
+            );
+            agent_span.SetAttribute(
+                "ai.tool_rounds",
+                static_cast<std::int64_t>(round)
+            );
+            agent_span.MarkOk();
             return {true, completion.content, round, total_tool_calls, {}};
         }
         if (round == options_.max_tool_rounds) {

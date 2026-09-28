@@ -1,5 +1,7 @@
 #include "services/group/service/GroupServiceImpl.h"
 
+#include "common/observability/GrpcTracing.h"
+
 #include <grpcpp/grpcpp.h>
 
 #include <optional>
@@ -221,15 +223,44 @@ grpc::Status GroupServiceImpl::ListGroupMembers(grpc::ServerContext* c, const ti
     return grpc::Status::OK;
 }
 
-grpc::Status GroupServiceImpl::ListMyGroups(grpc::ServerContext* c, const tinyimx::group::v1::ListMyGroupsRequest* r, tinyimx::group::v1::ListMyGroupsResponse* o) {
-    if (InvalidRpcArgs(c,r,o)) return {grpc::StatusCode::INVALID_ARGUMENT,"invalid ListMyGroups RPC arguments"};
-    if (!application_service_) return {grpc::StatusCode::UNAVAILABLE,"GroupService application service is unavailable"};
-    auto result=application_service_->ListMyGroups({r->actor_user_id(),r->after_group_id(),r->limit()});
-    if (!result.Succeeded()) return MapApplicationFailure(result.status,result.message);
-    for (const auto& group: result.groups) FillProtoGroup(group,o->add_groups());
-    o->set_has_more(result.has_more);
-    return grpc::Status::OK;
+grpc::Status GroupServiceImpl::ListMyGroups(
+    grpc::ServerContext* context,
+    const tinyimx::group::v1::ListMyGroupsRequest* request,
+    tinyimx::group::v1::ListMyGroupsResponse* response
+) {
+    if (InvalidRpcArgs(context, request, response)) {
+        return {grpc::StatusCode::INVALID_ARGUMENT, "invalid ListMyGroups RPC arguments"};
+    }
+
+    auto rpc_span = observability::StartGrpcServerSpan(
+        "tinyimx.group.v1.GroupService",
+        "ListMyGroups",
+        context
+    );
+    const auto finish = [&](grpc::Status status) {
+        observability::FinishGrpcServerSpan(
+            &rpc_span, status, "tinyimx.group.v1.GroupService", "ListMyGroups"
+        );
+        return status;
+    };
+
+    if (!application_service_) {
+        return finish(grpc::Status{grpc::StatusCode::UNAVAILABLE,
+                       "GroupService application service is unavailable"});
+    }
+    auto result = application_service_->ListMyGroups(
+        {request->actor_user_id(), request->after_group_id(), request->limit()}
+    );
+    if (!result.Succeeded()) {
+        return finish(MapApplicationFailure(result.status, result.message));
+    }
+    for (const auto& group : result.groups) {
+        FillProtoGroup(group, response->add_groups());
+    }
+    response->set_has_more(result.has_more);
+    return finish(grpc::Status::OK);
 }
+
 
 grpc::Status GroupServiceImpl::CheckGroupSendPermission(grpc::ServerContext* c, const tinyimx::group::v1::CheckGroupSendPermissionRequest* r, tinyimx::group::v1::CheckGroupSendPermissionResponse* o) {
     if (InvalidRpcArgs(c,r,o)) return {grpc::StatusCode::INVALID_ARGUMENT,"invalid CheckGroupSendPermission RPC arguments"};

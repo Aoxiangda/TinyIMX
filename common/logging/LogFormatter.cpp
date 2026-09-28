@@ -1,5 +1,7 @@
 #include "common/logging/LogFormatter.h"
 
+#include "common/observability/Trace.h"
+
 #include <ctime>
 #include <iomanip>
 #include <sstream>
@@ -13,10 +15,19 @@ std::string DefaultLogFormatter::Format(const LogMessage& message) {
     std::tm tm_time{};
     localtime_r(&time_value, &tm_time);
 
+    const auto trace_ids = observability::CurrentTraceIds();
+
     std::ostringstream stream;
     stream << '[' << std::put_time(&tm_time, "%Y-%m-%d %H:%M:%S") << ']'
            << " [" << LogLevelToString(message.level) << ']'
-           << " [thread=" << message.thread_id << ']'
+           << " [thread=" << message.thread_id << ']';
+
+    if (trace_ids.Valid()) {
+        stream << " [trace_id=" << trace_ids.trace_id
+               << " span_id=" << trace_ids.span_id << ']';
+    }
+
+    stream
            << " [" << BaseFileName(message.source.file_name)
            << ':' << message.source.line
            << " " << message.source.function_name << ']'

@@ -33,5 +33,19 @@
     "max_tool_calls_per_round": 8,
     "max_total_tool_calls": 16,
     "repeated_identical_call_limit": 3
+  },
+  "observability": {
+    "enable": false,
+    "metrics_enable": false,
+    "traces_enable": true,
+    "otlp_endpoint": "http://127.0.0.1:4317",
+    "metric_export_interval_ms": 5000,
+    "export_timeout_ms": 3000,
+    "shutdown_timeout_ms": 5000,
+    "trace_max_queue_size": 2048,
+    "trace_max_export_batch_size": 512,
+    "trace_schedule_delay_ms": 5000,
+    "service_instance_id": "tinyimx-ai-agent-1",
+    "deployment_environment": "dev"
   }
 }

@@ -170,6 +170,22 @@ struct ServiceDiscoveryConfig {
     bool retain_last_known_good{true};
 };
 
+struct ObservabilityConfig {
+    bool enable{false};
+    bool metrics_enable{true};
+    bool traces_enable{false};
+
+    std::string otlp_endpoint{"http://127.0.0.1:4317"};
+
+    int metric_export_interval_ms{5000};
+    int export_timeout_ms{3000};
+    int shutdown_timeout_ms{5000};
+
+    std::size_t trace_max_queue_size{2048};
+    std::size_t trace_max_export_batch_size{512};
+    int trace_schedule_delay_ms{5000};
+};
+
 struct McpConfig {
     bool enable{false};
 

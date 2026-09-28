@@ -1,0 +1,34 @@
+{
+  "app": {
+    "name": "TinyIMX-Observability-Demo",
+    "env": "test",
+    "instance_id": "m20-observability-demo-1"
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 19120,
+    "backlog": 32,
+    "io_thread_count": 0
+  },
+  "logger": {
+    "level": "info",
+    "console": true,
+    "file": "logs/m20-observability-demo.log",
+    "max_file_size_mb": 1,
+    "max_backup_files": 1,
+    "async": false,
+    "flush_each_log": false
+  },
+  "observability": {
+    "enable": true,
+    "metrics_enable": true,
+    "traces_enable": false,
+    "otlp_endpoint": "http://127.0.0.1:4317",
+    "metric_export_interval_ms": 1000,
+    "export_timeout_ms": 1000,
+    "shutdown_timeout_ms": 3000,
+    "trace_max_queue_size": 2048,
+    "trace_max_export_batch_size": 512,
+    "trace_schedule_delay_ms": 5000
+  }
+}

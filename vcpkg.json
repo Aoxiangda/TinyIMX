@@ -19,6 +19,12 @@
       "features": [
         "sync"
       ]
+    },
+    {
+      "name": "opentelemetry-cpp",
+      "features": [
+        "otlp-grpc"
+      ]
     }
   ]
 }

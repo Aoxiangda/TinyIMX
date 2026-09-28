@@ -1,6 +1,7 @@
 #include "common/config/Config.h"
 #include "common/logging/LogMacros.h"
 #include "common/logging/Logger.h"
+#include "common/observability/ProcessTelemetry.h"
 #include "common/net/EventLoop.h"
 #include "services/intelligence/mcp/McpAuth.h"
 #include "services/intelligence/mcp/McpDispatcher.h"
@@ -42,6 +43,17 @@ int main(int argc, char** argv) {
     }
     if (!tinyimx::Logger::Instance().Init(config.Logger())) {
         std::cerr << "logger init failed\n";
+        return 1;
+    }
+
+    tinyimx::ProcessTelemetry process_telemetry;
+    if (!process_telemetry.Initialize(
+            config,
+            "tinyimx-mcp-server",
+            "mcp"
+        )) {
+        LOG_ERROR("tinyimx-mcp-server observability initialization failed");
+        tinyimx::Logger::Instance().Shutdown();
         return 1;
     }
     const auto& mcp = config.Mcp();
@@ -149,6 +161,7 @@ int main(int argc, char** argv) {
     if (zk_discovery) zk_discovery->Stop();
     if (zk_client) zk_client->Stop();
     g_loop = nullptr;
+    process_telemetry.Shutdown();
     tinyimx::Logger::Instance().Shutdown();
     return 0;
 }

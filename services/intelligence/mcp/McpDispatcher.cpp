@@ -1,5 +1,7 @@
 #include "services/intelligence/mcp/McpDispatcher.h"
 
+#include "common/observability/Trace.h"
+
 #include <exception>
 
 namespace tinyimx::mcp {
@@ -96,12 +98,19 @@ DispatchResult Dispatcher::DispatchRequest(const RequestContext& context,
         if (method == "tools/call") {
             const std::string name = params.value("name", "");
             if (name.empty()) return ErrorResult(id, kInvalidParams, "tools/call requires name");
+            auto tool_span = observability::StartSpan(
+                "tinyimx.mcp.tool." + name,
+                observability::SpanKind::kInternal
+            );
+            tool_span.SetAttribute("mcp.tool.name", name);
+            tool_span.SetDefaultErrorOnEnd("mcp.tool.error");
             const auto found = registry_->FindTool(name);
             if (!found) return ErrorResult(id, kMethodNotFound, "unknown tool: " + name);
             std::string missing;
             if (!Authorized(context.principal, found->first.required_scopes, &missing)) return ErrorResult(id, kForbidden, "missing scope: " + missing, 403);
             Json content = found->second(context, params.value("arguments", Json::object()));
             Json result = MakeCompleteResult(Json{{"content", Json::array({Json{{"type", "text"}, {"text", content.dump()}}})}, {"structuredContent", std::move(content)}, {"isError", false}}, "private", 0);
+            tool_span.MarkOk();
             return {200, MakeJsonRpcResult(id, std::move(result))};
         }
 

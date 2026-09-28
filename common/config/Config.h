@@ -46,6 +46,7 @@ public:
     const ServiceDiscoveryConfig& ServiceDiscovery() const;
 
     const McpConfig& Mcp() const;
+    const ObservabilityConfig& Observability() const;
 
     // 兼容当前已有代码的旧接口，
     // 后续模块逐步改用强类型接口。
@@ -107,6 +108,7 @@ private:
     ServiceDiscoveryConfig service_discovery_;
 
     McpConfig mcp_;
+    ObservabilityConfig observability_;
 };
 
 }  // namespace tinyimx

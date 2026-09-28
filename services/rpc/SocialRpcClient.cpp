@@ -1,5 +1,7 @@
 #include "services/rpc/SocialRpcClient.h"
 
+#include "common/observability/GrpcTracing.h"
+
 #include <grpcpp/grpcpp.h>
 
 #include <algorithm>
@@ -103,6 +105,11 @@ SocialRpcClient::ListFriends(
         std::chrono::system_clock::now() +
         options.remaining_timeout
     );
+    auto rpc_span = observability::StartGrpcClientSpan(
+        "tinyimx.social.v1.SocialService",
+        "ListFriends",
+        &context
+    );
 
     const grpc::Status grpc_status =
         stub->ListFriends(
@@ -110,6 +117,13 @@ SocialRpcClient::ListFriends(
             proto_request,
             &proto_response
         );
+
+    observability::FinishGrpcClientSpan(
+        &rpc_span,
+        grpc_status,
+        "tinyimx.social.v1.SocialService",
+        "ListFriends"
+    );
 
     if (!grpc_status.ok()) {
         const RpcStatus mapped = MapGrpcStatus(grpc_status);

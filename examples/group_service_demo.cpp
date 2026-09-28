@@ -2,6 +2,7 @@
 #include "common/db/MySqlConnectionPool.h"
 #include "common/logging/LogMacros.h"
 #include "common/logging/Logger.h"
+#include "common/observability/ProcessTelemetry.h"
 #include "services/group/application/GroupApplicationService.h"
 #include "services/group/application/GroupPermissionPolicy.h"
 #include "services/group/repository/GroupRepositoryAdapter.h"
@@ -72,6 +73,17 @@ int main(int argc, char* argv[]) {
     }
     if (!tinyimx::Logger::Instance().Init(config.Logger())) {
         std::cerr << "logger init failed\n";
+        return 1;
+    }
+
+    tinyimx::ProcessTelemetry process_telemetry;
+    if (!process_telemetry.Initialize(
+            config,
+            "tinyimx-group-service",
+            "group"
+        )) {
+        LOG_ERROR("tinyimx-group-service observability initialization failed");
+        tinyimx::Logger::Instance().Shutdown();
         return 1;
     }
     if (!config.MySql().enable) {
@@ -207,6 +219,7 @@ int main(int argc, char* argv[]) {
 
     mysql_pool.Shutdown();
     LOG_INFO("GroupService stopped");
+    process_telemetry.Shutdown();
     tinyimx::Logger::Instance().Shutdown();
     return 0;
 }

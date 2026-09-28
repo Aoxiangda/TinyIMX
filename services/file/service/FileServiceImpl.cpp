@@ -1,5 +1,7 @@
 #include "services/file/service/FileServiceImpl.h"
 
+#include "common/observability/GrpcTracing.h"
+
 #include <grpcpp/grpcpp.h>
 
 #include <string>
@@ -402,19 +404,34 @@ grpc::Status FileServiceImpl::GetDownloadInfo(
     if (context == nullptr || request == nullptr || response == nullptr) {
         return {grpc::StatusCode::INVALID_ARGUMENT, "invalid GetDownloadInfo RPC arguments"};
     }
+
+    auto rpc_span = observability::StartGrpcServerSpan(
+        "tinyimx.file.v1.FileService",
+        "GetDownloadInfo",
+        context
+    );
+    const auto finish = [&](grpc::Status status) {
+        observability::FinishGrpcServerSpan(
+            &rpc_span, status, "tinyimx.file.v1.FileService", "GetDownloadInfo"
+        );
+        return status;
+    };
+
     if (application_service_ == nullptr) {
-        return {grpc::StatusCode::UNAVAILABLE, "FileService application service is unavailable"};
+        return finish(grpc::Status{grpc::StatusCode::UNAVAILABLE,
+                       "FileService application service is unavailable"});
     }
     const auto result = application_service_->GetDownloadInfo(
         {request->actor_user_id(), request->file_id()}
     );
     if (!result.Found()) {
-        return MapApplicationFailure(result.status, result.message);
+        return finish(MapApplicationFailure(result.status, result.message));
     }
     FillProtoDownloadInfo(*result.info, response->mutable_info());
     response->set_message(result.message);
-    return grpc::Status::OK;
+    return finish(grpc::Status::OK);
 }
+
 
 grpc::Status FileServiceImpl::ReadFileRange(
     grpc::ServerContext* context,

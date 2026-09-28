@@ -195,6 +195,10 @@ const McpConfig& Config::Mcp() const {
     return mcp_;
 }
 
+const ObservabilityConfig& Config::Observability() const {
+    return observability_;
+}
+
 std::string Config::ServerName() const {
     return app_.name;
 }
@@ -247,6 +251,7 @@ void Config::Reset() {
     zookeeper_ = ZooKeeperConfig{};
     service_discovery_ = ServiceDiscoveryConfig{};
     mcp_ = McpConfig{};
+    observability_ = ObservabilityConfig{};
 }
 
 bool Config::ApplyJsonConfig(const std::string& json_content) {
@@ -555,6 +560,26 @@ bool Config::ApplyJsonConfig(const std::string& json_content) {
                 "retain_last_known_good",
                 &service_discovery_.retain_last_known_good
             );
+        }
+
+        if (root.contains("observability")) {
+            const auto& section = root.at("observability");
+            ReadIfExists(section, "enable", &observability_.enable);
+            ReadIfExists(section, "metrics_enable", &observability_.metrics_enable);
+            ReadIfExists(section, "traces_enable", &observability_.traces_enable);
+            ReadIfExists(section, "otlp_endpoint", &observability_.otlp_endpoint);
+            ReadIfExists(section, "metric_export_interval_ms",
+                         &observability_.metric_export_interval_ms);
+            ReadIfExists(section, "export_timeout_ms",
+                         &observability_.export_timeout_ms);
+            ReadIfExists(section, "shutdown_timeout_ms",
+                         &observability_.shutdown_timeout_ms);
+            ReadIfExists(section, "trace_max_queue_size",
+                         &observability_.trace_max_queue_size);
+            ReadIfExists(section, "trace_max_export_batch_size",
+                         &observability_.trace_max_export_batch_size);
+            ReadIfExists(section, "trace_schedule_delay_ms",
+                         &observability_.trace_schedule_delay_ms);
         }
 
         if (root.contains("mcp")) {
@@ -1080,6 +1105,38 @@ bool Config::Validate() {
         return SetError(
             "zookeeper.enable must be true when service_discovery.provider=zookeeper"
         );
+    }
+
+    if (observability_.enable) {
+        if (!observability_.metrics_enable && !observability_.traces_enable) {
+            return SetError(
+                "observability requires metrics_enable or traces_enable when enabled"
+            );
+        }
+
+        if (observability_.otlp_endpoint.empty()) {
+            return SetError(
+                "observability.otlp_endpoint cannot be empty when observability.enable=true"
+            );
+        }
+
+        if (observability_.metric_export_interval_ms <= 0 ||
+            observability_.export_timeout_ms <= 0 ||
+            observability_.shutdown_timeout_ms <= 0 ||
+            observability_.trace_schedule_delay_ms <= 0) {
+            return SetError(
+                "observability export/shutdown timing values must be positive"
+            );
+        }
+
+        if (observability_.trace_max_queue_size == 0 ||
+            observability_.trace_max_export_batch_size == 0 ||
+            observability_.trace_max_export_batch_size >
+                observability_.trace_max_queue_size) {
+            return SetError(
+                "observability trace queue/batch limits are invalid"
+            );
+        }
     }
 
     if (mcp_.enable) {

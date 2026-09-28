@@ -1,5 +1,7 @@
 #include "services/rpc/MessageRpcClient.h"
 
+#include "common/observability/GrpcTracing.h"
+
 #include <grpcpp/grpcpp.h>
 
 #include <algorithm>
@@ -878,11 +880,23 @@ MessageRpcClient::ListConversations(
     context.set_deadline(
         std::chrono::system_clock::now() + options.remaining_timeout
     );
+    auto rpc_span = observability::StartGrpcClientSpan(
+        "tinyimx.message.v1.MessageService",
+        "ListConversations",
+        &context
+    );
 
     const grpc::Status grpc_status = stub->ListConversations(
         &context,
         proto_request,
         &proto_response
+    );
+
+    observability::FinishGrpcClientSpan(
+        &rpc_span,
+        grpc_status,
+        "tinyimx.message.v1.MessageService",
+        "ListConversations"
     );
 
     if (!grpc_status.ok()) {

@@ -1,5 +1,7 @@
 #include "services/rpc/GroupRpcClient.h"
 
+#include "common/observability/GrpcTracing.h"
+
 #include <grpcpp/grpcpp.h>
 
 #include <algorithm>
@@ -223,10 +225,60 @@ RpcResult<ListGroupMembersRpcResponse> GroupRpcClient::ListGroupMembers(const Li
     if(request.actor_user_id==0||request.group_id==0||!ValidPageLimit(request.limit))return Failure<ListGroupMembersRpcResponse>(RpcErrorCode::kInvalidArgument,"invalid ListGroupMembers request");
     TINYIMX_GROUP_PREPARE("ListGroupMembers",ListGroupMembersRpcResponse);tinyimx::group::v1::ListGroupMembersRequest in;FillMeta(options,in.mutable_meta());in.set_actor_user_id(request.actor_user_id);in.set_group_id(request.group_id);in.set_after_user_id(request.after_user_id);in.set_limit(request.limit);tinyimx::group::v1::ListGroupMembersResponse out;const auto status=stub->ListGroupMembers(&context,in,&out);if(!status.ok()){const auto mapped=MapGrpcStatus(status);return Failure<ListGroupMembersRpcResponse>(mapped.code,mapped.message);}ListGroupMembersRpcResponse response;response.has_more=out.has_more();response.members.reserve(static_cast<std::size_t>(out.members_size()));std::uint64_t previous=request.after_user_id;for(const auto& item:out.members()){auto member=ToMember(item);if(!member||member->group_id!=request.group_id||member->user_id<=previous)return Failure<ListGroupMembersRpcResponse>(RpcErrorCode::kDataLoss,"ListGroupMembers returned invalid page");previous=member->user_id;response.members.push_back(std::move(*member));}return RpcResult<ListGroupMembersRpcResponse>::Success(std::move(response));
 }
-RpcResult<ListMyGroupsRpcResponse> GroupRpcClient::ListMyGroups(const ListMyGroupsRpcRequest& request,const RpcCallOptions& options) const {
-    if(request.actor_user_id==0||!ValidPageLimit(request.limit))return Failure<ListMyGroupsRpcResponse>(RpcErrorCode::kInvalidArgument,"invalid ListMyGroups request");
-    TINYIMX_GROUP_PREPARE("ListMyGroups",ListMyGroupsRpcResponse);tinyimx::group::v1::ListMyGroupsRequest in;FillMeta(options,in.mutable_meta());in.set_actor_user_id(request.actor_user_id);in.set_after_group_id(request.after_group_id);in.set_limit(request.limit);tinyimx::group::v1::ListMyGroupsResponse out;const auto status=stub->ListMyGroups(&context,in,&out);if(!status.ok()){const auto mapped=MapGrpcStatus(status);return Failure<ListMyGroupsRpcResponse>(mapped.code,mapped.message);}ListMyGroupsRpcResponse response;response.has_more=out.has_more();response.groups.reserve(static_cast<std::size_t>(out.groups_size()));std::uint64_t previous=request.after_group_id;for(const auto& item:out.groups()){auto group=ToGroup(item);if(!group||group->group_id<=previous)return Failure<ListMyGroupsRpcResponse>(RpcErrorCode::kDataLoss,"ListMyGroups returned invalid page");previous=group->group_id;response.groups.push_back(std::move(*group));}return RpcResult<ListMyGroupsRpcResponse>::Success(std::move(response));
+RpcResult<ListMyGroupsRpcResponse> GroupRpcClient::ListMyGroups(
+    const ListMyGroupsRpcRequest& request,
+    const RpcCallOptions& options
+) const {
+    if (request.actor_user_id == 0 || !ValidPageLimit(request.limit)) {
+        return Failure<ListMyGroupsRpcResponse>(
+            RpcErrorCode::kInvalidArgument,
+            "invalid ListMyGroups request"
+        );
+    }
+
+    TINYIMX_GROUP_PREPARE("ListMyGroups", ListMyGroupsRpcResponse);
+    tinyimx::group::v1::ListMyGroupsRequest in;
+    FillMeta(options, in.mutable_meta());
+    in.set_actor_user_id(request.actor_user_id);
+    in.set_after_group_id(request.after_group_id);
+    in.set_limit(request.limit);
+
+    tinyimx::group::v1::ListMyGroupsResponse out;
+    auto rpc_span = observability::StartGrpcClientSpan(
+        "tinyimx.group.v1.GroupService",
+        "ListMyGroups",
+        &context
+    );
+    const auto status = stub->ListMyGroups(&context, in, &out);
+    observability::FinishGrpcClientSpan(
+        &rpc_span,
+        status,
+        "tinyimx.group.v1.GroupService",
+        "ListMyGroups"
+    );
+    if (!status.ok()) {
+        const auto mapped = MapGrpcStatus(status);
+        return Failure<ListMyGroupsRpcResponse>(mapped.code, mapped.message);
+    }
+
+    ListMyGroupsRpcResponse response;
+    response.has_more = out.has_more();
+    response.groups.reserve(static_cast<std::size_t>(out.groups_size()));
+    std::uint64_t previous = request.after_group_id;
+    for (const auto& item : out.groups()) {
+        auto group = ToGroup(item);
+        if (!group || group->group_id <= previous) {
+            return Failure<ListMyGroupsRpcResponse>(
+                RpcErrorCode::kDataLoss,
+                "ListMyGroups returned invalid page"
+            );
+        }
+        previous = group->group_id;
+        response.groups.push_back(std::move(*group));
+    }
+    return RpcResult<ListMyGroupsRpcResponse>::Success(std::move(response));
 }
+
 RpcResult<CheckGroupSendPermissionRpcResponse>
 GroupRpcClient::CheckGroupSendPermission(
     const CheckGroupSendPermissionRpcRequest& request,

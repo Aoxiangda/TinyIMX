@@ -1,6 +1,7 @@
 #include "common/net/TcpServer.h"
 
 #include "common/logging/LogMacros.h"
+#include "common/observability/Metrics.h"
 #include "common/net/Channel.h"
 #include "common/net/EventLoop.h"
 #include "common/net/EventLoopThreadPool.h"
@@ -24,10 +25,20 @@ TcpServer::TcpServer(
       name_(std::move(name)),
       listen_address_(listen_address),
       io_thread_count_(io_thread_count) {
+    Metrics::Instance().RegisterTcpServer(
+        this,
+        name_,
+        [this]() {
+            return TcpServerMetricsSnapshot{
+                static_cast<std::int64_t>(ConnectionCount())
+            };
+        }
+    );
 }
 
 TcpServer::~TcpServer() {
     Stop();
+    Metrics::Instance().UnregisterTcpServer(this);
 }
 
 bool TcpServer::Start() {
@@ -265,12 +276,16 @@ void TcpServer::Stop() {
         }
     }
 
+    const std::size_t stop_connection_count = connections_.size();
     connections_.clear();
 
     connection_count_.store(
         0,
         std::memory_order_relaxed
     );
+    for (std::size_t i = 0; i < stop_connection_count; ++i) {
+        Metrics::Instance().RecordTcpConnectionEvent(name_, "closed");
+    }
 
     std::vector<TcpConnectionPtr>
         remote_connections;
@@ -554,6 +569,7 @@ void TcpServer::HandleAccept() {
             connections_.size(),
             std::memory_order_relaxed
         );
+        Metrics::Instance().RecordTcpConnectionEvent(name_, "accepted");
 
         LOG_INFO(
             "tcp server accepted "
@@ -665,6 +681,7 @@ void TcpServer::RemoveConnectionInLoop(
         connections_.size(),
         std::memory_order_relaxed
     );
+    Metrics::Instance().RecordTcpConnectionEvent(name_, "closed");
 
     EventLoop* io_loop =
         connection->GetLoop();

@@ -1,5 +1,7 @@
 #include "services/message/service/MessageServiceImpl.h"
 
+#include "common/observability/GrpcTracing.h"
+
 #include "services/message/application/MessageApplicationService.h"
 #include "services/rpc/GroupRpcClient.h"
 
@@ -599,30 +601,51 @@ grpc::Status MessageServiceImpl::ListConversations(
     tinyimx::message::v1::ListConversationsResponse* response
 ) {
     if (!ValidateRpcArguments(context, request, response)) {
-        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-                            "invalid ListConversations RPC arguments");
+        return grpc::Status(
+            grpc::StatusCode::INVALID_ARGUMENT,
+            "invalid ListConversations RPC arguments"
+        );
     }
+
+    auto rpc_span = observability::StartGrpcServerSpan(
+        "tinyimx.message.v1.MessageService",
+        "ListConversations",
+        context
+    );
+    const auto finish = [&](grpc::Status status) {
+        observability::FinishGrpcServerSpan(
+            &rpc_span, status, "tinyimx.message.v1.MessageService", "ListConversations"
+        );
+        return status;
+    };
+
     if (application_service_ == nullptr) {
-        return grpc::Status(grpc::StatusCode::UNAVAILABLE,
-                            "MessageService application service is unavailable");
+        return finish(grpc::Status(
+            grpc::StatusCode::UNAVAILABLE,
+            "MessageService application service is unavailable"
+        ));
     }
     if (!ApplyFaultDelay(context, "TINYIMX_FAULT_MESSAGE_CONVERSATION_DELAY_MS")) {
-        return grpc::Status(grpc::StatusCode::CANCELLED,
-                            "ListConversations RPC cancelled during injected delay");
+        return finish(grpc::Status(
+            grpc::StatusCode::CANCELLED,
+            "ListConversations RPC cancelled during injected delay"
+        ));
     }
 
     auto result = application_service_->ListConversations(
-        request->actor_user_id(), request->limit());
+        request->actor_user_id(), request->limit()
+    );
     if (!result.Succeeded()) {
-        return MapApplicationFailure(result.status, result.message);
+        return finish(MapApplicationFailure(result.status, result.message));
     }
 
     response->set_has_more(result.has_more);
     for (const auto& conversation : result.conversations) {
         FillConversation(conversation, response->add_conversations());
     }
-    return grpc::Status::OK;
+    return finish(grpc::Status::OK);
 }
+
 
 grpc::Status MessageServiceImpl::CountPending(
     grpc::ServerContext* context,

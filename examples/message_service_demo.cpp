@@ -2,6 +2,7 @@
 #include "common/db/MySqlConnectionPool.h"
 #include "common/logging/LogMacros.h"
 #include "common/logging/Logger.h"
+#include "common/observability/ProcessTelemetry.h"
 #include "services/registry/zookeeper/ServiceInstance.h"
 #include "services/registry/zookeeper/ZooKeeperClient.h"
 #include "services/registry/zookeeper/ZooKeeperServiceRegistrar.h"
@@ -84,6 +85,17 @@ int main(int argc, char* argv[]) {
 
     if (!tinyimx::Logger::Instance().Init(config.Logger())) {
         std::cerr << "logger init failed\n";
+        return 1;
+    }
+
+    tinyimx::ProcessTelemetry process_telemetry;
+    if (!process_telemetry.Initialize(
+            config,
+            "tinyimx-message-service",
+            "message"
+        )) {
+        LOG_ERROR("tinyimx-message-service observability initialization failed");
+        tinyimx::Logger::Instance().Shutdown();
         return 1;
     }
 
@@ -357,6 +369,7 @@ int main(int argc, char* argv[]) {
 
     mysql_pool.Shutdown();
     LOG_INFO("MessageService stopped");
+    process_telemetry.Shutdown();
     tinyimx::Logger::Instance().Shutdown();
     return 0;
 }

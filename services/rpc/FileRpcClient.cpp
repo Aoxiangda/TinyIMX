@@ -1,5 +1,7 @@
 #include "services/rpc/FileRpcClient.h"
 
+#include "common/observability/GrpcTracing.h"
+
 #include <grpcpp/grpcpp.h>
 
 #include <algorithm>
@@ -290,7 +292,18 @@ RpcResult<GetDownloadInfoRpcResponse> FileRpcClient::GetDownloadInfo(
     context.set_deadline(
         std::chrono::system_clock::now() + options.remaining_timeout
     );
+    auto rpc_span = observability::StartGrpcClientSpan(
+        "tinyimx.file.v1.FileService",
+        "GetDownloadInfo",
+        &context
+    );
     const auto status = stub->GetDownloadInfo(&context, in, &out);
+    observability::FinishGrpcClientSpan(
+        &rpc_span,
+        status,
+        "tinyimx.file.v1.FileService",
+        "GetDownloadInfo"
+    );
     if (!status.ok()) {
         const auto mapped = MapGrpcStatus(status);
         return Failure<GetDownloadInfoRpcResponse>(mapped.code, mapped.message);

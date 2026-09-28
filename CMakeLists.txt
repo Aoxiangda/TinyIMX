@@ -1448,3 +1448,9 @@ include(
 include(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXAI.cmake"
 )
+
+# M20: OpenTelemetry observability foundation.
+# Application instrumentation exports OTLP/gRPC; Collector exposes Prometheus metrics.
+include(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXObservability.cmake"
+)

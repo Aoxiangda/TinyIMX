@@ -1,5 +1,7 @@
 #include "services/intelligence/mcp/McpClient.h"
 
+#include "common/observability/Trace.h"
+
 #include <sstream>
 #include <utility>
 
@@ -49,6 +51,14 @@ Client::RpcResponse Client::Request(
     if (options_.bearer_token.empty()) return {false, Json::object(), "MCP bearer token is empty"};
     if (!params.is_object()) return {false, Json::object(), "MCP params must be an object"};
 
+    auto request_span = observability::StartSpan(
+        "tinyimx.mcp.client." + method,
+        observability::SpanKind::kClient
+    );
+    request_span.SetAttribute("mcp.method", method);
+    if (!name_header.empty()) request_span.SetAttribute("mcp.name", name_header);
+    request_span.SetDefaultErrorOnEnd("mcp.client.error");
+
     params["_meta"] = Meta();
     const auto id = NextId();
     const Json body{
@@ -71,6 +81,12 @@ Client::RpcResponse Client::Request(
     request.headers.emplace("Mcp-Method", method);
     request.headers.emplace("X-Request-Id", "tinyimx-agent-" + std::to_string(id));
     if (!name_header.empty()) request.headers.emplace("Mcp-Name", name_header);
+
+    observability::TraceHeaders trace_headers;
+    observability::InjectCurrentTraceHeaders(&trace_headers);
+    for (const auto& [key, value] : trace_headers) {
+        request.headers[key] = value;
+    }
 
     const auto http = transport_->Execute(request);
     if (!http.ok) return {false, Json::object(), "MCP HTTP failure: " + http.error};
@@ -99,6 +115,7 @@ Client::RpcResponse Client::Request(
     if (!parsed.contains("result") || !parsed.at("result").is_object()) {
         return {false, Json::object(), "MCP response is missing result"};
     }
+    request_span.MarkOk();
     return {true, parsed.at("result"), {}};
 }
 

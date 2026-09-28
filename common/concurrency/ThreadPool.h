@@ -60,6 +60,7 @@ public:
 
         if (!IsAcceptingTasks()) {
             rejected_task_count_.fetch_add(1, std::memory_order_relaxed);
+            RecordTelemetryTaskEvent("rejected");
             throw std::runtime_error("thread pool is not accepting tasks");
         }
 
@@ -123,6 +124,7 @@ public:
 
         if (push_result != TaskPushResult::kOk) {
             rejected_task_count_.fetch_add(1, std::memory_order_relaxed);
+            RecordTelemetryTaskEvent("rejected");
 
             if (push_result == TaskPushResult::kStopped) {
                 throw std::runtime_error("thread pool queue is stopped");
@@ -132,6 +134,7 @@ public:
         }
 
         submitted_task_count_.fetch_add(1, std::memory_order_relaxed);
+        RecordTelemetryTaskEvent("submitted");
         UpdatePeakQueueSize(task_queue_.Size());
 
         return future;
@@ -209,6 +212,7 @@ private:
 
     void RecordTaskFinished(bool success,
                             std::chrono::nanoseconds elapsed_time);
+    void RecordTelemetryTaskEvent(const char* event);
     void UpdatePeakQueueSize(std::size_t queue_size);
 
     bool CompareExchangeState(ThreadPoolState expected,

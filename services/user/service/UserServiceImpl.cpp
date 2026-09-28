@@ -1,5 +1,7 @@
 #include "services/user/service/UserServiceImpl.h"
 
+#include "common/observability/GrpcTracing.h"
+
 #include <grpcpp/grpcpp.h>
 
 #include <chrono>
@@ -202,51 +204,50 @@ grpc::Status UserServiceImpl::GetUserProfile(
     const tinyimx::user::v1::GetUserProfileRequest* request,
     tinyimx::user::v1::GetUserProfileResponse* response
 ) {
-    if (context == nullptr ||
-        request == nullptr ||
-        response == nullptr) {
+    if (context == nullptr || request == nullptr || response == nullptr) {
         return grpc::Status(
             grpc::StatusCode::INVALID_ARGUMENT,
             "invalid GetUserProfile RPC arguments"
         );
     }
 
+    auto rpc_span = observability::StartGrpcServerSpan(
+        "tinyimx.user.v1.UserService",
+        "GetUserProfile",
+        context
+    );
+    const auto finish = [&](grpc::Status status) {
+        observability::FinishGrpcServerSpan(
+            &rpc_span, status, "tinyimx.user.v1.UserService", "GetUserProfile"
+        );
+        return status;
+    };
+
     if (application_service_ == nullptr) {
-        return grpc::Status(
+        return finish(grpc::Status(
             grpc::StatusCode::UNAVAILABLE,
             "UserService application service is unavailable"
-        );
+        ));
     }
 
     const auto fault_delay = ProfileFaultDelay();
     if (fault_delay > std::chrono::milliseconds::zero()) {
         std::this_thread::sleep_for(fault_delay);
         if (context->IsCancelled()) {
-            return grpc::Status(
+            return finish(grpc::Status(
                 grpc::StatusCode::CANCELLED,
                 "GetUserProfile cancelled during injected fault delay"
-            );
+            ));
         }
     }
 
-    auto result =
-        application_service_->GetUserProfile(
-            request->user_id()
-        );
-
+    auto result = application_service_->GetUserProfile(request->user_id());
     if (!result.Found()) {
-        return MapApplicationFailure(
-            result.status,
-            result.message
-        );
+        return finish(MapApplicationFailure(result.status, result.message));
     }
 
-    FillProtoProfile(
-        *result.profile,
-        response->mutable_profile()
-    );
-
-    return grpc::Status::OK;
+    FillProtoProfile(*result.profile, response->mutable_profile());
+    return finish(grpc::Status::OK);
 }
 
 }  // namespace tinyimx::user

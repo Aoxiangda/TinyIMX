@@ -1,5 +1,7 @@
 #include "services/rpc/UserRpcClient.h"
 
+#include "common/observability/GrpcTracing.h"
+
 #include <grpcpp/grpcpp.h>
 
 #include <algorithm>
@@ -250,6 +252,11 @@ UserRpcClient::GetUserProfile(
         std::chrono::system_clock::now() +
         options.remaining_timeout
     );
+    auto rpc_span = observability::StartGrpcClientSpan(
+        "tinyimx.user.v1.UserService",
+        "GetUserProfile",
+        &context
+    );
 
     const grpc::Status grpc_status =
         stub->GetUserProfile(
@@ -257,6 +264,13 @@ UserRpcClient::GetUserProfile(
             proto_request,
             &proto_response
         );
+
+    observability::FinishGrpcClientSpan(
+        &rpc_span,
+        grpc_status,
+        "tinyimx.user.v1.UserService",
+        "GetUserProfile"
+    );
 
     if (!grpc_status.ok()) {
         const RpcStatus mapped = MapGrpcStatus(grpc_status);

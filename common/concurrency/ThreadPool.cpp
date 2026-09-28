@@ -1,6 +1,7 @@
 #include "common/concurrency/ThreadPool.h"
 
 #include "common/logging/LogMacros.h"
+#include "common/observability/Metrics.h"
 
 #include <algorithm>
 #include <chrono>
@@ -21,10 +22,24 @@ ThreadPool::ThreadPool(ThreadPoolOptions options)
     if (options_.queue_capacity == 0) {
         throw std::invalid_argument("thread pool queue_capacity must be greater than 0");
     }
+
+    Metrics::Instance().RegisterThreadPool(
+        this,
+        options_.name,
+        [this]() {
+            const auto stats = GetStats();
+            return ThreadPoolMetricsSnapshot{
+                static_cast<std::int64_t>(stats.current_queue_size),
+                static_cast<std::int64_t>(stats.current_worker_count),
+                static_cast<std::int64_t>(stats.active_thread_count)
+            };
+        }
+    );
 }
 
 ThreadPool::~ThreadPool() {
     Shutdown(ShutdownMode::kForce);
+    Metrics::Instance().UnregisterThreadPool(this);
 }
 
 bool ThreadPool::Start() {
@@ -101,6 +116,7 @@ TaskPushResult ThreadPool::TrySubmit(
             1,
             std::memory_order_relaxed
         );
+        RecordTelemetryTaskEvent("rejected");
 
         return TaskPushResult::kDiscarded;
     }
@@ -117,6 +133,7 @@ TaskPushResult ThreadPool::TrySubmit(
             1,
             std::memory_order_relaxed
         );
+        RecordTelemetryTaskEvent("rejected");
 
         return TaskPushResult::kStopped;
     }
@@ -202,6 +219,7 @@ TaskPushResult ThreadPool::TrySubmit(
             1,
             std::memory_order_relaxed
         );
+        RecordTelemetryTaskEvent("rejected");
 
         return push_result;
     }
@@ -211,6 +229,7 @@ TaskPushResult ThreadPool::TrySubmit(
         1,
         std::memory_order_relaxed
     );
+    RecordTelemetryTaskEvent("submitted");
 
     UpdatePeakQueueSize(
         task_queue_.Size()
@@ -560,12 +579,23 @@ void ThreadPool::RecordTaskFinished(
         failed_task_count_.fetch_add(1, std::memory_order_relaxed);
     }
 
+    RecordTelemetryTaskEvent(success ? "completed" : "failed");
+
     if (elapsed_time.count() > 0) {
+        Metrics::Instance().RecordThreadPoolTaskDuration(
+            options_.name,
+            success,
+            std::chrono::duration<double>(elapsed_time).count()
+        );
         total_task_time_ns_.fetch_add(
             static_cast<std::uint64_t>(elapsed_time.count()),
             std::memory_order_relaxed
         );
     }
+}
+
+void ThreadPool::RecordTelemetryTaskEvent(const char* event) {
+    Metrics::Instance().RecordThreadPoolTaskEvent(options_.name, event);
 }
 
 void ThreadPool::UpdatePeakQueueSize(std::size_t queue_size) {

@@ -2,6 +2,7 @@
 
 #include "common/config/ConfigTypes.h"
 #include "common/logging/Logger.h"
+#include "common/observability/ProcessTelemetry.h"
 #include "services/intelligence/ai/AIRuntimeConfig.h"
 #include "services/intelligence/ai/AgentOrchestrator.h"
 #include "services/intelligence/ai/OpenAICompatibleProvider.h"
@@ -58,6 +59,16 @@ int main(int argc, char** argv) {
         return 3;
     }
 
+    tinyimx::ProcessTelemetry process_telemetry;
+    if (!process_telemetry.Initialize(
+            config.observability,
+            config.telemetry_identity
+        )) {
+        std::cerr << "AI observability initialization failed\n";
+        tinyimx::Logger::Instance().Shutdown();
+        return 3;
+    }
+
     auto transport = std::make_shared<tinyimx::intelligence::NativeHttpClient>();
     auto provider = std::make_shared<tinyimx::ai::OpenAICompatibleProvider>(config.provider, transport);
     auto mcp_client = std::make_shared<tinyimx::mcp::Client>(config.mcp, transport);
@@ -88,6 +99,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    process_telemetry.Shutdown();
     tinyimx::Logger::Instance().Shutdown();
     return rc;
 }

@@ -1,9 +1,11 @@
 #include "services/intelligence/mcp/McpServer.h"
 
 #include "common/logging/LogMacros.h"
+#include "common/observability/Trace.h"
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
 #include <chrono>
 #include <exception>
 #include <utility>
@@ -118,6 +120,16 @@ void Server::HandleRequest(const TcpConnectionPtr& connection, HttpRequest reque
         ReplyAndClose(connection, 200, Json{{"status", "ok"}, {"service", "tinyimx-mcp"}});
         return;
     }
+
+    const std::string mcp_method = request.Header("mcp-method");
+    auto request_span = observability::StartServerSpanFromHeaders(
+        mcp_method.empty() ? "tinyimx.mcp.server.request"
+                           : "tinyimx.mcp.server." + mcp_method,
+        request.headers
+    );
+    request_span.SetAttribute("mcp.method", mcp_method);
+    request_span.SetDefaultErrorOnEnd("mcp.server.error");
+
     if (request.target != options_.endpoint_path) {
         ReplyAndClose(connection, 404, SimpleError(kMethodNotFound, "unknown endpoint"));
         return;
@@ -177,6 +189,13 @@ void Server::HandleRequest(const TcpConnectionPtr& connection, HttpRequest reque
     metadata.method_header = request.Header("mcp-method");
     metadata.name_header = request.Header("mcp-name");
     const DispatchResult result = dispatcher_->Dispatch(context, metadata, body);
+    request_span.SetAttribute(
+        "http.response.status_code",
+        static_cast<std::int64_t>(result.http_status)
+    );
+    if (result.http_status >= 200 && result.http_status < 300) {
+        request_span.MarkOk();
+    }
     ReplyAndClose(connection, result.http_status, result.body);
 }
 

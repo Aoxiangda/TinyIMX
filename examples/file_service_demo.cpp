@@ -2,6 +2,7 @@
 #include "common/db/MySqlConnectionPool.h"
 #include "common/logging/LogMacros.h"
 #include "common/logging/Logger.h"
+#include "common/observability/ProcessTelemetry.h"
 #include "services/file/application/FileApplicationService.h"
 #include "services/file/repository/FileRepositoryAdapter.h"
 #include "services/file/server/FileServiceServer.h"
@@ -55,6 +56,17 @@ int main(int argc, char* argv[]) {
     tinyimx::Config config;
     if (!config.LoadFromFile(config_path)) { std::cerr << "load config failed: " << config.LastError() << '\n'; return 1; }
     if (!tinyimx::Logger::Instance().Init(config.Logger())) return 1;
+
+    tinyimx::ProcessTelemetry process_telemetry;
+    if (!process_telemetry.Initialize(
+            config,
+            "tinyimx-file-service",
+            "file"
+        )) {
+        LOG_ERROR("tinyimx-file-service observability initialization failed");
+        tinyimx::Logger::Instance().Shutdown();
+        return 1;
+    }
     if (!config.MySql().enable) { LOG_ERROR("FileService requires mysql.enable=true"); return 1; }
 
     sigset_t signal_set; sigemptyset(&signal_set); sigaddset(&signal_set,SIGINT); sigaddset(&signal_set,SIGTERM);
@@ -101,6 +113,8 @@ int main(int argc, char* argv[]) {
     if (signal_thread.joinable()) signal_thread.join();
     if (registrar) registrar->Stop();
     if (zk_client) zk_client->Stop();
-    pool.Shutdown(); tinyimx::Logger::Instance().Shutdown();
+    pool.Shutdown();
+    process_telemetry.Shutdown();
+    tinyimx::Logger::Instance().Shutdown();
     return 0;
 }

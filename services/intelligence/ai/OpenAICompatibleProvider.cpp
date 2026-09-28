@@ -1,5 +1,7 @@
 #include "services/intelligence/ai/OpenAICompatibleProvider.h"
 
+#include "common/observability/Trace.h"
+
 #include <exception>
 #include <string>
 #include <utility>
@@ -126,6 +128,14 @@ CompletionResult OpenAICompatibleProvider::Complete(const CompletionRequest& req
     if (request.model.empty()) return {false, {}, {}, {}, "AI model is empty"};
     if (request.messages.empty()) return {false, {}, {}, {}, "AI messages are empty"};
 
+    auto provider_span = observability::StartSpan(
+        "tinyimx.ai.provider.complete",
+        observability::SpanKind::kClient
+    );
+    provider_span.SetAttribute("ai.provider.type", "openai_compatible");
+    provider_span.SetAttribute("ai.model", request.model);
+    provider_span.SetDefaultErrorOnEnd("ai.provider.error");
+
     intelligence::HttpRequest http;
     http.method = "POST";
     http.url = options_.endpoint;
@@ -151,7 +161,11 @@ CompletionResult OpenAICompatibleProvider::Complete(const CompletionRequest& req
         return {false, {}, {}, {}, "AI HTTP status " + std::to_string(response.response.status) +
                                          (detail.empty() ? std::string{} : ": " + detail)};
     }
-    return DecodeResponse(parsed);
+    auto decoded = DecodeResponse(parsed);
+    if (decoded.ok) {
+        provider_span.MarkOk();
+    }
+    return decoded;
 }
 
 }  // namespace tinyimx::ai

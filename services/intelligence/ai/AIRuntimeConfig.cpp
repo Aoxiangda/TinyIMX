@@ -41,6 +41,78 @@ bool PositiveSize(const Json& object, const char* key, std::size_t* value, std::
     return true;
 }
 
+
+bool PositiveInt(const Json& object, const char* key, int* value, std::string* error) {
+    if (!object.contains(key)) return true;
+    if (!object.at(key).is_number_integer()) {
+        if (error) *error = std::string(key) + " must be an integer";
+        return false;
+    }
+    const auto raw = object.at(key).get<long long>();
+    if (raw <= 0 || raw > std::numeric_limits<int>::max()) {
+        if (error) *error = std::string(key) + " must be a positive int";
+        return false;
+    }
+    *value = static_cast<int>(raw);
+    return true;
+}
+
+bool LoadObservability(
+    const Json& root,
+    RuntimeConfig* config,
+    std::string* error
+) {
+    if (!root.contains("observability")) {
+        return true;
+    }
+    const auto& section = root.at("observability");
+    if (!section.is_object()) {
+        if (error) *error = "observability must be an object";
+        return false;
+    }
+
+    auto& obs = config->observability;
+    obs.enable = section.value("enable", obs.enable);
+    obs.metrics_enable = section.value("metrics_enable", obs.metrics_enable);
+    obs.traces_enable = section.value("traces_enable", obs.traces_enable);
+    obs.otlp_endpoint = section.value("otlp_endpoint", obs.otlp_endpoint);
+
+    if (!PositiveInt(section, "metric_export_interval_ms", &obs.metric_export_interval_ms, error) ||
+        !PositiveInt(section, "export_timeout_ms", &obs.export_timeout_ms, error) ||
+        !PositiveInt(section, "shutdown_timeout_ms", &obs.shutdown_timeout_ms, error) ||
+        !PositiveSize(section, "trace_max_queue_size", &obs.trace_max_queue_size, error) ||
+        !PositiveSize(section, "trace_max_export_batch_size", &obs.trace_max_export_batch_size, error) ||
+        !PositiveInt(section, "trace_schedule_delay_ms", &obs.trace_schedule_delay_ms, error)) {
+        return false;
+    }
+
+    config->telemetry_identity.service_instance_id = section.value(
+        "service_instance_id", config->telemetry_identity.service_instance_id);
+    config->telemetry_identity.deployment_environment = section.value(
+        "deployment_environment", config->telemetry_identity.deployment_environment);
+
+    if (obs.enable) {
+        if (!obs.metrics_enable && !obs.traces_enable) {
+            if (error) *error = "observability requires metrics_enable or traces_enable when enabled";
+            return false;
+        }
+        if (obs.otlp_endpoint.empty()) {
+            if (error) *error = "observability.otlp_endpoint is required when enabled";
+            return false;
+        }
+        if (obs.trace_max_export_batch_size > obs.trace_max_queue_size) {
+            if (error) *error = "observability trace batch size cannot exceed queue size";
+            return false;
+        }
+        if (config->telemetry_identity.service_instance_id.empty() ||
+            config->telemetry_identity.deployment_environment.empty()) {
+            if (error) *error = "observability service_instance_id/deployment_environment cannot be empty";
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 bool LoadRuntimeConfig(const std::string& path, RuntimeConfig* output, std::string* error) {
@@ -112,6 +184,10 @@ bool LoadRuntimeConfig(const std::string& path, RuntimeConfig* output, std::stri
         !PositiveSize(agent, "max_tool_calls_per_round", &config.agent.max_tool_calls_per_round, error) ||
         !PositiveSize(agent, "max_total_tool_calls", &config.agent.max_total_tool_calls, error) ||
         !PositiveSize(agent, "repeated_identical_call_limit", &config.agent.repeated_identical_call_limit, error)) {
+        return false;
+    }
+
+    if (!LoadObservability(root, &config, error)) {
         return false;
     }
 
