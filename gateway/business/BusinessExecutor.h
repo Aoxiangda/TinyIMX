@@ -12,11 +12,14 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 namespace tinyimx {
 
 struct BusinessExecutorOptions {
+    std::string name{"gateway-business-runtime"};
+
     std::size_t worker_threads{4};
 
     /*
@@ -73,6 +76,20 @@ struct BusinessExecutorStats {
 
     std::uint64_t
         cancelled_before_start_total{0};
+
+    /*
+     * deadline-before-start 是 lifecycle terminal reason。
+     * 以下三个计数只描述“明确终态响应”的投递结果，
+     * 不参与 accepted lifecycle accounting，避免二次计数。
+     */
+    std::uint64_t
+        deadline_terminal_callback_total{0};
+
+    std::uint64_t
+        deadline_terminal_dropped_total{0};
+
+    std::uint64_t
+        deadline_terminal_exception_total{0};
 
     std::uint64_t
         completion_dropped_total{0};
@@ -150,6 +167,16 @@ public:
 
         CompletionDispatcher
             dispatcher;
+
+        /*
+         * Task 已经 accepted，但在真正执行 work 前因 deadline
+         * 过期时，可选地向调用方投递一个明确终态响应。
+         *
+         * 注意：该 callback 不代表业务 work completed，
+         * 所以不会增加 completed_total。
+         */
+        Completion
+            deadline_expired_before_start_completion;
     };
 
 public:
@@ -255,6 +282,10 @@ private:
         Completion completion
     );
 
+    void DispatchDeadlineTerminal(
+        const std::shared_ptr<TaskState>& task
+    );
+
     void UpdatePeak(
         std::atomic<std::size_t>& peak,
         std::size_t value
@@ -348,6 +379,15 @@ private:
 
     std::atomic<std::uint64_t>
         cancelled_before_start_total_{0};
+
+    std::atomic<std::uint64_t>
+        deadline_terminal_callback_total_{0};
+
+    std::atomic<std::uint64_t>
+        deadline_terminal_dropped_total_{0};
+
+    std::atomic<std::uint64_t>
+        deadline_terminal_exception_total_{0};
 
     std::atomic<std::uint64_t>
         worker_exception_total_{0};

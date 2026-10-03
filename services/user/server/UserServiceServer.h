@@ -3,6 +3,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <cstddef>
 
 namespace grpc {
 class Server;
@@ -10,6 +11,14 @@ class Service;
 }
 
 namespace tinyimx::user {
+
+struct UserServiceServerOptions {
+    // Preserve lightweight defaults for unit/integration tests. Production
+    // bootstrap passes CPU-aware values explicitly.
+    int sync_num_cqs{1};
+    int sync_min_pollers{1};
+    int sync_max_pollers{2};
+};
 
 class UserServiceServer final {
 public:
@@ -21,7 +30,10 @@ public:
     UserServiceServer(const UserServiceServer&) = delete;
     UserServiceServer& operator=(const UserServiceServer&) = delete;
 
-    bool Start(const std::string& listen_target);
+    bool Start(
+        const std::string& listen_target,
+        UserServiceServerOptions options = {}
+    );
     void Shutdown();
     void Wait();
 

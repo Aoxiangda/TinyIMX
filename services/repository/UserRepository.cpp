@@ -407,38 +407,6 @@ UserRepository::VerifyLogin(
         return result;
     }
 
-    const UpdateLastLoginResult
-        update_result =
-            UpdateLastLogin(
-                user.user_id
-            );
-
-    if (!update_result.Succeeded()) {
-        if (update_result.status ==
-            UpdateLastLoginStatus::
-                kNotFound) {
-            result.status =
-                LoginVerifyStatus::
-                    kUserNotFound;
-        } else {
-            result.status =
-                LoginVerifyStatus::
-                    kStorageError;
-        }
-
-        result.user = user;
-
-        result.message =
-            update_result.message;
-
-        if (result.message.empty()) {
-            result.message =
-                "update last login failed";
-        }
-
-        return result;
-    }
-
     result.status =
         LoginVerifyStatus::kOk;
 
@@ -447,7 +415,7 @@ UserRepository::VerifyLogin(
     result.message =
         "login accepted";
 
-    LOG_INFO(
+    LOG_DEBUG(
         "user login verified"
         << ", user_id="
         << user.user_id

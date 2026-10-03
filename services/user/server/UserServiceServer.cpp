@@ -37,7 +37,8 @@ UserServiceServer::~UserServiceServer() {
 }
 
 bool UserServiceServer::Start(
-    const std::string& listen_target
+    const std::string& listen_target,
+    UserServiceServerOptions options
 ) {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -47,8 +48,27 @@ bool UserServiceServer::Start(
         return false;
     }
 
+    if (options.sync_num_cqs <= 0 ||
+        options.sync_min_pollers <= 0 ||
+        options.sync_max_pollers < options.sync_min_pollers) {
+        return false;
+    }
+
     grpc::ServerBuilder builder;
     int selected_port = 0;
+
+    builder.SetSyncServerOption(
+        grpc::ServerBuilder::SyncServerOption::NUM_CQS,
+        options.sync_num_cqs
+    );
+    builder.SetSyncServerOption(
+        grpc::ServerBuilder::SyncServerOption::MIN_POLLERS,
+        options.sync_min_pollers
+    );
+    builder.SetSyncServerOption(
+        grpc::ServerBuilder::SyncServerOption::MAX_POLLERS,
+        options.sync_max_pollers
+    );
 
     builder.AddListeningPort(
         listen_target,

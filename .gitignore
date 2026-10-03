@@ -113,3 +113,11 @@ Thumbs.db
 /*.tar.gz
 /*.tgz
 .local/
+
+# Local experiment backups and generated executables
+/.tinyimx-*-backup-*/
+/.tinyimx-*-last-backup
+/tinyimx-final-loadgen-*/
+/tinyimx_im_loadgen
+/scripts/__pycache__/
+*.pyc

@@ -97,6 +97,10 @@ private:
         opentelemetry::metrics::ObserverResult result,
         void* state
     );
+    static void ObserveTcpConnectionPeak(
+        opentelemetry::metrics::ObserverResult result,
+        void* state
+    );
 
     void ObserveThreadPools(
         opentelemetry::metrics::ObserverResult result,
@@ -130,6 +134,8 @@ private:
         thread_pool_active_worker_count_;
     opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument>
         tcp_connection_count_;
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument>
+        tcp_connection_peak_;
 };
 
 }  // namespace tinyimx

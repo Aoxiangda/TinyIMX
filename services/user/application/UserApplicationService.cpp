@@ -95,6 +95,16 @@ UserApplicationService::Authenticate(
     return output;
 }
 
+bool UserApplicationService::RecordSuccessfulLogin(
+    std::uint64_t user_id
+) {
+    if (user_id == 0 || repository_ == nullptr) {
+        return false;
+    }
+
+    return repository_->RecordSuccessfulLogin(user_id);
+}
+
 GetUserProfileApplicationResult
 UserApplicationService::GetUserProfile(
     std::uint64_t user_id

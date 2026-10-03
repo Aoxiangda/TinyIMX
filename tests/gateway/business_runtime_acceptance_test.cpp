@@ -55,10 +55,19 @@ BusinessExecutor::TaskSpec MakeNoopMustRun(
 }
 
 bool LifecycleClean(const tinyimx::BusinessExecutorStats& stats) {
+    const std::uint64_t lifecycle_accounted =
+        stats.completed_total +
+        stats.worker_exception_total +
+        stats.deadline_expired_before_start_total +
+        stats.cancelled_before_start_total +
+        stats.completion_dropped_total +
+        stats.completion_exception_total;
+
     return
         stats.current_pending_tasks == 0 &&
         stats.current_active_tasks == 0 &&
-        stats.pending_completions == 0;
+        stats.pending_completions == 0 &&
+        stats.accepted_total == lifecycle_accounted;
 }
 
 bool TestProductionBaselineStartDrain() {
@@ -387,6 +396,7 @@ bool TestCancelableStaleAndDeadline() {
         bool blocker_started = false;
         bool release = false;
         std::atomic<int> expired_work{0};
+        std::atomic<int> terminal_callback{0};
 
         BusinessExecutor::TaskSpec blocker;
         blocker.request.operation = "acceptance.deadline.blocker";
@@ -421,6 +431,12 @@ bool TestCancelableStaleAndDeadline() {
             expired_work.fetch_add(1, std::memory_order_relaxed);
             return BusinessExecutor::Completion{};
         };
+        expired.dispatcher = [](BusinessExecutor::Completion completion) {
+            completion();
+        };
+        expired.deadline_expired_before_start_completion = [&]() {
+            terminal_callback.fetch_add(1, std::memory_order_relaxed);
+        };
 
         if (executor.Submit(std::move(expired)) != BusinessSubmitStatus::kAccepted) {
             return false;
@@ -438,7 +454,10 @@ bool TestCancelableStaleAndDeadline() {
 
         return
             expired_work.load(std::memory_order_relaxed) == 0 &&
+            terminal_callback.load(std::memory_order_relaxed) == 1 &&
             stats.deadline_expired_before_start_total == 1 &&
+            stats.deadline_terminal_callback_total == 1 &&
+            stats.deadline_terminal_dropped_total == 0 &&
             LifecycleClean(stats);
     };
 

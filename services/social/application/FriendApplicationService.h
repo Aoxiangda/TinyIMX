@@ -16,6 +16,12 @@ public:
     FriendApplicationService(const FriendApplicationService&) = delete;
     FriendApplicationService& operator=(const FriendApplicationService&) = delete;
 
+    [[nodiscard]] ChatPermissionApplicationResult
+    CheckPrivateChatPermission(
+        std::uint64_t from_user_id,
+        std::uint64_t to_user_id
+    );
+
     [[nodiscard]] ListFriendsApplicationResult ListFriends(
         std::uint64_t actor_user_id,
         std::uint32_t limit

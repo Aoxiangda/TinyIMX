@@ -128,8 +128,7 @@ bool BusinessExecutor::Start() {
 
     ThreadPoolOptions pool_options;
 
-    pool_options.name =
-        "gateway-business-runtime";
+    pool_options.name = options_.name;
 
     pool_options.worker_threads =
         options_.worker_threads;
@@ -168,6 +167,7 @@ bool BusinessExecutor::Start() {
 
     LOG_INFO(
         "business executor started"
+        << ", name=" << options_.name
         << ", workers="
         << options_.worker_threads
         << ", max_pending="
@@ -365,6 +365,21 @@ BusinessExecutor::GetStats() const {
 
     stats.cancelled_before_start_total =
         cancelled_before_start_total_.load(
+            std::memory_order_relaxed
+        );
+
+    stats.deadline_terminal_callback_total =
+        deadline_terminal_callback_total_.load(
+            std::memory_order_relaxed
+        );
+
+    stats.deadline_terminal_dropped_total =
+        deadline_terminal_dropped_total_.load(
+            std::memory_order_relaxed
+        );
+
+    stats.deadline_terminal_exception_total =
+        deadline_terminal_exception_total_.load(
             std::memory_order_relaxed
         );
 
@@ -971,7 +986,7 @@ void BusinessExecutor::ExecuteTask(
                     std::memory_order_relaxed
                 );
 
-            ReleasePending();
+            DispatchDeadlineTerminal(task);
 
             return;
         }
@@ -1146,6 +1161,145 @@ bool BusinessExecutor::CompletionStillValid(
      * 无法证明Completion仍然安全时fail closed。
      */
     return false;
+}
+
+
+void BusinessExecutor::DispatchDeadlineTerminal(
+    const std::shared_ptr<TaskState>& task
+) {
+    if (
+        !task ||
+        !task->spec.
+            deadline_expired_before_start_completion
+    ) {
+        ReleasePending();
+        return;
+    }
+
+    if (!task->spec.dispatcher) {
+        deadline_terminal_dropped_total_.fetch_add(
+            1,
+            std::memory_order_relaxed
+        );
+        ReleasePending();
+        return;
+    }
+
+    /*
+     * Deadline terminal response 仍必须尊重原 connection/session
+     * completion fence。连接已经消失时不能发送陈旧响应。
+     */
+    if (!CompletionStillValid(task)) {
+        deadline_terminal_dropped_total_.fetch_add(
+            1,
+            std::memory_order_relaxed
+        );
+        ReleasePending();
+        return;
+    }
+
+    pending_completions_.fetch_add(
+        1,
+        std::memory_order_acq_rel
+    );
+
+    Completion completion =
+        task->spec.
+            deadline_expired_before_start_completion;
+
+    Completion wrapped =
+        [
+            this,
+            task,
+            completion = std::move(completion)
+        ]() mutable {
+            if (!CompletionStillValid(task)) {
+                deadline_terminal_dropped_total_.fetch_add(
+                    1,
+                    std::memory_order_relaxed
+                );
+                pending_completions_.fetch_sub(
+                    1,
+                    std::memory_order_acq_rel
+                );
+                ReleasePending();
+                return;
+            }
+
+            try {
+                completion();
+                deadline_terminal_callback_total_.fetch_add(
+                    1,
+                    std::memory_order_relaxed
+                );
+            } catch (const std::exception& e) {
+                deadline_terminal_exception_total_.fetch_add(
+                    1,
+                    std::memory_order_relaxed
+                );
+                LOG_ERROR(
+                    "business deadline terminal completion failed"
+                    << ", operation="
+                    << task->spec.request.operation
+                    << ", error="
+                    << e.what()
+                );
+            } catch (...) {
+                deadline_terminal_exception_total_.fetch_add(
+                    1,
+                    std::memory_order_relaxed
+                );
+                LOG_ERROR(
+                    "business deadline terminal completion failed"
+                    << ", operation="
+                    << task->spec.request.operation
+                    << ", error=unknown_exception"
+                );
+            }
+
+            pending_completions_.fetch_sub(
+                1,
+                std::memory_order_acq_rel
+            );
+            ReleasePending();
+        };
+
+    try {
+        task->spec.dispatcher(std::move(wrapped));
+    } catch (const std::exception& e) {
+        deadline_terminal_dropped_total_.fetch_add(
+            1,
+            std::memory_order_relaxed
+        );
+        pending_completions_.fetch_sub(
+            1,
+            std::memory_order_acq_rel
+        );
+        LOG_ERROR(
+            "business deadline terminal dispatch failed"
+            << ", operation="
+            << task->spec.request.operation
+            << ", error="
+            << e.what()
+        );
+        ReleasePending();
+    } catch (...) {
+        deadline_terminal_dropped_total_.fetch_add(
+            1,
+            std::memory_order_relaxed
+        );
+        pending_completions_.fetch_sub(
+            1,
+            std::memory_order_acq_rel
+        );
+        LOG_ERROR(
+            "business deadline terminal dispatch failed"
+            << ", operation="
+            << task->spec.request.operation
+            << ", error=unknown_exception"
+        );
+        ReleasePending();
+    }
 }
 
 

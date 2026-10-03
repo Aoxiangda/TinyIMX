@@ -119,6 +119,65 @@ int main() {
   Expect(has_more_field != nullptr && has_more_field->number() == 2,
          "ListFriendsResponse.has_more field number frozen at 2");
 
+  using tinyimx::social::v1::CheckPrivateChatPermissionRequest;
+  using tinyimx::social::v1::CreateFriendRequestRequest;
+  using tinyimx::social::v1::ListPendingIncomingFriendRequestsRequest;
+  using tinyimx::social::v1::AcceptFriendRequestRequest;
+  using tinyimx::social::v1::RejectFriendRequestRequest;
+
+  const auto* chat_permission_descriptor =
+      CheckPrivateChatPermissionRequest::descriptor();
+  Expect(FindField(chat_permission_descriptor, "meta") != nullptr &&
+             FindField(chat_permission_descriptor, "meta")->number() == 1 &&
+             FindField(chat_permission_descriptor, "from_user_id") != nullptr &&
+             FindField(chat_permission_descriptor, "from_user_id")->number() == 2 &&
+             FindField(chat_permission_descriptor, "to_user_id") != nullptr &&
+             FindField(chat_permission_descriptor, "to_user_id")->number() == 3,
+         "CheckPrivateChatPermissionRequest field numbers frozen");
+
+  const auto* friend_create_descriptor = CreateFriendRequestRequest::descriptor();
+  Expect(FindField(friend_create_descriptor, "meta") != nullptr &&
+             FindField(friend_create_descriptor, "meta")->number() == 1 &&
+             FindField(friend_create_descriptor, "from_user_id") != nullptr &&
+             FindField(friend_create_descriptor, "from_user_id")->number() == 2 &&
+             FindField(friend_create_descriptor, "to_user_id") != nullptr &&
+             FindField(friend_create_descriptor, "to_user_id")->number() == 3 &&
+             FindField(friend_create_descriptor, "request_message") != nullptr &&
+             FindField(friend_create_descriptor, "request_message")->number() == 4,
+         "CreateFriendRequestRequest field numbers frozen");
+
+  const auto* friend_list_descriptor =
+      ListPendingIncomingFriendRequestsRequest::descriptor();
+  Expect(FindField(friend_list_descriptor, "meta") != nullptr &&
+             FindField(friend_list_descriptor, "meta")->number() == 1 &&
+             FindField(friend_list_descriptor, "receiver_user_id") != nullptr &&
+             FindField(friend_list_descriptor, "receiver_user_id")->number() == 2 &&
+             FindField(friend_list_descriptor, "before_created_at") != nullptr &&
+             FindField(friend_list_descriptor, "before_created_at")->number() == 3 &&
+             FindField(friend_list_descriptor, "before_request_id") != nullptr &&
+             FindField(friend_list_descriptor, "before_request_id")->number() == 4 &&
+             FindField(friend_list_descriptor, "limit") != nullptr &&
+             FindField(friend_list_descriptor, "limit")->number() == 5,
+         "ListPendingIncomingFriendRequestsRequest field numbers frozen");
+
+  const auto* friend_accept_descriptor = AcceptFriendRequestRequest::descriptor();
+  Expect(FindField(friend_accept_descriptor, "meta") != nullptr &&
+             FindField(friend_accept_descriptor, "meta")->number() == 1 &&
+             FindField(friend_accept_descriptor, "request_id") != nullptr &&
+             FindField(friend_accept_descriptor, "request_id")->number() == 2 &&
+             FindField(friend_accept_descriptor, "handler_user_id") != nullptr &&
+             FindField(friend_accept_descriptor, "handler_user_id")->number() == 3,
+         "AcceptFriendRequestRequest field numbers frozen");
+
+  const auto* friend_reject_descriptor = RejectFriendRequestRequest::descriptor();
+  Expect(FindField(friend_reject_descriptor, "meta") != nullptr &&
+             FindField(friend_reject_descriptor, "meta")->number() == 1 &&
+             FindField(friend_reject_descriptor, "request_id") != nullptr &&
+             FindField(friend_reject_descriptor, "request_id")->number() == 2 &&
+             FindField(friend_reject_descriptor, "handler_user_id") != nullptr &&
+             FindField(friend_reject_descriptor, "handler_user_id")->number() == 3,
+         "RejectFriendRequestRequest field numbers frozen");
+
 
   // M14-B1 UserService contract gate.
   using tinyimx::user::v1::AuthenticateRequest;

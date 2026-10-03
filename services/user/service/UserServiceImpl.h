@@ -1,6 +1,7 @@
 #pragma once
 
 #include "services/user/application/UserApplicationService.h"
+#include "common/concurrency/ThreadPool.h"
 #include "tinyimx/user/v1/user_service.grpc.pb.h"
 
 namespace tinyimx::user {
@@ -9,7 +10,8 @@ class UserServiceImpl final
     : public tinyimx::user::v1::UserService::Service {
 public:
     explicit UserServiceImpl(
-        UserApplicationService* application_service
+        UserApplicationService* application_service,
+        tinyimx::ThreadPool* metadata_executor = nullptr
     );
 
     grpc::Status Authenticate(
@@ -26,6 +28,7 @@ public:
 
 private:
     UserApplicationService* application_service_{nullptr};  // non-owning
+    tinyimx::ThreadPool* metadata_executor_{nullptr};        // non-owning
 };
 
 }  // namespace tinyimx::user

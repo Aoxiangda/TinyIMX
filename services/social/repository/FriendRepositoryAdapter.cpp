@@ -7,7 +7,7 @@
 namespace tinyimx::social {
 namespace {
 
-FriendApplicationStatus MapStatus(
+FriendApplicationStatus MapListStatus(
     tinyimx::ListFriendsStatus status
 ) {
     switch (status) {
@@ -20,8 +20,27 @@ FriendApplicationStatus MapStatus(
         case tinyimx::ListFriendsStatus::kStorageError:
             return FriendApplicationStatus::kStorageError;
     }
-
     return FriendApplicationStatus::kStorageError;
+}
+
+ChatPermissionApplicationStatus MapPermissionStatus(
+    tinyimx::ChatPermissionStatus status
+) {
+    switch (status) {
+        case tinyimx::ChatPermissionStatus::kAllowed:
+            return ChatPermissionApplicationStatus::kAllowed;
+        case tinyimx::ChatPermissionStatus::kInvalidArgument:
+            return ChatPermissionApplicationStatus::kInvalidArgument;
+        case tinyimx::ChatPermissionStatus::kNotFriend:
+            return ChatPermissionApplicationStatus::kNotFriend;
+        case tinyimx::ChatPermissionStatus::kBlockedBySelf:
+            return ChatPermissionApplicationStatus::kBlockedBySelf;
+        case tinyimx::ChatPermissionStatus::kBlockedByPeer:
+            return ChatPermissionApplicationStatus::kBlockedByPeer;
+        case tinyimx::ChatPermissionStatus::kStorageError:
+            return ChatPermissionApplicationStatus::kStorageError;
+    }
+    return ChatPermissionApplicationStatus::kStorageError;
 }
 
 }  // namespace
@@ -32,6 +51,28 @@ FriendRepositoryAdapter::FriendRepositoryAdapter(
     : repository_(repository) {
 }
 
+ChatPermissionApplicationResult
+FriendRepositoryAdapter::CheckPrivateChatPermission(
+    std::uint64_t from_user_id,
+    std::uint64_t to_user_id
+) {
+    if (repository_ == nullptr) {
+        return {
+            ChatPermissionApplicationStatus::kStorageError,
+            "friend repository is unavailable"
+        };
+    }
+
+    auto result = repository_->CheckPrivateChatPermission(
+        from_user_id,
+        to_user_id
+    );
+    return {
+        MapPermissionStatus(result.status),
+        std::move(result.message)
+    };
+}
+
 FriendRepositoryListResult
 FriendRepositoryAdapter::ListFriends(
     std::uint64_t user_id,
@@ -40,17 +81,14 @@ FriendRepositoryAdapter::ListFriends(
     FriendRepositoryListResult output;
 
     if (repository_ == nullptr) {
-        output.status =
-            FriendApplicationStatus::kStorageError;
-        output.message =
-            "friend repository is unavailable";
+        output.status = FriendApplicationStatus::kStorageError;
+        output.message = "friend repository is unavailable";
         return output;
     }
 
-    auto result =
-        repository_->ListFriends(user_id, limit);
+    auto result = repository_->ListFriends(user_id, limit);
 
-    output.status = MapStatus(result.status);
+    output.status = MapListStatus(result.status);
     output.message = std::move(result.message);
 
     if (!result.Succeeded()) {
@@ -67,11 +105,8 @@ FriendRepositoryAdapter::ListFriends(
         view.avatar_url = std::move(record.avatar_url);
         view.user_status = record.user_status;
         view.relation_status = record.relation_status;
-        view.relation_created_at =
-            std::move(record.relation_created_at);
-        view.relation_updated_at =
-            std::move(record.relation_updated_at);
-
+        view.relation_created_at = std::move(record.relation_created_at);
+        view.relation_updated_at = std::move(record.relation_updated_at);
         output.records.push_back(std::move(view));
     }
 

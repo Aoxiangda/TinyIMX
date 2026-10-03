@@ -116,6 +116,7 @@
     "connect_string": "127.0.0.1:2181",
     "session_timeout_ms": 10000,
     "connect_timeout_ms": 5000,
+    "registration_timeout_ms": 15000,
     "service_root": "/tinyimx/services",
     "advertise_host": "127.0.0.1",
     "service_version": "v1"

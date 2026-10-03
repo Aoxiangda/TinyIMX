@@ -21,6 +21,7 @@ struct ThreadPoolMetricsSnapshot {
 
 struct TcpServerMetricsSnapshot {
     std::int64_t connection_count{0};
+    std::int64_t peak_connection_count{0};
 };
 
 }  // namespace tinyimx

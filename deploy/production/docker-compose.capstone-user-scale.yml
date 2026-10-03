@@ -1,0 +1,28 @@
+services:
+  user-service-b:
+    image: ${TINYIMX_RUNTIME_IMAGE:-tinyimx/runtime:m21-final}
+    user: "${TINYIMX_RUNTIME_UID:-1000}:${TINYIMX_RUNTIME_GID:-1000}"
+    init: true
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    command: ["/opt/tinyimx/bin/user_service_demo", "/run/tinyimx/config/user-b.json", "0.0.0.0:50052"]
+    environment:
+      TINYIMX_USER_GRPC_NUM_CQS: "2"
+      TINYIMX_USER_GRPC_MIN_POLLERS: "2"
+      TINYIMX_USER_GRPC_MAX_POLLERS: "4"
+    volumes:
+      - ${TINYIMX_M21_STATE_DIR}/config:/run/tinyimx/config:ro
+    networks: [backend]
+    depends_on:
+      mysql: {condition: service_healthy}
+      zookeeper: {condition: service_healthy}
+      otel-collector: {condition: service_started}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 50052"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+      start_period: 5s

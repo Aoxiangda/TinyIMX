@@ -15,6 +15,12 @@ public:
         tinyimx::FriendRepository* repository
     );
 
+    [[nodiscard]] ChatPermissionApplicationResult
+    CheckPrivateChatPermission(
+        std::uint64_t from_user_id,
+        std::uint64_t to_user_id
+    ) override;
+
     [[nodiscard]] FriendRepositoryListResult ListFriends(
         std::uint64_t user_id,
         std::size_t limit

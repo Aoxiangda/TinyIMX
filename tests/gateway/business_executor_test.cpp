@@ -455,6 +455,7 @@ bool TestDeadlineExpiresBeforeStart() {
     }
 
     std::atomic<int> expired_work_count{0};
+    std::atomic<int> deadline_terminal_count{0};
 
     BusinessExecutor::TaskSpec expired_task;
 
@@ -474,6 +475,19 @@ bool TestDeadlineExpiresBeforeStart() {
 
             return
                 BusinessExecutor::Completion{};
+        };
+
+    expired_task.dispatcher =
+        [](BusinessExecutor::Completion completion) {
+            completion();
+        };
+
+    expired_task.deadline_expired_before_start_completion =
+        [&]() {
+            deadline_terminal_count.fetch_add(
+                1,
+                std::memory_order_relaxed
+            );
         };
 
     if (
@@ -508,8 +522,14 @@ bool TestDeadlineExpiresBeforeStart() {
 
     if (
         expired_work_count.load() != 0 ||
+        deadline_terminal_count.load() != 1 ||
         stats.deadline_expired_before_start_total
-            != 1
+            != 1 ||
+        stats.deadline_terminal_callback_total
+            != 1 ||
+        stats.deadline_terminal_dropped_total
+            != 0 ||
+        stats.completed_total != 1
     ) {
         std::cerr
             << "[FAIL] queued deadline"
@@ -518,6 +538,14 @@ bool TestDeadlineExpiresBeforeStart() {
             << ", expired_before_start="
             << stats.
                 deadline_expired_before_start_total
+            << ", deadline_terminal="
+            << deadline_terminal_count.load()
+            << ", terminal_callback="
+            << stats.deadline_terminal_callback_total
+            << ", terminal_dropped="
+            << stats.deadline_terminal_dropped_total
+            << ", completed="
+            << stats.completed_total
             << '\n';
 
         return false;

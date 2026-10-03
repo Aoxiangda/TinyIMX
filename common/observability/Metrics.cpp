@@ -88,6 +88,11 @@ void Metrics::Initialize(
         "Current active TCP connections",
         "{connection}"
     );
+    tcp_connection_peak_ = meter->CreateInt64ObservableGauge(
+        "tinyimx.tcp.connections.peak",
+        "Peak active TCP connections since server start",
+        "{connection}"
+    );
 
     thread_pool_queue_size_->AddCallback(&Metrics::ObserveThreadPoolQueue, this);
     thread_pool_worker_count_->AddCallback(&Metrics::ObserveThreadPoolWorkers, this);
@@ -96,6 +101,7 @@ void Metrics::Initialize(
         this
     );
     tcp_connection_count_->AddCallback(&Metrics::ObserveTcpConnections, this);
+    tcp_connection_peak_->AddCallback(&Metrics::ObserveTcpConnectionPeak, this);
 
     initialized_ = true;
 }
@@ -109,6 +115,8 @@ void Metrics::Shutdown() {
         active_workers;
     opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument>
         tcp_connections;
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument>
+        tcp_connection_peak;
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -120,6 +128,7 @@ void Metrics::Shutdown() {
         workers = thread_pool_worker_count_;
         active_workers = thread_pool_active_worker_count_;
         tcp_connections = tcp_connection_count_;
+        tcp_connection_peak = tcp_connection_peak_;
     }
 
     // Never hold the registry mutex while asking the SDK to remove callbacks:
@@ -136,6 +145,9 @@ void Metrics::Shutdown() {
     if (tcp_connections) {
         tcp_connections->RemoveCallback(&Metrics::ObserveTcpConnections, this);
     }
+    if (tcp_connection_peak) {
+        tcp_connection_peak->RemoveCallback(&Metrics::ObserveTcpConnectionPeak, this);
+    }
 
     std::lock_guard<std::mutex> lock(mutex_);
     thread_pool_tasks_.reset();
@@ -147,6 +159,7 @@ void Metrics::Shutdown() {
     thread_pool_worker_count_ = nullptr;
     thread_pool_active_worker_count_ = nullptr;
     tcp_connection_count_ = nullptr;
+    tcp_connection_peak_ = nullptr;
 }
 
 bool Metrics::IsInitialized() const {
@@ -326,6 +339,31 @@ void Metrics::ObserveTcpConnections(
     void* state
 ) {
     static_cast<Metrics*>(state)->ObserveTcpServers(std::move(result));
+}
+
+void Metrics::ObserveTcpConnectionPeak(
+    opentelemetry::metrics::ObserverResult result,
+    void* state
+) {
+    auto* self = static_cast<Metrics*>(state);
+    if (self == nullptr) {
+        return;
+    }
+
+    auto observer = GetIntObserver(std::move(result));
+    if (!observer) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(self->mutex_);
+    for (const auto& [owner, registration] : self->tcp_servers_) {
+        (void)owner;
+        const TcpServerMetricsSnapshot snapshot = registration.snapshot();
+        observer->Observe(
+            snapshot.peak_connection_count,
+            {{"server.name", registration.name}}
+        );
+    }
 }
 
 void Metrics::ObserveThreadPools(

@@ -17,7 +17,9 @@ endforeach()
 
 add_library(tinyimx_social_core
   services/social/application/FriendApplicationService.cpp
+  services/social/application/FriendRequestApplicationService.cpp
   services/social/repository/FriendRepositoryAdapter.cpp
+  services/social/repository/FriendRequestRepositoryAdapter.cpp
 )
 
 target_include_directories(tinyimx_social_core PUBLIC
@@ -75,6 +77,21 @@ target_link_libraries(friend_application_service_tests PRIVATE
 add_test(
   NAME friend_application_service_tests
   COMMAND friend_application_service_tests
+)
+
+add_executable(friend_request_application_service_tests
+  tests/social/friend_request_application_service_test.cpp
+)
+
+target_compile_features(friend_request_application_service_tests PRIVATE cxx_std_20)
+
+target_link_libraries(friend_request_application_service_tests PRIVATE
+  tinyimx_social_core
+)
+
+add_test(
+  NAME friend_request_application_service_tests
+  COMMAND friend_request_application_service_tests
 )
 
 add_executable(social_service_integration_tests

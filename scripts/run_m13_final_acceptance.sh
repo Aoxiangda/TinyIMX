@@ -16,6 +16,8 @@ printf 'case\tstatus\tlog\n' > "${SUMMARY}"
 GATEWAY_PID=""
 USER_SERVICE_PID=""
 USER_SERVICE_TARGET=""
+SOCIAL_SERVICE_PID=""
+SOCIAL_SERVICE_TARGET=""
 MESSAGE_SERVICE_PID=""
 MESSAGE_SERVICE_TARGET=""
 TEMP_CONFIGS=()
@@ -62,6 +64,24 @@ cleanup_user_service() {
   USER_SERVICE_TARGET=""
 }
 
+cleanup_social_service() {
+  if [[ -n "${SOCIAL_SERVICE_PID}" ]] && kill -0 "${SOCIAL_SERVICE_PID}" 2>/dev/null; then
+    kill -TERM "${SOCIAL_SERVICE_PID}" 2>/dev/null || true
+    for _ in $(seq 1 50); do
+      if ! kill -0 "${SOCIAL_SERVICE_PID}" 2>/dev/null; then
+        break
+      fi
+      sleep 0.1
+    done
+    if kill -0 "${SOCIAL_SERVICE_PID}" 2>/dev/null; then
+      kill -KILL "${SOCIAL_SERVICE_PID}" 2>/dev/null || true
+    fi
+    wait "${SOCIAL_SERVICE_PID}" 2>/dev/null || true
+  fi
+  SOCIAL_SERVICE_PID=""
+  SOCIAL_SERVICE_TARGET=""
+}
+
 cleanup_message_service() {
   if [[ -n "${MESSAGE_SERVICE_PID}" ]] && kill -0 "${MESSAGE_SERVICE_PID}" 2>/dev/null; then
     kill -TERM "${MESSAGE_SERVICE_PID}" 2>/dev/null || true
@@ -83,6 +103,7 @@ cleanup_message_service() {
 cleanup() {
   cleanup_gateway
   cleanup_message_service
+  cleanup_social_service
   cleanup_user_service
   for file in "${TEMP_CONFIGS[@]:-}"; do
     [[ -n "${file}" ]] && rm -f -- "${file}"
@@ -197,6 +218,7 @@ cmake --build --preset build-debug --target \
   gateway_tests \
   gateway_demo \
   user_service_demo \
+  social_service_demo \
   message_service_demo \
   gateway_business_executor_isolation_demo \
   gateway_business_runtime_overload_demo \
@@ -312,6 +334,45 @@ while time.monotonic() < deadline:
         sock.close()
         time.sleep(0.1)
 raise SystemExit(f"UserService readiness timeout; log={log}")
+PY
+}
+
+start_social_service() {
+  local port
+  port="$(free_port)"
+  SOCIAL_SERVICE_TARGET="127.0.0.1:${port}"
+  local log="${ARTIFACT_DIR}/social-service.log"
+
+  echo "[M13] starting SocialService at ${SOCIAL_SERVICE_TARGET}"
+  TINYIMX_SOCIAL_LISTEN_TARGET="${SOCIAL_SERVICE_TARGET}" \
+    "${DEBUG_DIR}/social_service_demo" "${LOCAL_A}" >"${log}" 2>&1 &
+  SOCIAL_SERVICE_PID=$!
+
+  python3 - "127.0.0.1" "${port}" "${SOCIAL_SERVICE_PID}" "${log}" <<'PY'
+import os
+import socket
+import sys
+import time
+
+host, port_text, pid_text, log = sys.argv[1:]
+port = int(port_text)
+pid = int(pid_text)
+deadline = time.monotonic() + 12.0
+while time.monotonic() < deadline:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        raise SystemExit(f"SocialService exited before readiness; log={log}")
+    sock = socket.socket()
+    sock.settimeout(0.2)
+    try:
+        sock.connect((host, port))
+        sock.close()
+        raise SystemExit(0)
+    except OSError:
+        sock.close()
+        time.sleep(0.1)
+raise SystemExit(f"SocialService readiness timeout; log={log}")
 PY
 }
 
@@ -511,6 +572,7 @@ run_gateway_fault_case() {
 
   TINYIMX_FAULT_HISTORY_BUSINESS_DELAY_MS=500 \
   TINYIMX_USER_RPC_TARGET="${USER_SERVICE_TARGET}" \
+  TINYIMX_SOCIAL_RPC_TARGET="${SOCIAL_SERVICE_TARGET}" \
   TINYIMX_MESSAGE_RPC_TARGET="${MESSAGE_SERVICE_TARGET}" \
     "${DEBUG_DIR}/gateway_demo" "${temp_config}" >"${gateway_log}" 2>&1 &
   GATEWAY_PID=$!
@@ -547,6 +609,7 @@ run_gateway_fault_case() {
 }
 
 start_user_service
+start_social_service
 start_message_service
 
 run_gateway_fault_case \
@@ -566,6 +629,7 @@ grep -q 'runtime_overload_observed=1' "${ARTIFACT_DIR}/gateway-overload-client.l
 grep -q 'heartbeat_not_blocked=1' "${ARTIFACT_DIR}/gateway-overload-client.log"
 
 cleanup_message_service
+cleanup_social_service
 cleanup_user_service
 
 # Full reliable-messaging regression is deliberately last, after all temporary

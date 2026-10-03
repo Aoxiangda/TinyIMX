@@ -1,5 +1,6 @@
 #include "common/net/Buffer.h"
 #include "common/protocol/ClientChatProtocol.h"
+#include "common/protocol/GroupMessageDeliveryProtocol.h"
 #include "common/protocol/ProtocolCodec.h"
 
 #include <arpa/inet.h>
@@ -9,6 +10,7 @@
 #include <poll.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <iostream>
@@ -453,135 +455,115 @@ bool AckReceiverDeliveryPacket(
     const tinyimx::ProtocolCodec& codec,
     const tinyimx::Packet& packet
 ) {
-    /*
-     * 测试启动前可能存在历史Pending消息。
-     *
-     * 非Receiver Delivery无需处理。
-     */
-    if (
-        packet.type !=
-        tinyimx::MessageType::kChatDelivery
-    ) {
+    if (packet.type == tinyimx::MessageType::kChatDelivery) {
+        if (packet.seq == 0) {
+            std::cerr << "receiver delivery seq must not be zero\n";
+            return false;
+        }
+
+        tinyimx::ServerChatDelivery delivery;
+        std::string error_message;
+        if (!tinyimx::DeserializeServerChatDelivery(
+                packet.body, &delivery, &error_message)) {
+            std::cerr
+                << "deserialize receiver delivery for ACK failed"
+                << ", error=" << error_message
+                << ", body=" << packet.body << '\n';
+            return false;
+        }
+        if (delivery.message_id == 0) {
+            std::cerr << "receiver delivery message_id=0\n";
+            return false;
+        }
+
+        tinyimx::ReceiverChatDeliveryAck ack;
+        ack.message_id = delivery.message_id;
+        std::string ack_body;
+        error_message.clear();
+        if (!tinyimx::SerializeReceiverChatDeliveryAck(
+                ack, &ack_body, &error_message)) {
+            std::cerr
+                << "serialize receiver delivery ACK failed"
+                << ", message_id=" << delivery.message_id
+                << ", error=" << error_message << '\n';
+            return false;
+        }
+
+        tinyimx::Packet ack_packet;
+        ack_packet.type = tinyimx::MessageType::kChatDeliveryAck;
+        ack_packet.seq = packet.seq;
+        ack_packet.body = std::move(ack_body);
+        if (!SendPacket(fd, codec, ack_packet)) {
+            std::cerr
+                << "send receiver delivery ACK failed"
+                << ", message_id=" << delivery.message_id
+                << ", delivery_seq=" << packet.seq << '\n';
+            return false;
+        }
+
+        std::cout
+            << "[SENT] receiver delivery ACK"
+            << ", message_id=" << delivery.message_id
+            << ", delivery_seq=" << packet.seq << '\n';
         return true;
     }
 
+    if (packet.type == tinyimx::MessageType::kGroupMessageDelivery) {
+        if (packet.seq == 0) {
+            std::cerr << "group delivery seq must not be zero\n";
+            return false;
+        }
 
-    if (packet.seq == 0) {
-        std::cerr
-            << "receiver delivery seq must not be zero\n";
+        tinyimx::GroupMessageDelivery delivery;
+        std::string error_message;
+        if (!tinyimx::DeserializeGroupMessageDelivery(
+                packet.body, &delivery, &error_message)) {
+            std::cerr
+                << "deserialize group delivery for ACK failed"
+                << ", error=" << error_message
+                << ", body=" << packet.body << '\n';
+            return false;
+        }
+        if (delivery.message_id == 0) {
+            std::cerr << "group delivery message_id=0\n";
+            return false;
+        }
 
-        return false;
+        tinyimx::GroupMessageDeliveryAck ack;
+        ack.message_id = delivery.message_id;
+        std::string ack_body;
+        error_message.clear();
+        if (!tinyimx::SerializeGroupMessageDeliveryAck(
+                ack, &ack_body, &error_message)) {
+            std::cerr
+                << "serialize group delivery ACK failed"
+                << ", message_id=" << delivery.message_id
+                << ", error=" << error_message << '\n';
+            return false;
+        }
+
+        tinyimx::Packet ack_packet;
+        ack_packet.type = tinyimx::MessageType::kGroupMessageDeliveryAck;
+        ack_packet.seq = packet.seq;
+        ack_packet.body = std::move(ack_body);
+        if (!SendPacket(fd, codec, ack_packet)) {
+            std::cerr
+                << "send group delivery ACK failed"
+                << ", message_id=" << delivery.message_id
+                << ", delivery_seq=" << packet.seq << '\n';
+            return false;
+        }
+
+        std::cout
+            << "[SENT] group delivery ACK"
+            << ", message_id=" << delivery.message_id
+            << ", delivery_seq=" << packet.seq << '\n';
+        return true;
     }
 
-
-    tinyimx::ServerChatDelivery delivery;
-
-    std::string error_message;
-
-
-    if (
-        !tinyimx::DeserializeServerChatDelivery(
-            packet.body,
-            &delivery,
-            &error_message
-        )
-    ) {
-        std::cerr
-            << "deserialize receiver delivery for ACK failed"
-            << ", error="
-            << error_message
-            << ", body="
-            << packet.body
-            << '\n';
-
-        return false;
-    }
-
-
-    if (delivery.message_id == 0) {
-        std::cerr
-            << "receiver delivery message_id=0\n";
-
-        return false;
-    }
-
-
-    tinyimx::ReceiverChatDeliveryAck ack;
-
-    ack.message_id =
-        delivery.message_id;
-
-
-    std::string ack_body;
-
-    error_message.clear();
-
-
-    if (
-        !tinyimx::SerializeReceiverChatDeliveryAck(
-            ack,
-            &ack_body,
-            &error_message
-        )
-    ) {
-        std::cerr
-            << "serialize receiver delivery ACK failed"
-            << ", message_id="
-            << delivery.message_id
-            << ", error="
-            << error_message
-            << '\n';
-
-        return false;
-    }
-
-
-    tinyimx::Packet ack_packet;
-
-    ack_packet.type =
-        tinyimx::MessageType::kChatDeliveryAck;
-
-    /*
-     * ACK必须引用当前Receiver Delivery Attempt。
-     */
-    ack_packet.seq =
-        packet.seq;
-
-    ack_packet.body =
-        std::move(ack_body);
-
-
-    if (
-        !SendPacket(
-            fd,
-            codec,
-            ack_packet
-        )
-    ) {
-        std::cerr
-            << "send receiver delivery ACK failed"
-            << ", message_id="
-            << delivery.message_id
-            << ", delivery_seq="
-            << packet.seq
-            << '\n';
-
-        return false;
-    }
-
-
-    std::cout
-        << "[SENT] receiver delivery ACK"
-        << ", message_id="
-        << delivery.message_id
-        << ", delivery_seq="
-        << packet.seq
-        << '\n';
-
-
+    // Non-delivery packets are unrelated to backlog convergence.
     return true;
 }
-
 
 bool ValidateLocalChatAck(
     const tinyimx::Packet& packet,
@@ -1484,86 +1466,119 @@ bool DrainPacketsUntilQuiet(
 }
 
 
-bool ExpectNoPacketWithin(
+bool ExpectNoDuplicatePrivateChatWithin(
     int fd,
+    const tinyimx::ProtocolCodec& codec,
+    tinyimx::Buffer* input_buffer,
+    std::uint64_t expected_message_id,
     int timeout_ms
 ) {
-    pollfd descriptor {};
-
-    descriptor.fd =
-        fd;
-
-    descriptor.events =
-        POLLIN;
-
-
-    int result = 0;
-
-
-    do {
-        result =
-            ::poll(
-                &descriptor,
-                1,
-                timeout_ms
-            );
-    } while (
-        result < 0 &&
-        errno == EINTR
-    );
-
-
-    if (result == 0) {
-        /*
-         * timeout：
-         * 没有任何可读数据，
-         * 这正是我们期待的结果。
-         */
-        return true;
-    }
-
-
-    if (result < 0) {
-        std::cerr
-            << "poll failed: "
-            << std::strerror(errno)
-            << '\n';
-
+    if (input_buffer == nullptr || expected_message_id == 0) {
         return false;
     }
 
+    const auto deadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(timeout_ms);
 
-    if (
-        descriptor.revents &
-        (
-            POLLERR |
-            POLLHUP |
-            POLLNVAL
-        )
-    ) {
+    for (;;) {
+        const auto decode_result = codec.Decode(input_buffer);
+        if (decode_result.status == tinyimx::DecodeStatus::kOk) {
+            for (const auto& packet : decode_result.packets) {
+                PrintPacket("[user_b post-confirmation]", packet);
+
+                if (packet.type == tinyimx::MessageType::kChatDelivery) {
+                    tinyimx::ServerChatDelivery delivery;
+                    std::string error_message;
+                    if (!tinyimx::DeserializeServerChatDelivery(
+                            packet.body, &delivery, &error_message)) {
+                        std::cerr
+                            << "decode post-confirmation private delivery failed"
+                            << ", error=" << error_message << '\n';
+                        return false;
+                    }
+                    if (delivery.message_id == expected_message_id) {
+                        std::cerr
+                            << "duplicate private chat delivery observed"
+                            << ", message_id=" << delivery.message_id
+                            << ", delivery_seq=" << packet.seq << '\n';
+                        return false;
+                    }
+                }
+
+                // Shared regression databases can contain unrelated historical
+                // private/group PENDING rows. Acknowledge those deliveries so
+                // their retry timers cannot contaminate this invariant window.
+                if (!AckReceiverDeliveryPacket(fd, codec, packet)) {
+                    return false;
+                }
+            }
+            continue;
+        }
+
+        if (decode_result.status != tinyimx::DecodeStatus::kNeedMoreData) {
+            std::cerr
+                << "decode during duplicate-private-chat window failed"
+                << ", status="
+                << tinyimx::DecodeStatusToString(decode_result.status)
+                << ", error=" << decode_result.error_message << '\n';
+            return false;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            return true;
+        }
+
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - now);
+        const int wait_ms = static_cast<int>(
+            std::max<std::int64_t>(1, remaining.count()));
+
+        pollfd descriptor{};
+        descriptor.fd = fd;
+        descriptor.events = POLLIN;
+
+        int result = 0;
+        do {
+            result = ::poll(&descriptor, 1, wait_ms);
+        } while (result < 0 && errno == EINTR);
+
+        if (result == 0) {
+            return true;
+        }
+        if (result < 0) {
+            std::cerr << "poll failed: " << std::strerror(errno) << '\n';
+            return false;
+        }
+        if (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            std::cerr
+                << "receiver socket became invalid"
+                << ", revents=" << descriptor.revents << '\n';
+            return false;
+        }
+        if (!(descriptor.revents & POLLIN)) {
+            continue;
+        }
+
+        char temp[4096];
+        const ssize_t n = ::recv(fd, temp, sizeof(temp), 0);
+        if (n > 0) {
+            input_buffer->Append(temp, static_cast<std::size_t>(n));
+            continue;
+        }
+        if (n == 0) {
+            std::cerr << "receiver connection closed during duplicate check\n";
+            return false;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
         std::cerr
-            << "receiver socket became invalid"
-            << ", revents="
-            << descriptor.revents
-            << '\n';
-
+            << "recv failed during duplicate check: "
+            << std::strerror(errno) << '\n';
         return false;
     }
-
-
-    if (
-        descriptor.revents &
-        POLLIN
-    ) {
-        std::cerr
-            << "receiver unexpectedly received another packet "
-                "after receiver confirmation\n";
-
-        return false;
-    }
-
-
-    return true;
 }
 
 
@@ -2474,8 +2489,11 @@ int main(
     * 不允许再观察到任何Receiver Delivery Packet。
     */
     if (
-        ExpectNoPacketWithin(
+        ExpectNoDuplicatePrivateChatWithin(
             user_b_fd,
+            codec,
+            &user_b_input_buffer,
+            server_message_id,
             1800
         )
     ) {

@@ -26,6 +26,10 @@ public:
         std::uint64_t user_id
     );
 
+    [[nodiscard]] bool RecordSuccessfulLogin(
+        std::uint64_t user_id
+    );
+
 private:
     UserRepositoryPort* repository_{nullptr};  // non-owning
 };

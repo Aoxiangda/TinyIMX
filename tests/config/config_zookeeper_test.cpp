@@ -64,6 +64,10 @@ bool TestDefaults() {
             "zookeeper default connect timeout"
         ) &&
         Expect(
+            zk.registration_timeout_ms == 15000,
+            "zookeeper default registration timeout"
+        ) &&
+        Expect(
             zk.service_root == "/tinyimx/services",
             "zookeeper default service root"
         ) &&
@@ -87,6 +91,7 @@ bool TestExplicitConfig() {
     "connect_string": "10.0.0.1:2181,10.0.0.2:2181",
     "session_timeout_ms": 12000,
     "connect_timeout_ms": 4000,
+    "registration_timeout_ms": 18000,
     "service_root": "/tinyimx/prod/services",
     "advertise_host": "10.10.0.8",
     "service_version": "v2"
@@ -112,6 +117,10 @@ bool TestExplicitConfig() {
         Expect(
             zk.connect_timeout_ms == 4000,
             "zookeeper explicit connect timeout"
+        ) &&
+        Expect(
+            zk.registration_timeout_ms == 18000,
+            "zookeeper explicit registration timeout"
         ) &&
         Expect(
             zk.service_root == "/tinyimx/prod/services",
@@ -143,6 +152,11 @@ bool TestValidation() {
             "reject zero connect timeout",
             R"json({"zookeeper":{"enable":true,"connect_timeout_ms":0}})json",
             "zookeeper.connect_timeout_ms must be greater than 0"
+        ) &&
+        ExpectFailure(
+            "reject zero registration timeout",
+            R"json({"zookeeper":{"enable":true,"registration_timeout_ms":0}})json",
+            "zookeeper.registration_timeout_ms must be greater than 0"
         ) &&
         ExpectFailure(
             "reject relative service root",

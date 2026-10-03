@@ -1,6 +1,7 @@
 #include "services/user/service/UserServiceImpl.h"
 
 #include "common/observability/GrpcTracing.h"
+#include "common/logging/LogMacros.h"
 
 #include <grpcpp/grpcpp.h>
 
@@ -134,9 +135,11 @@ void FillProtoProfile(
 }  // namespace
 
 UserServiceImpl::UserServiceImpl(
-    UserApplicationService* application_service
+    UserApplicationService* application_service,
+    tinyimx::ThreadPool* metadata_executor
 )
-    : application_service_(application_service) {
+    : application_service_(application_service),
+      metadata_executor_(metadata_executor) {
 }
 
 grpc::Status UserServiceImpl::Authenticate(
@@ -194,6 +197,31 @@ grpc::Status UserServiceImpl::Authenticate(
             *result.profile,
             response->mutable_profile()
         );
+
+        // last_login_at is observability metadata, not authentication truth.
+        // Keep it off the RPC critical path and bound the background queue so
+        // a login storm cannot turn metadata into backpressure on Auth.
+        const std::uint64_t user_id = result.profile->user_id;
+        if (metadata_executor_ != nullptr) {
+            const auto push = metadata_executor_->TrySubmit(
+                [application_service = application_service_, user_id]() {
+                    if (application_service != nullptr &&
+                        !application_service->RecordSuccessfulLogin(user_id)) {
+                        LOG_DEBUG(
+                            "UserService best-effort last_login update failed"
+                            << ", user_id=" << user_id
+                        );
+                    }
+                }
+            );
+            if (push != tinyimx::TaskPushResult::kOk) {
+                LOG_DEBUG(
+                    "UserService dropped best-effort last_login update"
+                    << ", user_id=" << user_id
+                    << ", push_status=" << static_cast<int>(push)
+                );
+            }
+        }
     }
 
     return grpc::Status::OK;

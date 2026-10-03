@@ -19,18 +19,21 @@ TcpServer::TcpServer(
     EventLoop* loop,
     const InetAddress& listen_address,
     std::string name,
-    std::size_t io_thread_count
+    std::size_t io_thread_count,
+    int listen_backlog
 )
     : loop_(loop),
       name_(std::move(name)),
       listen_address_(listen_address),
-      io_thread_count_(io_thread_count) {
+      io_thread_count_(io_thread_count),
+      listen_backlog_(listen_backlog > 0 ? listen_backlog : 128) {
     Metrics::Instance().RegisterTcpServer(
         this,
         name_,
         [this]() {
             return TcpServerMetricsSnapshot{
-                static_cast<std::int64_t>(ConnectionCount())
+                static_cast<std::int64_t>(ConnectionCount()),
+                static_cast<std::int64_t>(PeakConnectionCount())
             };
         }
     );
@@ -106,7 +109,7 @@ bool TcpServer::Start() {
         return false;
     }
 
-    if (!listen_socket_.Listen(128)) {
+    if (!listen_socket_.Listen(listen_backlog_)) {
         listen_socket_.Close();
         started_.store(false);
         return false;
@@ -207,6 +210,8 @@ bool TcpServer::Start() {
         << listen_socket_.Fd()
         << ", io_thread_count="
         << io_thread_count_
+        << ", listen_backlog="
+        << listen_backlog_
         << ", idle_timeout_ms="
         << idle_timeout_.count()
         << ", idle_check_interval_ms="
@@ -249,6 +254,12 @@ void TcpServer::Stop() {
         << ", name=" << name_
         << ", connection_count="
         << connections_.size()
+        << ", peak_connection_count="
+        << PeakConnectionCount()
+        << ", accepted_total="
+        << AcceptedTotal()
+        << ", closed_total="
+        << ClosedTotal()
     );
 
     if (accept_channel_) {
@@ -281,6 +292,10 @@ void TcpServer::Stop() {
 
     connection_count_.store(
         0,
+        std::memory_order_relaxed
+    );
+    closed_total_.fetch_add(
+        static_cast<std::uint64_t>(stop_connection_count),
         std::memory_order_relaxed
     );
     for (std::size_t i = 0; i < stop_connection_count; ++i) {
@@ -473,6 +488,22 @@ TcpServer::ConnectionCount() const {
     );
 }
 
+std::size_t TcpServer::PeakConnectionCount() const {
+    return peak_connection_count_.load(std::memory_order_relaxed);
+}
+
+std::uint64_t TcpServer::AcceptedTotal() const {
+    return accepted_total_.load(std::memory_order_relaxed);
+}
+
+std::uint64_t TcpServer::ClosedTotal() const {
+    return closed_total_.load(std::memory_order_relaxed);
+}
+
+int TcpServer::ListenBacklog() const {
+    return listen_backlog_;
+}
+
 bool TcpServer::IsStarted() const {
     return started_.load();
 }
@@ -565,13 +596,26 @@ void TcpServer::HandleAccept() {
             connection_name
         ] = connection;
 
+        const std::size_t active_connections = connections_.size();
         connection_count_.store(
-            connections_.size(),
+            active_connections,
             std::memory_order_relaxed
         );
+        accepted_total_.fetch_add(1, std::memory_order_relaxed);
+        std::size_t observed_peak = peak_connection_count_.load(
+            std::memory_order_relaxed
+        );
+        while (active_connections > observed_peak &&
+               !peak_connection_count_.compare_exchange_weak(
+                   observed_peak,
+                   active_connections,
+                   std::memory_order_relaxed,
+                   std::memory_order_relaxed
+               )) {
+        }
         Metrics::Instance().RecordTcpConnectionEvent(name_, "accepted");
 
-        LOG_INFO(
+        LOG_DEBUG(
             "tcp server accepted "
             "new connection"
             << ", server=" << name_
@@ -665,7 +709,7 @@ void TcpServer::RemoveConnectionInLoop(
         return;
     }
 
-    LOG_INFO(
+    LOG_DEBUG(
         "tcp server removing connection"
         << ", server=" << name_
         << ", connection="
@@ -681,6 +725,7 @@ void TcpServer::RemoveConnectionInLoop(
         connections_.size(),
         std::memory_order_relaxed
     );
+    closed_total_.fetch_add(1, std::memory_order_relaxed);
     Metrics::Instance().RecordTcpConnectionEvent(name_, "closed");
 
     EventLoop* io_loop =
@@ -705,7 +750,7 @@ void TcpServer::RemoveConnectionInLoop(
         }
     );
 
-    LOG_INFO(
+    LOG_DEBUG(
         "tcp server connection removed"
         << ", server=" << name_
         << ", connection_count="

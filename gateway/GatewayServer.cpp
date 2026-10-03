@@ -7,7 +7,6 @@
 #include "services/rpc/MessageRpcClient.h"
 #include "services/rpc/GroupRpcClient.h"
 #include "services/rpc/FileRpcClient.h"
-#include "services/repository/FriendRequestRepository.h"
 #include "services/rpc/SocialRpcClient.h"
 #include "services/cache/OnlineStatusCache.h"
 #include "services/cache/UnreadCountCache.h"
@@ -18,6 +17,8 @@
 #include "gateway/DeliveryIdentity.h"
 #include "gateway/GatewayPeerTransportManager.h"
 #include "common/protocol/ClientChatProtocol.h"
+#include "gateway/RemoteDurableAcceptance.h"
+#include "gateway/ChatRequestPhaseTrace.h"
 
 #include <algorithm>
 #include <atomic>
@@ -32,6 +33,41 @@
 namespace {
 
 using Json = nlohmann::json;
+
+// Bounded numeric-only diagnostic. Does not change admission, deadline or retry.
+void LogChatPhaseSnapshot(const tinyimx::ChatRequestPhaseTrace::Snapshot& x) noexcept {
+    static tinyimx::ChatPhaseLogLimiter limiter;
+    const auto second = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            tinyimx::BusinessClock::now().time_since_epoch()).count());
+    if (!limiter.Admit(second)) return;
+    const auto suppressed = limiter.TakeSuppressed();
+    try {
+        LOG_WARN("gateway private chat phase sample"
+            << ", path=" << x.path
+            << ", user_id=" << x.user_id
+            << ", message_id=" << x.message_id
+            << ", request_seq=" << x.request_seq
+            << ", session_epoch=" << x.session_epoch
+            << ", dispatch_age_us=" << x.dispatch_age_us
+            << ", entry_budget_us=" << x.entry_budget_us
+            << ", has_deadline=" << x.has_deadline
+            << ", work_us=" << x.work_us
+            << ", permission_us=" << x.duration_us[0]
+            << ", permission_budget_us=" << x.start_budget_us[0]
+            << ", route_us=" << x.duration_us[1]
+            << ", persist_us=" << x.duration_us[2]
+            << ", persist_budget_us=" << x.start_budget_us[2]
+            << ", unread_us=" << x.duration_us[3]
+            << ", peer_validate_us=" << x.duration_us[4]
+            << ", peer_validate_budget_us=" << x.start_budget_us[4]
+            << ", failed=" << x.failed
+            << ", suppressed_samples=" << suppressed);
+    } catch (...) {
+        // Never let diagnostic failure change a durable request's lifecycle.
+    }
+}
+
 
 constexpr std::uint32_t kGroupOfflineReplayPageSize = 100;
 constexpr std::uint32_t kGroupOfflineReplayLeaseMs = 10000;
@@ -265,6 +301,7 @@ struct BusinessDispatchContext {
     tinyimx::UserId user_id{0};
     tinyimx::SessionEpoch session_epoch{0};
     tinyimx::TcpConnectionPtr connection;
+    const tinyimx::BusinessRequestContext* request_context{nullptr};
 };
 
 thread_local BusinessDispatchContext
@@ -275,13 +312,15 @@ public:
     ScopedBusinessDispatchContext(
         const tinyimx::TcpConnectionPtr& connection,
         tinyimx::UserId user_id,
-        tinyimx::SessionEpoch session_epoch
+        tinyimx::SessionEpoch session_epoch,
+        const tinyimx::BusinessRequestContext* request_context = nullptr
     )
         : previous_(g_business_dispatch_context) {
         g_business_dispatch_context.active = true;
         g_business_dispatch_context.user_id = user_id;
         g_business_dispatch_context.session_epoch = session_epoch;
         g_business_dispatch_context.connection = connection;
+        g_business_dispatch_context.request_context = request_context;
     }
 
     ~ScopedBusinessDispatchContext() {
@@ -426,7 +465,9 @@ SubmitConnectionBusinessTask(
     tinyimx::BusinessTimePoint received_at,
     std::string operation,
     std::optional<tinyimx::BusinessOrderingKey> ordering_key,
-    tinyimx::BusinessExecutor::Work work
+    tinyimx::BusinessExecutor::Work work,
+    tinyimx::BusinessExecutor::Completion
+        deadline_expired_before_start_completion = {}
 ) {
     if (executor == nullptr || !connection || !work) {
         return tinyimx::BusinessSubmitStatus::kInvalidArgument;
@@ -456,6 +497,10 @@ SubmitConnectionBusinessTask(
         io_loop->QueueInLoop(std::move(completion));
     };
     task.work = std::move(work);
+    task.deadline_expired_before_start_completion =
+        std::move(
+            deadline_expired_before_start_completion
+        );
 
     return executor->Submit(std::move(task));
 }
@@ -881,6 +926,39 @@ const char* SocialRpcErrorReason(
 
     return "social_service_error";
 }
+
+const char* RelationRpcTransportReason(
+    tinyimx::rpc::RpcErrorCode code
+) noexcept {
+    using tinyimx::rpc::RpcErrorCode;
+    switch (code) {
+        case RpcErrorCode::kUnavailable:
+            return "relation_service_unavailable";
+        case RpcErrorCode::kDeadlineExceeded:
+            return "relation_service_deadline_expired";
+        case RpcErrorCode::kResourceExhausted:
+            return "relation_service_overloaded";
+        default:
+            return "relation_service_failed";
+    }
+}
+
+const char* FriendRequestRpcTransportReason(
+    tinyimx::rpc::RpcErrorCode code
+) noexcept {
+    using tinyimx::rpc::RpcErrorCode;
+    switch (code) {
+        case RpcErrorCode::kUnavailable:
+            return "friend_request_service_unavailable";
+        case RpcErrorCode::kDeadlineExceeded:
+            return "friend_request_service_deadline_expired";
+        case RpcErrorCode::kResourceExhausted:
+            return "friend_request_service_overloaded";
+        default:
+            return "friend_request_service_failed";
+    }
+}
+
 
 
 
@@ -1424,6 +1502,13 @@ Json ExecuteFileRpc(
 
 namespace tinyimx {
 
+// Timer callback never holds a raw Gateway beyond this short lifetime fence.
+// No RPC, socket Send, or worker drain happens while holding this mutex.
+struct GatewayServer::PrivateReplayTimerFence {
+    std::mutex mutex;
+    GatewayServer* owner{nullptr};
+};
+
 /*
     GatewayServer::GatewayServer(EventLoop* loop,
                                 const InetAddress& listen_address,
@@ -1445,12 +1530,15 @@ GatewayServer::GatewayServer(
           loop_,
           listen_address,
           options_.name,
-          options_.io_thread_count
+          options_.io_thread_count,
+          options_.listen_backlog
       ),
       offline_message_store_(
           options_.
               max_offline_messages_per_user
       ) {
+    private_replay_admission_ = std::make_shared<PrivateReplayAdmission>();
+    private_replay_timer_fence_ = std::make_shared<PrivateReplayTimerFence>();
     server_.SetConnectionCallback([this](
         const TcpConnectionPtr& connection
     ) {
@@ -1492,6 +1580,8 @@ bool GatewayServer::Start() {
         << options_.max_body_size
         << ", io_thread_count="
         << options_.io_thread_count
+        << ", listen_backlog="
+        << options_.listen_backlog
     );
 
     const bool ok = server_.Start();
@@ -1507,6 +1597,33 @@ bool GatewayServer::Start() {
         return false;
     }
 
+    // TcpServer::Start is idempotent. Do not create a second admission timer.
+    if (private_replay_timer_.IsValid()) return true;
+    private_replay_admission_->Resume();
+    {
+        std::lock_guard lock(private_replay_timer_fence_->mutex);
+        private_replay_timer_fence_->owner = this;
+    }
+    const std::weak_ptr<PrivateReplayTimerFence> weak_fence =
+        private_replay_timer_fence_;
+    private_replay_timer_ = loop_->RunEvery(std::chrono::milliseconds{100},
+        [weak_fence] {
+            if (auto fence = weak_fence.lock()) {
+                std::lock_guard lock(fence->mutex);
+                if (fence->owner) fence->owner->PumpPrivateReplayAdmission();
+            }
+        });
+    if (!private_replay_timer_.IsValid()) {
+        StopPrivateReplayAdmission();
+        server_.Stop();
+        LOG_ERROR("gateway start failed: private replay admission timer unavailable");
+        return false;
+    }
+    LOG_INFO("gateway private replay admission enabled"
+             << ", tick_ms=100, scan_budget=128, submit_budget=32"
+             << ", retry_base_ms=250, retry_cap_ms=2000, jitter_max_ms=125"
+             << ", scope=until_work_starts_not_durable_convergence");
+
     LOG_INFO(
         "gateway server started"
         << ", name=" << options_.name
@@ -1521,7 +1638,31 @@ bool GatewayServer::Start() {
     return true;
 }
 
+void GatewayServer::StopPrivateReplayAdmission() {
+    {
+        std::lock_guard lock(private_replay_timer_fence_->mutex);
+        private_replay_timer_fence_->owner = nullptr;
+    }
+    const auto before = private_replay_admission_->GetStats();
+    private_replay_admission_->Stop();
+    if (!before.stopped) {
+        LOG_INFO("gateway private replay admission stopping"
+                 << ", retained_before_stop=" << before.retained
+                 << ", peak_retained=" << before.peak_retained
+                 << ", claimed=" << before.claims
+                 << ", readmissions=" << before.readmissions
+                 << ", work_started=" << before.started
+                 << ", deferred=" << before.deferred
+                 << ", retired=" << before.retired);
+    }
+    if (loop_ && private_replay_timer_.IsValid()) {
+        loop_->Cancel(private_replay_timer_);
+        private_replay_timer_ = {};
+    }
+}
+
 void GatewayServer::Stop() {
+    StopPrivateReplayAdmission();
     server_.Stop();
 
     LOG_INFO("gateway server stopped"
@@ -1880,6 +2021,30 @@ void GatewayServer::SetUserRpcClient(
     );
 }
 
+void GatewayServer::SetPresenceExecutor(
+    BusinessExecutor* presence_executor
+) {
+    presence_executor_ = presence_executor;
+
+    LOG_INFO(
+        "gateway presence executor attached"
+        << ", enabled=" << (presence_executor_ != nullptr)
+        << ", fallback_foreground="
+        << (presence_executor_ == nullptr && business_executor_ != nullptr)
+    );
+}
+
+void GatewayServer::SetReplayExecutor(
+    BusinessExecutor* replay_executor
+) {
+    replay_executor_ = replay_executor;
+
+    LOG_INFO(
+        "gateway replay executor attached"
+        << ", enabled=" << (replay_executor_ != nullptr)
+    );
+}
+
 bool GatewayServer::HasUserRpcClient() const {
     return user_rpc_client_ != nullptr;
 }
@@ -1946,6 +2111,20 @@ void GatewayServer::SetBusinessExecutor(
 }
 
 
+void GatewayServer::SetMessageExecutor(
+    BusinessExecutor* message_executor
+) {
+    message_executor_ = message_executor;
+
+    LOG_INFO(
+        "gateway message executor attached"
+        << ", enabled=" << (message_executor_ != nullptr)
+        << ", fallback_foreground="
+        << (message_executor_ == nullptr && business_executor_ != nullptr)
+    );
+}
+
+
 void GatewayServer::SetSocialRpcClient(
     rpc::SocialRpcClient* social_rpc_client
 ) {
@@ -1969,32 +2148,25 @@ bool GatewayServer::HasBusinessExecutor() const {
 }
 
 
-void GatewayServer::SetFriendRepository(
-    FriendRepository* repository
-) {
-    friend_repository_ = repository;
-
-    LOG_INFO("gateway friend repository attached"
-             << ", enabled=" << (friend_repository_ != nullptr));
+bool GatewayServer::HasMessageExecutor() const {
+    return message_executor_ != nullptr || business_executor_ != nullptr;
 }
 
-bool GatewayServer::HasFriendRepository() const {
-    return friend_repository_ != nullptr;
+
+bool GatewayServer::HasPresenceExecutor() const {
+    return presence_executor_ != nullptr || business_executor_ != nullptr;
 }
 
-void GatewayServer::SetFriendRequestRepository(
-    FriendRequestRepository* repository
-) {
-    friend_request_repository_ = repository;
 
-    LOG_INFO("gateway friend request repository attached"
-             << ", enabled="
-             << (friend_request_repository_ != nullptr));
+BusinessExecutor* GatewayServer::MessageExecutor() const {
+    return message_executor_ != nullptr ? message_executor_ : business_executor_;
 }
 
-bool GatewayServer::HasFriendRequestRepository() const {
-    return friend_request_repository_ != nullptr;
+
+BusinessExecutor* GatewayServer::PresenceExecutor() const {
+    return presence_executor_ != nullptr ? presence_executor_ : business_executor_;
 }
+
 
 bool GatewayServer::SendPacket(const TcpConnectionPtr& connection,
                                const Packet& packet) {
@@ -3177,9 +3349,14 @@ void GatewayServer::HandleConnection(
                     connection
                 );
 
+    // Admission bookkeeping only; Presence maintenance below is unchanged.
+    if (unbind_result.unbound) {
+        private_replay_admission_->Retire(unbind_result.user_id, unbind_result.epoch);
+    }
+
     if (
         unbind_result.unbound &&
-        HasBusinessExecutor() &&
+        HasPresenceExecutor() &&
         HasOnlineStatusCache()
     ) {
         BusinessExecutor::TaskSpec task;
@@ -3220,7 +3397,7 @@ void GatewayServer::HandleConnection(
             };
 
         const BusinessSubmitStatus status =
-            business_executor_->Submit(
+            PresenceExecutor()->Submit(
                 std::move(task)
             );
 
@@ -4134,7 +4311,7 @@ void GatewayServer::HandleReceiverChatDeliveryAck(
         return;
     }
 
-    if (!HasBusinessExecutor()) {
+    if (!HasMessageExecutor()) {
         LOG_ERROR("gateway cannot dispatch receiver delivery ack: business executor unavailable"
                   << ", message_id=" << ack.message_id);
         return;
@@ -4142,7 +4319,7 @@ void GatewayServer::HandleReceiverChatDeliveryAck(
 
     const BusinessSubmitStatus submit_status =
         SubmitSessionBusinessTask(
-            business_executor_,
+            MessageExecutor(),
             &session_manager_,
             connection,
             *session,
@@ -4832,69 +5009,13 @@ void GatewayServer::HandleLoginRequest(
 
                 SetUserOnline(user_id, connection);
 
-                // MessageService is an enrichment dependency for Login, not
-                // part of authentication acceptance. A degraded/offline
-                // MessageService must not turn into an auth outage.
-                std::size_t offline_count = 0;
-                if (HasMessageRpcClient()) {
-                    rpc::CountPendingRpcRequest count_request;
-                    count_request.to_user_id = user_id;
-
-                    rpc::RpcCallOptions count_options;
-                    const std::uint64_t count_rpc_id =
-                        next_internal_rpc_id_.fetch_add(
-                            1, std::memory_order_relaxed);
-                    count_options.request_id =
-                        options_.gateway_id +
-                        ":message:count-pending:req:" +
-                        std::to_string(count_rpc_id);
-                    count_options.trace_id =
-                        options_.gateway_id +
-                        ":login-pending:trace:" +
-                        std::to_string(count_rpc_id) +
-                        ":user:" + std::to_string(user_id);
-                    count_options.caller_service = "gateway";
-                    count_options.caller_instance = options_.gateway_id;
-
-                    const auto remaining_after_auth =
-                        context.Request().RemainingTime();
-                    constexpr auto kLoginEnrichmentBudget =
-                        std::chrono::milliseconds{300};
-                    if (remaining_after_auth ==
-                        std::chrono::milliseconds::max()) {
-                        count_options.remaining_timeout =
-                            kLoginEnrichmentBudget;
-                    } else {
-                        count_options.remaining_timeout =
-                            std::min(remaining_after_auth,
-                                     kLoginEnrichmentBudget);
-                    }
-
-                    const auto count_result =
-                        message_rpc_client_->CountPending(
-                            count_request, count_options);
-                    if (count_result.ok()) {
-                        offline_count = static_cast<std::size_t>(
-                            count_result.value->count);
-                    } else {
-                        LOG_WARN(
-                            "gateway login pending-count enrichment degraded"
-                            << ", user_id=" << user_id
-                            << ", rpc_request_id="
-                            << count_options.request_id
-                            << ", rpc_code="
-                            << static_cast<int>(
-                                   count_result.status.code)
-                            << ", message="
-                            << count_result.status.message
-                        );
-                    }
-                } else {
-                    LOG_WARN(
-                        "gateway login pending-count enrichment unavailable"
-                        << ", user_id=" << user_id
-                    );
-                }
+                // Authentication/session acceptance is the Login critical
+                // path. Durable pending-count enrichment is intentionally
+                // deferred to replay so MessageService latency cannot amplify
+                // an authentication burst. total_unread remains a cheap Redis
+                // projection read and offline_count is no longer a blocking
+                // durable query.
+                constexpr std::size_t offline_count = 0;
 
                 send_login_response(
                     true,
@@ -4925,7 +5046,7 @@ void GatewayServer::HandleLoginRequest(
                     );
                 }
 
-                LOG_INFO(
+                LOG_DEBUG(
                     "gateway user logged in via UserService"
                     << ", user_id=" << user_id
                     << ", username=" << verified_username
@@ -4938,6 +5059,28 @@ void GatewayServer::HandleLoginRequest(
                 );
 
                 return {};
+            },
+            [this, connection, request_seq = packet.seq]() {
+                if (!connection || !connection->IsConnected()) {
+                    return;
+                }
+
+                Json response_body;
+                response_body["success"] = false;
+                response_body["message"] =
+                    "login business deadline exceeded";
+                response_body["reason"] =
+                    "business_deadline_exceeded";
+                response_body["online_count"] =
+                    session_manager_.OnlineCount();
+                response_body["offline_count"] = 0;
+                response_body["total_unread"] = 0;
+
+                Packet response;
+                response.type = MessageType::kLoginResponse;
+                response.seq = request_seq;
+                response.body = response_body.dump();
+                SendPacket(connection, response);
             }
         );
 
@@ -5014,7 +5157,7 @@ void GatewayServer::HandleChatMessage(
         return;
     }
 
-    if (!HasBusinessExecutor()) {
+    if (!HasMessageExecutor()) {
         ClientChatAck ack;
         ack.success = false;
         ack.delivered = false;
@@ -5037,7 +5180,7 @@ void GatewayServer::HandleChatMessage(
 
     const BusinessSubmitStatus submit_status =
         SubmitSessionBusinessTask(
-            business_executor_,
+            MessageExecutor(),
             &session_manager_,
             connection,
             *dispatch_session,
@@ -5101,6 +5244,7 @@ void GatewayServer::ExecuteChatMessage(
     const Packet& packet,
     const BusinessRequestContext& business_request
 ) {
+    ChatRequestPhaseTrace phase_trace(business_request, "chat", &LogChatPhaseSnapshot);
     auto send_client_chat_ack =
     [
         this,
@@ -5327,43 +5471,65 @@ void GatewayServer::ExecuteChatMessage(
         return;
     }
 
-    if (!HasFriendRepository()) {
-    Json ack_body;
-    ack_body["success"] = false;
-    ack_body["delivered"] = false;
-    ack_body["client_message_id"] = request.client_message_id;
-    ack_body["reason"] = "relation_service_unavailable";
-    ack_body["from"] = from_user_id;
-    ack_body["to"] = to_user_id;
+    if (!HasSocialRpcClient()) {
+        Json ack_body;
+        ack_body["success"] = false;
+        ack_body["delivered"] = false;
+        ack_body["client_message_id"] = request.client_message_id;
+        ack_body["reason"] = "relation_service_unavailable";
+        ack_body["from"] = from_user_id;
+        ack_body["to"] = to_user_id;
 
-    Packet ack;
-    ack.type = MessageType::kChatAck;
-    ack.seq = packet.seq;
-    ack.body = ack_body.dump();
+        Packet ack;
+        ack.type = MessageType::kChatAck;
+        ack.seq = packet.seq;
+        ack.body = ack_body.dump();
+        SendPacket(connection, ack);
 
-    SendPacket(connection, ack);
-
-    LOG_WARN("gateway rejected chat message: relation service unavailable"
-             << ", from=" << from_user_id
-             << ", to=" << to_user_id);
-
+        LOG_WARN("gateway rejected chat message: relation service unavailable"
+                 << ", from=" << from_user_id
+                 << ", to=" << to_user_id);
         return;
     }
 
-    const ChatPermissionResult permission_result =
-        friend_repository_->CheckPrivateChatPermission(
-            from_user_id,
-            to_user_id
-        );
+    rpc::CheckPrivateChatPermissionRpcRequest permission_request;
+    permission_request.from_user_id = from_user_id;
+    permission_request.to_user_id = to_user_id;
 
-    if (!permission_result.Allowed()) {
+    const std::uint64_t permission_rpc_id =
+        next_internal_rpc_id_.fetch_add(1, std::memory_order_relaxed);
+
+    rpc::RpcCallOptions permission_call_options;
+    permission_call_options.request_id =
+        options_.gateway_id + ":social:chat-permission:req:" +
+        std::to_string(permission_rpc_id);
+    permission_call_options.trace_id =
+        options_.gateway_id + ":chat-permission:trace:" +
+        std::to_string(permission_rpc_id) + ":client-seq:" +
+        std::to_string(packet.seq);
+    permission_call_options.caller_service = "gateway";
+    permission_call_options.caller_instance = options_.gateway_id;
+    const auto permission_remaining = business_request.RemainingTime();
+    permission_call_options.remaining_timeout =
+        permission_remaining == std::chrono::milliseconds::max()
+            ? std::chrono::milliseconds{0}
+            : permission_remaining;
+
+    auto permission_result = phase_trace.Measure(
+        ChatRequestPhaseTrace::Phase::Permission, [&] {
+            return social_rpc_client_->CheckPrivateChatPermission(
+                permission_request, permission_call_options);
+        });
+
+    if (!permission_result.ok()) {
+        phase_trace.Fail();
         Json ack_body;
         ack_body["success"] = false;
         ack_body["delivered"] = false;
         ack_body["client_message_id"] = request.client_message_id;
         ack_body["reason"] =
-            ChatPermissionStatusToString(permission_result.status);
-        ack_body["message"] = permission_result.message;
+            RelationRpcTransportReason(permission_result.status.code);
+        ack_body["message"] = permission_result.status.message;
         ack_body["from"] = from_user_id;
         ack_body["to"] = to_user_id;
         ack_body["stored_offline"] = false;
@@ -5375,16 +5541,45 @@ void GatewayServer::ExecuteChatMessage(
         ack.type = MessageType::kChatAck;
         ack.seq = packet.seq;
         ack.body = ack_body.dump();
+        SendPacket(connection, ack);
 
+        LOG_WARN("gateway chat permission RPC failed"
+                 << ", from=" << from_user_id
+                 << ", to=" << to_user_id
+                 << ", reason=" << ack_body["reason"].get<std::string>()
+                 << ", message=" << permission_result.status.message);
+        return;
+    }
+
+    const auto& permission_response = permission_result.value.value();
+    if (!permission_response.Allowed()) {
+        Json ack_body;
+        ack_body["success"] = false;
+        ack_body["delivered"] = false;
+        ack_body["client_message_id"] = request.client_message_id;
+        ack_body["reason"] =
+            rpc::ChatPermissionRpcOutcomeToReason(permission_response.outcome);
+        ack_body["message"] = permission_response.message;
+        ack_body["from"] = from_user_id;
+        ack_body["to"] = to_user_id;
+        ack_body["stored_offline"] = false;
+        ack_body["stored_persistent"] = false;
+        ack_body["receiver_private_unread"] = 0;
+        ack_body["receiver_total_unread"] = 0;
+
+        Packet ack;
+        ack.type = MessageType::kChatAck;
+        ack.seq = packet.seq;
+        ack.body = ack_body.dump();
         SendPacket(connection, ack);
 
         LOG_WARN("gateway rejected chat message: permission denied"
-                << ", from=" << from_user_id
-                << ", to=" << to_user_id
-                << ", reason="
-                << ChatPermissionStatusToString(permission_result.status)
-                << ", message=" << permission_result.message);
-
+                 << ", from=" << from_user_id
+                 << ", to=" << to_user_id
+                 << ", reason="
+                 << rpc::ChatPermissionRpcOutcomeToReason(
+                        permission_response.outcome)
+                 << ", message=" << permission_response.message);
         return;
     }
     Json server_body{
@@ -5450,10 +5645,9 @@ void GatewayServer::ExecuteChatMessage(
                     ? std::chrono::milliseconds{0}
                     : remaining;
 
-            return message_rpc_client_->PersistPrivateMessage(
-                rpc_request,
-                call_options
-            );
+            return phase_trace.Measure(ChatRequestPhaseTrace::Phase::Persist, [&] {
+                return message_rpc_client_->PersistPrivateMessage(rpc_request, call_options);
+            });
         };
 
     const auto persistence_failure_reason =
@@ -5477,10 +5671,10 @@ void GatewayServer::ExecuteChatMessage(
         };
 
     if (HasGatewayRouteResolver()) {
-        const GatewayRouteResult route =
-            gateway_route_resolver_->Resolve(
-                to_user_id
-            );
+        const GatewayRouteResult route = phase_trace.Measure(
+            ChatRequestPhaseTrace::Phase::Route, [&] {
+                return gateway_route_resolver_->Resolve(to_user_id);
+            });
 
         /*
         * 目标在线于其他 Gateway。
@@ -5554,6 +5748,7 @@ void GatewayServer::ExecuteChatMessage(
                 persist_message_via_service();
 
             if (!persist_call.ok()) {
+                phase_trace.Fail();
                 ClientChatAck ack;
                 ack.success = false;
                 ack.delivered = false;
@@ -5627,14 +5822,13 @@ void GatewayServer::ExecuteChatMessage(
                 persist_result.record.delivery_state !=
                     rpc::MessageDeliveryState::kRead;
 
-            EnsureUnreadProjection(
-                server_message_id,
-                to_user_id,
-                from_user_id,
-                should_count_as_unread,
-                &receiver_private_unread,
-                &receiver_total_unread
-            );
+            phase_trace.SetMessageId(server_message_id);
+            phase_trace.Measure(ChatRequestPhaseTrace::Phase::Unread, [&] {
+                EnsureUnreadProjection(
+                    server_message_id, to_user_id, from_user_id,
+                    should_count_as_unread,
+                    &receiver_private_unread, &receiver_total_unread);
+            });
 
             if (
                 !HasGatewayPeerTransportManager()
@@ -5687,496 +5881,83 @@ void GatewayServer::ExecuteChatMessage(
             }
 
 
-            EventLoop* sender_loop =
-                connection
-                    ? connection->GetLoop()
-                    : nullptr;
-
-            const SessionEpoch sender_session_epoch =
-                g_business_dispatch_context.session_epoch;
-
-
-            const bool submitted =
-                gateway_peer_transport_manager_->
-                    ForwardChat(
-                        remote_gateway,
-                        server_message_id,
-                        from_user_id,
-                        to_user_id,
-                        server_body_text,
-
-                        [
-                            this,
-                            connection,
-                            sender_loop,
-                            from_user_id,
-                            sender_session_epoch,
-                            to_user_id,
-                            remote_gateway,
-                            server_message_id,
-                            stored_persistent,
-                            receiver_private_unread,
-                            receiver_total_unread,
-
-                            client_message_id =
-                                request.client_message_id,
-
-                            client_request_reused,
-
-                            original_seq =
-                                packet.seq
-                        ](
-                            GatewayPeerTransportResult
-                                result
-                        ) mutable {
-
-                            auto complete =
-                                [
-                                    this,
-                                    connection,
-                                    from_user_id,
-                                    sender_session_epoch,
-                                    to_user_id,
-                                    remote_gateway,
-                                    server_message_id,
-                                    stored_persistent,
-                                    receiver_private_unread,
-                                    receiver_total_unread,
-
-                                    client_message_id,
-                                    client_request_reused,
-
-                                    original_seq,
-                                    result =
-                                        std::move(result)
-                                ](
-                                    const BusinessRequestContext*
-                                        completion_request
-                                ) mutable {
-
-                                    /*
-                                    * Peer Response只能证明：
-                                    *
-                                    * Gateway B是否接受/提交了Receiver Delivery。
-                                    *
-                                    * Receiver是否真正确认，
-                                    * 必须以共享MySQL的ReceiverConfirmed状态为准。
-                                    */
-                                    bool peer_delivery_submitted =
-                                        false;
-
-
-                                    bool receiver_confirmed =
-                                        false;
-
-
-                                    bool stored_offline =
-                                        false;
-
-
-                                    std::string reason;
-
-
-                                    if (
-                                        result.Succeeded() &&
-                                        result.response.
-                                            Delivered()
-                                    ) {
-                                        /*
-                                        * Peer层的kDelivered目前是历史命名。
-                                        *
-                                        * 它只证明：
-                                        *
-                                        * Gateway B已经接受并提交了
-                                        * Receiver Delivery。
-                                        *
-                                        * 不能直接映射为Sender delivered=true。
-                                        */
-                                        peer_delivery_submitted =
-                                            true;
-
-
-                                        reason =
-                                            "remote_delivery_awaiting_receiver_ack";
-
-
-                                        /*
-                                        * A和B共享MySQL。
-                                        *
-                                        * 如果Receiver ACK非常快，
-                                        * B可能已经把DB推进到ReceiverConfirmed。
-                                        *
-                                        * 因此这里读取一次最新Durable Truth。
-                                        *
-                                        * 不等待、不轮询Receiver ACK。
-                                        */
-                                        if (
-                                            stored_persistent &&
-                                            server_message_id != 0 &&
-                                            HasMessageRpcClient() &&
-                                            completion_request != nullptr
-                                        ) {
-                                            rpc::GetPrivateMessageRpcRequest
-                                                get_request;
-                                            get_request.message_id =
-                                                server_message_id;
-
-                                            rpc::RpcCallOptions get_options;
-                                            const std::uint64_t probe_rpc_id =
-                                                next_internal_rpc_id_.fetch_add(
-                                                    1,
-                                                    std::memory_order_relaxed
-                                                );
-                                            get_options.request_id =
-                                                options_.gateway_id +
-                                                ":message:remote-probe:req:" +
-                                                std::to_string(probe_rpc_id);
-                                            get_options.trace_id =
-                                                options_.gateway_id +
-                                                ":remote-probe:trace:" +
-                                                std::to_string(probe_rpc_id) +
-                                                ":M:" +
-                                                std::to_string(
-                                                    server_message_id);
-                                            get_options.caller_service =
-                                                "gateway";
-                                            get_options.caller_instance =
-                                                options_.gateway_id;
-
-                                            const auto remaining =
-                                                completion_request->
-                                                    RemainingTime();
-                                            get_options.remaining_timeout =
-                                                remaining ==
-                                                    std::chrono::milliseconds::max()
-                                                    ? std::chrono::milliseconds{0}
-                                                    : remaining;
-
-                                            const auto confirmation_result =
-                                                message_rpc_client_->
-                                                    GetPrivateMessage(
-                                                        get_request,
-                                                        get_options
-                                                    );
-
-                                            if (confirmation_result.ok()) {
-                                                const auto state =
-                                                    confirmation_result.value->
-                                                        record.delivery_state;
-                                                receiver_confirmed =
-                                                    state == rpc::MessageDeliveryState::
-                                                        kReceiverConfirmed ||
-                                                    state == rpc::MessageDeliveryState::
-                                                        kRead;
-                                                if (receiver_confirmed) {
-                                                    reason =
-                                                        "remote_receiver_confirmed";
-                                                }
-                                            } else {
-                                                // Persisted responsibility is
-                                                // already established. A failed
-                                                // read probe may only make the
-                                                // delivered bit conservative; it
-                                                // must never revoke success.
-                                                LOG_WARN(
-                                                    "gateway remote receiver "
-                                                    "confirmation RPC lookup failed"
-                                                    << ", message_id="
-                                                    << server_message_id
-                                                    << ", from="
-                                                    << from_user_id
-                                                    << ", to="
-                                                    << to_user_id
-                                                    << ", remote_gateway="
-                                                    << remote_gateway.gateway_id
-                                                    << ", error="
-                                                    << confirmation_result.
-                                                        status.message
-                                                );
-                                            }
-                                        }
-                                    } else {
-                                        /*
-                                        * Peer没有成功接受本地Delivery。
-                                        *
-                                        * 如果消息已经持久化，
-                                        * Server仍然承担后续恢复责任。
-                                        */
-                                        stored_offline =
-                                            stored_persistent;
-
-
-                                        if (result.Succeeded()) {
-                                            reason =
-                                                "remote_" +
-                                                GatewayForwardChatStatusToString(
-                                                    result.response.status
-                                                );
-                                        } else {
-                                            reason =
-                                                "remote_transport_" +
-                                                GatewayPeerTransportStatusToString(
-                                                    result.status
-                                                );
-                                        }
-                                    }
-
-
-                                    /*
-                                    * 没有MySQL时，只有真实投递成功
-                                    * 才认为消息被接受并计Unread。
-                                    */
-                                    std::int64_t
-                                        private_unread =
-                                            receiver_private_unread;
-
-                                    std::int64_t
-                                        total_unread =
-                                            receiver_total_unread;
-
-
-
-                                    const bool accepted =
-                                        peer_delivery_submitted ||
-                                        stored_persistent;
-
-
-                                    Json ack_body;
-
-                                    ack_body["success"] =
-                                        accepted;
-
-                                    /*
-                                    * Sender delivered只代表：
-                                    *
-                                    * Receiver Application ACK
-                                    *
-                                    * 不能再代表Peer Gateway已经Send。
-                                    */
-                                    ack_body["delivered"] =
-                                        receiver_confirmed;
-
-                                    ack_body["stored_offline"] =
-                                        stored_offline;
-
-                                    ack_body[
-                                        "stored_persistent"
-                                    ] =
-                                        stored_persistent;
-
-
-                                    /*
-                                    * M12 Client Send Idempotency
-                                    *
-                                    * client_message_id：
-                                    * Client一次逻辑发送的稳定业务ID。
-                                    *
-                                    * reused：
-                                    * 当前Client Request是否复用了
-                                    * 已经存在的server message。
-                                    */
-                                    ack_body["client_message_id"] =
-                                        client_message_id;
-
-                                    ack_body["reused"] =
-                                        client_request_reused;
-
-
-                                    ack_body["message_id"] =
-                                        server_message_id;
-
-                                    ack_body["from"] =
-                                        from_user_id;
-
-                                    ack_body["to"] =
-                                        to_user_id;
-
-                                    ack_body[
-                                        "remote_gateway_id"
-                                    ] =
-                                        remote_gateway.
-                                            gateway_id;
-
-                                    ack_body[
-                                        "remote_host"
-                                    ] =
-                                        remote_gateway.
-                                            listen_host;
-
-                                    ack_body[
-                                        "remote_port"
-                                    ] =
-                                        remote_gateway.
-                                            listen_port;
-
-                                    ack_body["reason"] =
-                                        reason;
-
-                                    ack_body[
-                                        "receiver_private_unread"
-                                    ] =
-                                        private_unread;
-
-                                    ack_body[
-                                        "receiver_total_unread"
-                                    ] =
-                                        total_unread;
-
-
-                                    Packet ack;
-
-                                    ack.type =
-                                        MessageType::
-                                            kChatAck;
-
-                                    ack.seq =
-                                        original_seq;
-
-                                    ack.body =
-                                        ack_body.dump();
-
-                                    SendPacket(
-                                        connection,
-                                        ack
-                                    );
-
-
-                                    LOG_INFO(
-                                        "gateway remote chat completed"
-                                        << ", from="
-                                        << from_user_id
-                                        << ", to="
-                                        << to_user_id
-                                        << ", remote_gateway="
-                                        << remote_gateway.gateway_id
-                                        << ", peer_delivery_submitted="
-                                        << peer_delivery_submitted
-                                        << ", receiver_confirmed="
-                                        << receiver_confirmed
-                                        << ", reason="
-                                        << reason
-                                    );
-                                };
-
-
-                            /*
-                             * M13-B2:
-                             * Peer callback本身运行在Peer Reactor。
-                             * complete内部可能读取MySQL durable truth，
-                             * 因此不能再把它投回Client Sub-Reactor执行。
-                             *
-                             * SendPacket最终会通过TcpConnection::Send
-                             * 安全handoff到connection所属EventLoop。
-                             */
-                            if (HasBusinessExecutor()) {
-                                BusinessExecutor::TaskSpec completion_task;
-                                completion_task.request.operation =
-                                    "gateway.chat.remote_complete";
-                                completion_task.request.user_id =
-                                    from_user_id;
-                                completion_task.request.ordering_key =
-                                    static_cast<BusinessOrderingKey>(
-                                        server_message_id
-                                    );
-                                /*
-                                 * This task is not a second client-scoped
-                                 * request.  PersistPrivateMessage has already
-                                 * committed M before peer forwarding starts,
-                                 * so peer response-loss/retry belongs to the
-                                 * durable kMustRun continuation of that accepted
-                                 * Chat.  Reusing the original Chat deadline here
-                                 * would reject this continuation exactly when the
-                                 * first peer response times out (3s) and the
-                                 * bounded retry starts.  Let BusinessExecutor
-                                 * assign a fresh internal continuation budget;
-                                 * SendPacket still enforces SessionEpoch before
-                                 * any client-visible ACK is emitted.
-                                 */
-                                completion_task.cancellation_policy =
-                                    BusinessCancellationPolicy::kMustRun;
-                                completion_task.work =
-                                    [
-                                        complete = std::move(complete),
-                                        connection,
-                                        from_user_id,
-                                        sender_session_epoch
-                                    ](
-                                        const BusinessExecutor::ExecutionContext&
-                                            context
-                                    ) mutable -> BusinessExecutor::Completion {
-                                        ScopedBusinessDispatchContext dispatch_scope(
-                                            connection,
-                                            from_user_id,
-                                            sender_session_epoch
-                                        );
-                                        complete(&context.Request());
-                                        return {};
-                                    };
-
-                                const BusinessSubmitStatus completion_status =
-                                    business_executor_->Submit(
-                                        std::move(completion_task)
-                                    );
-
-                                if (
-                                    completion_status !=
-                                    BusinessSubmitStatus::kAccepted
-                                ) {
-                                    LOG_WARN(
-                                        "gateway remote chat completion task rejected"
-                                        << ", message_id="
-                                        << server_message_id
-                                        << ", status="
-                                        << BusinessSubmitStatusToString(
-                                            completion_status
-                                        )
-                                    );
-                                }
-                            } else {
-                                complete(nullptr);
+            // R2A: acknowledge verified durable acceptance before initiating
+            // remote delivery. Keep the unread projection snapshot contract.
+            // Peer outcome cannot revoke acceptance or emit a second Chat ACK.
+            rpc::PersistPrivateMessageRpcRequest expected_persist;
+            expected_persist.from_user_id = from_user_id;
+            expected_persist.to_user_id = to_user_id;
+            expected_persist.client_message_id = request.client_message_id;
+            expected_persist.message_type = static_cast<std::uint32_t>(
+                rpc::PrivateMessageContentType::kText);
+            expected_persist.content = server_body_text;
+            const auto durable_ack = BuildRemoteDurableAcceptance(
+                persist_call, expected_persist,
+                receiver_private_unread, receiver_total_unread,
+                remote_gateway.gateway_id, remote_gateway.listen_host,
+                remote_gateway.listen_port);
+
+            if (!durable_ack) {
+                // Adapter accepted an inconsistent record: do not invent a
+                // successful ACK or delivery. The attempted write is uncertain.
+                phase_trace.Fail();
+                ClientChatAck invalid_ack;
+                invalid_ack.client_message_id = request.client_message_id;
+                invalid_ack.from_user_id = from_user_id;
+                invalid_ack.to_user_id = to_user_id;
+                invalid_ack.reason = "message_persistence_uncertain";
+                send_client_chat_ack(invalid_ack);
+                LOG_ERROR("gateway remote durable acceptance identity invalid"
+                    << ", message_id=" << server_message_id);
+                return;
+            }
+
+            const auto acceptance_dispatch = DispatchRemoteDurableAcceptance(
+                durable_ack,
+                [&](const ClientChatAck& accepted_ack) {
+                    return send_client_chat_ack(accepted_ack);
+                },
+                [&] {
+                    return gateway_peer_transport_manager_->ForwardChat(
+                        remote_gateway, server_message_id, from_user_id,
+                        to_user_id, server_body_text,
+                        // Delivery observer holds no GatewayServer, Session or
+                        // sender connection. It never calls MessageService and
+                        // never queues gateway.chat.remote_complete.
+                        [from_user_id, to_user_id, server_message_id,
+                         remote_gateway_id = remote_gateway.gateway_id](
+                            GatewayPeerTransportResult result) {
+                            const bool peer_delivery_submitted =
+                                result.Succeeded() && result.response.Delivered();
+                            LOG_INFO("gateway remote delivery attempt completed"
+                                << ", from=" << from_user_id
+                                << ", to=" << to_user_id
+                                << ", message_id=" << server_message_id
+                                << ", remote_gateway=" << remote_gateway_id
+                                << ", peer_delivery_submitted=" << peer_delivery_submitted
+                                << ", sender_ack_boundary=durable_acceptance"
+                                << ", durable_convergence_not_proven=1");
+                            if (!peer_delivery_submitted) {
+                                LOG_WARN("gateway durable delivery still needs recovery"
+                                    << ", message_id=" << server_message_id
+                                    << ", to=" << to_user_id);
                             }
-                        }
-                    );
-
-
-            if (!submitted) {
-                Packet ack;
-
-                ack.type =
-                    MessageType::kChatAck;
-
-                ack.seq =
-                    packet.seq;
-
-                ack.body =
-                    Json{
-                        {"success",
-                        stored_persistent},
-                        {"delivered", false},
-                        {"stored_offline",
-                        stored_persistent},
-                        {"stored_persistent",
-                        stored_persistent},
-                        {"message_id",
-                        server_message_id},
-                        {"from", from_user_id},
-                        {"to", to_user_id},
-                        {"remote_gateway_id",
-                        remote_gateway.gateway_id},
-                        {"reason",
-                        stored_persistent
-                            ? "remote_submit_failed_stored_pending"
-                            : "remote_submit_failed"},
-                        {"receiver_private_unread",
-                        receiver_private_unread},
-                        {"receiver_total_unread",
-                        receiver_total_unread}
-                    }.dump();
-
-                SendPacket(
-                    connection,
-                    ack
-                );
+                        });
+                });
+            LOG_INFO("gateway remote durable acceptance replied"
+                << ", client_message_id=" << request.client_message_id
+                << ", message_id=" << server_message_id
+                << ", from=" << from_user_id
+                << ", to=" << to_user_id
+                << ", reused=" << client_request_reused
+                << ", ack_handoff_ok=" << acceptance_dispatch.ack_handoff_ok
+                << ", forward_submitted=" << acceptance_dispatch.forward_submitted);
+            if (!acceptance_dispatch.forward_submitted) {
+                // The one Sender response has already been attempted. Keep the
+                // durable Pending state; do not fabricate ReceiverConfirmed.
+                LOG_WARN("gateway remote submission failed after durable acceptance"
+                    << ", message_id=" << server_message_id
+                    << ", to=" << to_user_id);
             }
 
             return;
@@ -6295,6 +6076,7 @@ void GatewayServer::ExecuteChatMessage(
         persist_message_via_service();
 
     if (!persist_call.ok()) {
+        phase_trace.Fail();
         ClientChatAck ack;
         ack.success = false;
         ack.delivered = false;
@@ -6384,14 +6166,13 @@ void GatewayServer::ExecuteChatMessage(
         persist_result.record.delivery_state !=
             rpc::MessageDeliveryState::kRead;
 
-    EnsureUnreadProjection(
-        server_message_id,
-        to_user_id,
-        from_user_id,
-        should_count_as_unread,
-        &receiver_private_unread,
-        &receiver_total_unread
-    );
+    phase_trace.SetMessageId(server_message_id);
+    phase_trace.Measure(ChatRequestPhaseTrace::Phase::Unread, [&] {
+        EnsureUnreadProjection(
+            server_message_id, to_user_id, from_user_id,
+            should_count_as_unread,
+            &receiver_private_unread, &receiver_total_unread);
+    });
 
     /*
      * ============================================================
@@ -7212,7 +6993,7 @@ void GatewayServer::HandleGatewayForwardChatRequest(
         return;
     }
 
-    if (!HasBusinessExecutor()) {
+    if (!HasMessageExecutor()) {
         GatewayForwardChatResponse response;
         response.status = GatewayForwardChatStatus::kInternalError;
         response.target_gateway_id = options_.gateway_id;
@@ -7232,7 +7013,7 @@ void GatewayServer::HandleGatewayForwardChatRequest(
 
     const BusinessSubmitStatus submit_status =
         SubmitMustRunConnectionBusinessTask(
-            business_executor_,
+            MessageExecutor(),
             connection,
             packet.seq,
             BusinessClock::now(),
@@ -7262,7 +7043,7 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
     const Packet& packet,
     const BusinessRequestContext& business_request
 ) {
-
+    ChatRequestPhaseTrace phase_trace(business_request, "peer", &LogChatPhaseSnapshot);
 
     GatewayForwardChatResponse response;
 
@@ -7688,9 +7469,13 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
             ? std::chrono::milliseconds{0}
             : remaining;
 
-    const auto persisted_result = message_rpc_client_->GetPrivateMessage(
-        get_request, get_options);
+    phase_trace.SetMessageId(request.message_id);
+    const auto persisted_result = phase_trace.Measure(
+        ChatRequestPhaseTrace::Phase::PeerValidate, [&] {
+            return message_rpc_client_->GetPrivateMessage(get_request, get_options);
+        });
     if (!persisted_result.ok()) {
+        phase_trace.Fail();
         message_delivery_deduplicator_.Abort(request.message_id);
         response.status =
             persisted_result.status.code == rpc::RpcErrorCode::kNotFound
@@ -8572,11 +8357,8 @@ void GatewayServer::HandleHistoryRequest(
         return;
     }
 
-    // C1 deliberately leaves Social permission at the Gateway boundary. The
-    // durable MessageService must not copy FriendRepository SQL or call
-    // SocialService for every message read.
-    if (!HasFriendRepository()) {
-        response_body["message"] = "relation repository unavailable";
+    if (!HasSocialRpcClient()) {
+        response_body["message"] = "relation service unavailable";
         response_body["reason"] = "relation_service_unavailable";
         response_body["user_id"] = self_user_id;
         response_body["peer_user_id"] = peer_user_id;
@@ -8602,6 +8384,9 @@ void GatewayServer::HandleHistoryRequest(
         options_.gateway_id + ":message-history:trace:" +
         std::to_string(rpc_id) + ":client-seq:" +
         std::to_string(request_seq);
+    const std::string social_rpc_request_id =
+        options_.gateway_id + ":social:history-permission:req:" +
+        std::to_string(rpc_id);
 
     const BusinessSubmitStatus submit_status =
         SubmitSessionBusinessTask(
@@ -8623,6 +8408,7 @@ void GatewayServer::HandleHistoryRequest(
                 before_message_id,
                 limit,
                 rpc_request_id,
+                social_rpc_request_id,
                 trace_id
             ](
                 const BusinessExecutor::ExecutionContext& context
@@ -8645,15 +8431,59 @@ void GatewayServer::HandleHistoryRequest(
                     return {};
                 }
 
-                const ChatPermissionResult permission_result =
-                    friend_repository_->CheckPrivateChatPermission(
-                        self_user_id,
-                        peer_user_id
+                rpc::CheckPrivateChatPermissionRpcRequest permission_request;
+                permission_request.from_user_id = self_user_id;
+                permission_request.to_user_id = peer_user_id;
+
+                rpc::RpcCallOptions permission_call_options;
+                permission_call_options.request_id = social_rpc_request_id;
+                permission_call_options.trace_id = trace_id;
+                permission_call_options.caller_service = "gateway";
+                permission_call_options.caller_instance = options_.gateway_id;
+                const auto permission_remaining =
+                    context.Request().RemainingTime();
+                permission_call_options.remaining_timeout =
+                    permission_remaining == std::chrono::milliseconds::max()
+                        ? std::chrono::milliseconds{0}
+                        : permission_remaining;
+
+                const auto permission_result =
+                    social_rpc_client_->CheckPrivateChatPermission(
+                        permission_request,
+                        permission_call_options
                     );
-                if (!permission_result.Allowed()) {
-                    async_body["message"] = permission_result.message;
+
+                if (!permission_result.ok()) {
+                    async_body["message"] =
+                        permission_result.status.message.empty()
+                            ? "relation service request failed"
+                            : permission_result.status.message;
                     async_body["reason"] =
-                        ChatPermissionStatusToString(permission_result.status);
+                        RelationRpcTransportReason(permission_result.status.code);
+
+                    return BusinessExecutor::Completion(
+                        [this, connection, request_seq,
+                         body = std::move(async_body)]() mutable {
+                            if (!connection || !connection->IsConnected()) {
+                                return;
+                            }
+                            Packet response;
+                            response.type = MessageType::kHistoryResponse;
+                            response.seq = request_seq;
+                            response.body = body.dump();
+                            SendPacket(connection, response);
+                        }
+                    );
+                }
+
+                const auto& permission_response =
+                    permission_result.value.value();
+                if (!permission_response.Allowed()) {
+                    async_body["message"] = permission_response.message;
+                    async_body["reason"] =
+                        rpc::ChatPermissionRpcOutcomeToReason(
+                            permission_response.outcome
+                        );
 
                     return BusinessExecutor::Completion(
                         [this, connection, request_seq,
@@ -9966,12 +9796,13 @@ void GatewayServer::HandleFriendRequestCreateRequest(
                     [this, connection, packet,
                      dispatch_user_id = dispatch_session->user_id,
                      dispatch_epoch = dispatch_session->epoch](
-                        const BusinessExecutor::ExecutionContext&
+                        const BusinessExecutor::ExecutionContext& context
                     ) -> BusinessExecutor::Completion {
                         ScopedBusinessDispatchContext dispatch_scope(
                             connection,
                             dispatch_user_id,
-                            dispatch_epoch
+                            dispatch_epoch,
+                            &context.Request()
                         );
                         HandleFriendRequestCreateRequest(connection, packet);
                         return {};
@@ -10110,36 +9941,77 @@ void GatewayServer::HandleFriendRequestCreateRequest(
         return;
     }
 
-    if (!HasFriendRequestRepository()) {
-        response_body["message"] =
-            "friend request repository unavailable";
-        response_body["reason"] =
-            "friend_request_service_unavailable";
+    if (!HasSocialRpcClient()) {
+        response_body["message"] = "friend request service unavailable";
+        response_body["reason"] = "friend_request_service_unavailable";
         send_response(response_body);
         return;
     }
 
-    const CreateFriendRequestResult result =
-        friend_request_repository_->CreateFriendRequest(
-            self_user_id,
-            to_user_id,
-            request_message
+    const BusinessRequestContext* const business_request =
+        g_business_dispatch_context.request_context;
+    if (business_request == nullptr) {
+        response_body["message"] = "business runtime context unavailable";
+        response_body["reason"] = "business_runtime_unavailable";
+        send_response(response_body);
+        return;
+    }
+
+    rpc::CreateFriendRequestRpcRequest rpc_request;
+    rpc_request.from_user_id = self_user_id;
+    rpc_request.to_user_id = to_user_id;
+    rpc_request.request_message = request_message;
+
+    const std::uint64_t rpc_id =
+        next_internal_rpc_id_.fetch_add(1, std::memory_order_relaxed);
+    rpc::RpcCallOptions call_options;
+    call_options.request_id =
+        options_.gateway_id + ":social:friend-request:create:req:" +
+        std::to_string(rpc_id);
+    call_options.trace_id =
+        options_.gateway_id + ":friend-request-create:trace:" +
+        std::to_string(rpc_id) + ":client-seq:" +
+        std::to_string(packet.seq);
+    call_options.caller_service = "gateway";
+    call_options.caller_instance = options_.gateway_id;
+    const auto remaining = business_request->RemainingTime();
+    call_options.remaining_timeout =
+        remaining == std::chrono::milliseconds::max()
+            ? std::chrono::milliseconds{0}
+            : remaining;
+
+    const auto rpc_result =
+        social_rpc_client_->CreateFriendRequest(rpc_request, call_options);
+    if (!rpc_result.ok()) {
+        response_body["message"] =
+            rpc_result.status.message.empty()
+                ? "friend request service request failed"
+                : rpc_result.status.message;
+        response_body["reason"] =
+            rpc_result.attempted
+                ? "friend_request_state_uncertain"
+                : FriendRequestRpcTransportReason(rpc_result.status.code);
+        send_response(response_body);
+        LOG_WARN(
+            "gateway friend request create RPC failed"
+            << ", from_user_id=" << self_user_id
+            << ", to_user_id=" << to_user_id
+            << ", attempted=" << rpc_result.attempted
+            << ", reason=" << response_body["reason"].get<std::string>()
+            << ", message=" << rpc_result.status.message
         );
+        return;
+    }
 
-    const bool changed =
-        result.status == CreateFriendRequestStatus::kCreated ||
-        result.status == CreateFriendRequestStatus::kReopened;
-
-    const bool success =
-        changed ||
-        result.status ==
-            CreateFriendRequestStatus::kAlreadyPending;
+    const auto& result = rpc_result.value.value();
+    const bool success = result.Success();
+    const bool changed = result.Changed();
 
     response_body["success"] = success;
     response_body["changed"] = changed;
     response_body["message"] = result.message;
     response_body["reason"] =
-        CreateFriendRequestStatusToString(result.status);
+        rpc::FriendRequestCreateRpcOutcomeToReason(result.outcome);
     response_body["request_id"] = result.request_id;
     response_body["from_user_id"] = self_user_id;
     response_body["to_user_id"] = to_user_id;
@@ -10147,12 +10019,12 @@ void GatewayServer::HandleFriendRequestCreateRequest(
     send_response(response_body);
 
     LOG_INFO(
-        "gateway friend request create handled"
+        "gateway friend request create handled via SocialService"
         << ", from_user_id=" << self_user_id
         << ", to_user_id=" << to_user_id
         << ", request_id=" << result.request_id
         << ", status="
-        << CreateFriendRequestStatusToString(result.status)
+        << rpc::FriendRequestCreateRpcOutcomeToReason(result.outcome)
         << ", success=" << success
         << ", changed=" << changed
     );
@@ -10368,9 +10240,9 @@ void GatewayServer::HandleFriendRequestListRequest(
     response_body["before_request_id"] =
         before_request_id;
 
-    if (!HasFriendRequestRepository()) {
+    if (!HasSocialRpcClient()) {
         response_body["message"] =
-            "friend request repository unavailable";
+            "friend request service unavailable";
         response_body["reason"] =
             "friend_request_service_unavailable";
         send_response(response_body);
@@ -10386,8 +10258,15 @@ void GatewayServer::HandleFriendRequestListRequest(
         return;
     }
 
-    const std::size_t query_limit =
-        limit + 1;
+    const std::uint64_t rpc_id =
+        next_internal_rpc_id_.fetch_add(1, std::memory_order_relaxed);
+    const std::string rpc_request_id =
+        options_.gateway_id + ":social:friend-request:list:req:" +
+        std::to_string(rpc_id);
+    const std::string trace_id =
+        options_.gateway_id + ":friend-request-list:trace:" +
+        std::to_string(rpc_id) + ":client-seq:" +
+        std::to_string(request_seq);
 
     const BusinessSubmitStatus submit_status =
         SubmitSessionBusinessTask(
@@ -10409,7 +10288,8 @@ void GatewayServer::HandleFriendRequestListRequest(
                 before_created_at,
                 before_request_id,
                 limit,
-                query_limit
+                rpc_request_id,
+                trace_id
             ](
                 const BusinessExecutor::
                     ExecutionContext& context
@@ -10438,74 +10318,81 @@ void GatewayServer::HandleFriendRequestListRequest(
                     return {};
                 }
 
+                rpc::ListPendingIncomingFriendRequestsRpcRequest rpc_request;
+                rpc_request.receiver_user_id = self_user_id;
+                rpc_request.before_created_at = before_created_at;
+                rpc_request.before_request_id = before_request_id;
+                rpc_request.limit = static_cast<std::uint32_t>(limit);
+
+                rpc::RpcCallOptions call_options;
+                call_options.request_id = rpc_request_id;
+                call_options.trace_id = trace_id;
+                call_options.caller_service = "gateway";
+                call_options.caller_instance = options_.gateway_id;
+                const auto remaining = context.Request().RemainingTime();
+                call_options.remaining_timeout =
+                    remaining == std::chrono::milliseconds::max()
+                        ? std::chrono::milliseconds{0}
+                        : remaining;
+
                 auto list_result =
-                    friend_request_repository_->
-                        ListPendingIncomingRequests(
-                            self_user_id,
-                            before_created_at,
-                            before_request_id,
-                            query_limit
-                        );
+                    social_rpc_client_->ListPendingIncomingFriendRequests(
+                        rpc_request,
+                        call_options
+                    );
 
-                if (!list_result.Succeeded()) {
+                if (!list_result.ok()) {
                     async_body["message"] =
-                        list_result.message;
+                        list_result.status.message.empty()
+                            ? "friend request service request failed"
+                            : list_result.status.message;
                     async_body["reason"] =
-                        ListPendingIncomingRequestsStatusToString(
-                            list_result.status
-                        );
+                        FriendRequestRpcTransportReason(list_result.status.code);
 
-                    return
-                        BusinessExecutor::Completion(
-                            [
-                                this,
-                                connection,
-                                request_seq,
-                                body =
-                                    std::move(async_body)
-                            ]() mutable {
-                                if (
-                                    !connection ||
-                                    !connection->
-                                        IsConnected()
-                                ) {
-                                    return;
-                                }
-
-                                Packet response;
-                                response.type =
-                                    MessageType::
-                                        kFriendRequestListResponse;
-                                response.seq =
-                                    request_seq;
-                                response.body =
-                                    body.dump();
-
-                                SendPacket(
-                                    connection,
-                                    response
-                                );
+                    return BusinessExecutor::Completion(
+                        [this, connection, request_seq,
+                         body = std::move(async_body)]() mutable {
+                            if (!connection || !connection->IsConnected()) {
+                                return;
                             }
-                        );
+                            Packet response;
+                            response.type = MessageType::kFriendRequestListResponse;
+                            response.seq = request_seq;
+                            response.body = body.dump();
+                            SendPacket(connection, response);
+                        }
+                    );
                 }
 
-                if (
-                    context.CancellationRequested()
-                ) {
+                if (context.CancellationRequested()) {
                     return {};
                 }
 
-                auto requests =
-                    std::move(
-                        list_result.records
+                const auto& list_response = list_result.value.value();
+                if (!list_response.Succeeded()) {
+                    async_body["message"] = list_response.message;
+                    async_body["reason"] =
+                        rpc::FriendRequestListRpcOutcomeToReason(
+                            list_response.outcome
+                        );
+
+                    return BusinessExecutor::Completion(
+                        [this, connection, request_seq,
+                         body = std::move(async_body)]() mutable {
+                            if (!connection || !connection->IsConnected()) {
+                                return;
+                            }
+                            Packet response;
+                            response.type = MessageType::kFriendRequestListResponse;
+                            response.seq = request_seq;
+                            response.body = body.dump();
+                            SendPacket(connection, response);
+                        }
                     );
-
-                bool has_more = false;
-
-                if (requests.size() > limit) {
-                    has_more = true;
-                    requests.resize(limit);
                 }
+
+                const auto& requests = list_response.requests;
+                const bool has_more = list_response.has_more;
 
                 Json request_array =
                     Json::array();
@@ -10550,20 +10437,11 @@ void GatewayServer::HandleFriendRequestListRequest(
                     );
                 }
 
-                if (
-                    has_more &&
-                    !requests.empty()
-                ) {
-                    async_body[
-                        "next_before_created_at"
-                    ] =
-                        requests.back().
-                            created_at;
-                    async_body[
-                        "next_before_request_id"
-                    ] =
-                        requests.back().
-                            request_id;
+                if (has_more) {
+                    async_body["next_before_created_at"] =
+                        list_response.next_before_created_at;
+                    async_body["next_before_request_id"] =
+                        list_response.next_before_request_id;
                 }
 
                 const std::size_t returned_count =
@@ -10733,12 +10611,13 @@ void GatewayServer::HandleFriendRequestAcceptRequest(
                     [this, connection, packet,
                      dispatch_user_id = dispatch_session->user_id,
                      dispatch_epoch = dispatch_session->epoch](
-                        const BusinessExecutor::ExecutionContext&
+                        const BusinessExecutor::ExecutionContext& context
                     ) -> BusinessExecutor::Completion {
                         ScopedBusinessDispatchContext dispatch_scope(
                             connection,
                             dispatch_user_id,
-                            dispatch_epoch
+                            dispatch_epoch,
+                            &context.Request()
                         );
                         HandleFriendRequestAcceptRequest(connection, packet);
                         return {};
@@ -10897,66 +10776,86 @@ void GatewayServer::HandleFriendRequestAcceptRequest(
         return;
     }
 
-    if (!HasFriendRequestRepository()) {
-        response_body["message"] =
-            "friend request repository "
-            "unavailable";
-
-        response_body["reason"] =
-            "friend_request_service_unavailable";
-
+    if (!HasSocialRpcClient()) {
+        response_body["message"] = "friend request service unavailable";
+        response_body["reason"] = "friend_request_service_unavailable";
         send_response(response_body);
         return;
     }
 
-    const AcceptFriendRequestResult result =
-        friend_request_repository_->
-            AcceptFriendRequest(
-                request_id,
-                self_user_id
-            );
+    const BusinessRequestContext* const business_request =
+        g_business_dispatch_context.request_context;
+    if (business_request == nullptr) {
+        response_body["message"] = "business runtime context unavailable";
+        response_body["reason"] = "business_runtime_unavailable";
+        send_response(response_body);
+        return;
+    }
 
-    const bool changed =
-        result.status ==
-            AcceptFriendRequestStatus::
-                kAccepted;
+    rpc::AcceptFriendRequestRpcRequest rpc_request;
+    rpc_request.request_id = request_id;
+    rpc_request.handler_user_id = self_user_id;
 
-    const bool success =
-        changed ||
-        result.status ==
-            AcceptFriendRequestStatus::
-                kAlreadyAccepted;
+    const std::uint64_t rpc_id =
+        next_internal_rpc_id_.fetch_add(1, std::memory_order_relaxed);
+    rpc::RpcCallOptions call_options;
+    call_options.request_id =
+        options_.gateway_id + ":social:friend-request:accept:req:" +
+        std::to_string(rpc_id);
+    call_options.trace_id =
+        options_.gateway_id + ":friend-request-accept:trace:" +
+        std::to_string(rpc_id) + ":client-seq:" +
+        std::to_string(packet.seq);
+    call_options.caller_service = "gateway";
+    call_options.caller_instance = options_.gateway_id;
+    const auto remaining = business_request->RemainingTime();
+    call_options.remaining_timeout =
+        remaining == std::chrono::milliseconds::max()
+            ? std::chrono::milliseconds{0}
+            : remaining;
 
-    response_body["success"] =
-        success;
-
-    response_body["changed"] =
-        changed;
-
-    response_body["message"] =
-        result.message;
-
-    response_body["reason"] =
-        AcceptFriendRequestStatusToString(
-            result.status
+    const auto rpc_result =
+        social_rpc_client_->AcceptFriendRequest(rpc_request, call_options);
+    if (!rpc_result.ok()) {
+        response_body["message"] =
+            rpc_result.status.message.empty()
+                ? "friend request service request failed"
+                : rpc_result.status.message;
+        response_body["reason"] =
+            rpc_result.attempted
+                ? "friend_request_state_uncertain"
+                : FriendRequestRpcTransportReason(rpc_result.status.code);
+        send_response(response_body);
+        LOG_WARN(
+            "gateway friend request accept RPC failed"
+            << ", handler_user_id=" << self_user_id
+            << ", request_id=" << request_id
+            << ", attempted=" << rpc_result.attempted
+            << ", reason=" << response_body["reason"].get<std::string>()
+            << ", message=" << rpc_result.status.message
         );
+        return;
+    }
+
+    const auto& result = rpc_result.value.value();
+    const bool success = result.Success();
+    const bool changed = result.Changed();
+    response_body["success"] = success;
+    response_body["changed"] = changed;
+    response_body["message"] = result.message;
+    response_body["reason"] =
+        rpc::FriendRequestAcceptRpcOutcomeToReason(result.outcome);
 
     send_response(response_body);
 
     LOG_INFO(
-        "gateway friend request accept handled"
-        << ", handler_user_id="
-        << self_user_id
-        << ", request_id="
-        << request_id
+        "gateway friend request accept handled via SocialService"
+        << ", handler_user_id=" << self_user_id
+        << ", request_id=" << request_id
         << ", status="
-        << AcceptFriendRequestStatusToString(
-               result.status
-           )
-        << ", success="
-        << success
-        << ", changed="
-        << changed
+        << rpc::FriendRequestAcceptRpcOutcomeToReason(result.outcome)
+        << ", success=" << success
+        << ", changed=" << changed
     );
 }
 
@@ -10998,12 +10897,13 @@ void GatewayServer::HandleFriendRequestRejectRequest(
                     [this, connection, packet,
                      dispatch_user_id = dispatch_session->user_id,
                      dispatch_epoch = dispatch_session->epoch](
-                        const BusinessExecutor::ExecutionContext&
+                        const BusinessExecutor::ExecutionContext& context
                     ) -> BusinessExecutor::Completion {
                         ScopedBusinessDispatchContext dispatch_scope(
                             connection,
                             dispatch_user_id,
-                            dispatch_epoch
+                            dispatch_epoch,
+                            &context.Request()
                         );
                         HandleFriendRequestRejectRequest(connection, packet);
                         return {};
@@ -11149,63 +11049,86 @@ void GatewayServer::HandleFriendRequestRejectRequest(
         return;
     }
 
-    if (!HasFriendRequestRepository()) {
-        response_body["message"] =
-            "friend request repository "
-            "unavailable";
-
-        response_body["reason"] =
-            "friend_request_service_unavailable";
-
+    if (!HasSocialRpcClient()) {
+        response_body["message"] = "friend request service unavailable";
+        response_body["reason"] = "friend_request_service_unavailable";
         send_response(response_body);
         return;
     }
 
-    const RejectFriendRequestResult result =
-        friend_request_repository_->
-            RejectFriendRequest(
-                request_id,
-                self_user_id
-            );
+    const BusinessRequestContext* const business_request =
+        g_business_dispatch_context.request_context;
+    if (business_request == nullptr) {
+        response_body["message"] = "business runtime context unavailable";
+        response_body["reason"] = "business_runtime_unavailable";
+        send_response(response_body);
+        return;
+    }
 
-    const bool success =
-        result.RejectedOrAlreadyRejected();
+    rpc::RejectFriendRequestRpcRequest rpc_request;
+    rpc_request.request_id = request_id;
+    rpc_request.handler_user_id = self_user_id;
 
-    const bool changed =
-        result.status ==
-            RejectFriendRequestStatus::
-                kRejected;
+    const std::uint64_t rpc_id =
+        next_internal_rpc_id_.fetch_add(1, std::memory_order_relaxed);
+    rpc::RpcCallOptions call_options;
+    call_options.request_id =
+        options_.gateway_id + ":social:friend-request:reject:req:" +
+        std::to_string(rpc_id);
+    call_options.trace_id =
+        options_.gateway_id + ":friend-request-reject:trace:" +
+        std::to_string(rpc_id) + ":client-seq:" +
+        std::to_string(packet.seq);
+    call_options.caller_service = "gateway";
+    call_options.caller_instance = options_.gateway_id;
+    const auto remaining = business_request->RemainingTime();
+    call_options.remaining_timeout =
+        remaining == std::chrono::milliseconds::max()
+            ? std::chrono::milliseconds{0}
+            : remaining;
 
-    response_body["success"] =
-        success;
-
-    response_body["changed"] =
-        changed;
-
-    response_body["message"] =
-        result.message;
-
-    response_body["reason"] =
-        RejectFriendRequestStatusToString(
-            result.status
+    const auto rpc_result =
+        social_rpc_client_->RejectFriendRequest(rpc_request, call_options);
+    if (!rpc_result.ok()) {
+        response_body["message"] =
+            rpc_result.status.message.empty()
+                ? "friend request service request failed"
+                : rpc_result.status.message;
+        response_body["reason"] =
+            rpc_result.attempted
+                ? "friend_request_state_uncertain"
+                : FriendRequestRpcTransportReason(rpc_result.status.code);
+        send_response(response_body);
+        LOG_WARN(
+            "gateway friend request reject RPC failed"
+            << ", handler_user_id=" << self_user_id
+            << ", request_id=" << request_id
+            << ", attempted=" << rpc_result.attempted
+            << ", reason=" << response_body["reason"].get<std::string>()
+            << ", message=" << rpc_result.status.message
         );
+        return;
+    }
+
+    const auto& result = rpc_result.value.value();
+    const bool success = result.Success();
+    const bool changed = result.Changed();
+    response_body["success"] = success;
+    response_body["changed"] = changed;
+    response_body["message"] = result.message;
+    response_body["reason"] =
+        rpc::FriendRequestRejectRpcOutcomeToReason(result.outcome);
 
     send_response(response_body);
 
     LOG_INFO(
-        "gateway friend request reject handled"
-        << ", handler_user_id="
-        << self_user_id
-        << ", request_id="
-        << request_id
+        "gateway friend request reject handled via SocialService"
+        << ", handler_user_id=" << self_user_id
+        << ", request_id=" << request_id
         << ", status="
-        << RejectFriendRequestStatusToString(
-               result.status
-           )
-        << ", success="
-        << success
-        << ", changed="
-        << changed
+        << rpc::FriendRequestRejectRpcOutcomeToReason(result.outcome)
+        << ", success=" << success
+        << ", changed=" << changed
     );
 }
 
@@ -11773,7 +11696,7 @@ void GatewayServer::HandleHeartbeat(
      * 一次Runtime admission失败不应反向让heartbeat失败。
      */
     if (
-        !HasBusinessExecutor() ||
+        !HasPresenceExecutor() ||
         !HasOnlineStatusCache()
     ) {
         return;
@@ -11794,7 +11717,7 @@ void GatewayServer::HandleHeartbeat(
 
     const BusinessSubmitStatus status =
         SubmitSessionBusinessTask(
-            business_executor_,
+            PresenceExecutor(),
             &session_manager_,
             connection,
             *session_snapshot,
@@ -11988,6 +11911,37 @@ void GatewayServer::RefreshUserOnlineIfMatch(
         return;
     }
 
+    if (result.status ==
+        RefreshOnlineIfMatchStatus::
+            kNotFound) {
+        // A bounded maintenance queue can still miss several refreshes during
+        // a prolonged Redis/outage or reconnect storm. Once the TTL expires,
+        // EXPIRE cannot recreate the key. Self-heal only for the connection
+        // that still owns the current local session; stale/replaced sessions
+        // must never resurrect their presence record.
+        const auto session_snapshot =
+            session_manager_.FindSessionByConnection(connection);
+
+        if (session_snapshot.has_value() &&
+            session_snapshot->user_id == user_id &&
+            session_manager_.IsCurrent(
+                user_id,
+                session_snapshot->epoch,
+                connection
+            )) {
+            LOG_WARN(
+                "gateway restoring missing online status"
+                << ", user_id=" << user_id
+                << ", gateway_id=" << options_.gateway_id
+                << ", connection=" << connection->Name()
+            );
+
+            SetUserOnline(user_id, connection);
+        }
+
+        return;
+    }
+
     LOG_WARN(
         "gateway refresh user online "
         "status failed"
@@ -12010,50 +11964,76 @@ void GatewayServer::PushPersistentOfflineMessages(
     UserId user_id,
     const TcpConnectionPtr& connection
 ) {
-    if (user_id == 0 || !connection || !connection->IsConnected()) {
-        return;
-    }
-    if (!HasMessageRpcClient() || !HasBusinessExecutor()) {
-        LOG_WARN("gateway postponed persistent offline replay: dependency unavailable"
-                 << ", user_id=" << user_id
-                 << ", message_rpc=" << HasMessageRpcClient()
-                 << ", business_runtime=" << HasBusinessExecutor());
-        return;
-    }
-
+    if (user_id == 0 || !connection || !connection->IsConnected()) return;
     const auto session = session_manager_.FindSessionByConnection(connection);
-    if (!session.has_value() || session->user_id != user_id) {
+    if (!session || session->user_id != user_id ||
+        !session_manager_.IsCurrent(user_id, session->epoch, connection)) return;
+
+    // Record responsibility BEFORE checking dependencies / executor admission.
+    private_replay_admission_->Ensure(user_id, session->epoch);
+    if (auto attempt = private_replay_admission_->Claim(user_id, session->epoch))
+        SubmitPrivateReplayAdmissionAttempt(std::move(attempt));
+}
+
+void GatewayServer::PumpPrivateReplayAdmission() {
+    // Timer does short bookkeeping and nonblocking Submit only. Never does RPC.
+    for (auto& attempt : private_replay_admission_->TakeDue(128, 32))
+        SubmitPrivateReplayAdmissionAttempt(std::move(attempt));
+}
+
+void GatewayServer::SubmitPrivateReplayAdmissionAttempt(
+    PrivateReplayAdmission::AttemptPtr attempt
+) {
+    if (!attempt) return;
+    const auto token = attempt->Identity();
+    const auto session = session_manager_.FindSession(token.user_id);
+    if (!session || session->epoch != token.epoch || !session->connection ||
+        !session->connection->IsConnected() ||
+        !session_manager_.IsCurrent(token.user_id, token.epoch, session->connection)) {
+        private_replay_admission_->Retire(token.user_id, token.epoch);
         return;
     }
-
-    const BusinessSubmitStatus status =
-        SubmitSessionBusinessTask(
-            business_executor_,
-            &session_manager_,
-            connection,
-            *session,
-            0,
-            BusinessClock::now(),
-            "gateway.pending_replay",
-            BusinessCancellationPolicy::kCancelable,
-            static_cast<BusinessOrderingKey>(user_id),
-            [this, user_id, connection,
-             dispatch_epoch = session->epoch](
-                const BusinessExecutor::ExecutionContext& context
-            ) -> BusinessExecutor::Completion {
-                ScopedBusinessDispatchContext dispatch_scope(
-                    connection, user_id, dispatch_epoch);
-                ExecutePersistentOfflineReplay(
-                    user_id, connection, context.Request());
+    if (!HasMessageRpcClient() || (!HasBusinessExecutor() && replay_executor_ == nullptr)) {
+        // Last lease destruction below defers the exact intent, not a new queue.
+        return;
+    }
+    const auto connection = session->connection;
+    const auto status = SubmitSessionBusinessTask(
+        replay_executor_ != nullptr ? replay_executor_ : business_executor_,
+        &session_manager_, connection, *session, 0, BusinessClock::now(),
+        "gateway.pending_replay", BusinessCancellationPolicy::kCancelable,
+        static_cast<BusinessOrderingKey>(token.user_id),
+        [this, connection, token, attempt](
+            const BusinessExecutor::ExecutionContext& context
+        ) -> BusinessExecutor::Completion {
+            // Existing TaskSpec cancellation runs first. This exact generation
+            // must still be live. Do not confuse work-start with DB confirmation.
+            if (!session_manager_.IsCurrent(token.user_id, token.epoch, connection)) {
+                private_replay_admission_->Retire(token.user_id, token.epoch);
                 return {};
             }
-        );
-
+            if (!attempt->MarkStarted()) return {};
+            LOG_INFO("gateway private replay admitted work started"
+                     << ", user_id=" << token.user_id
+                     << ", epoch=" << token.epoch
+                     << ", generation=" << token.generation
+                     << ", admission_attempt=" << token.attempt);
+            ScopedBusinessDispatchContext dispatch_scope(
+                connection, token.user_id, token.epoch);
+            ExecutePersistentOfflineReplay(token.user_id, connection, context.Request());
+            return {};
+        });
     if (status != BusinessSubmitStatus::kAccepted) {
         LOG_WARN("gateway persistent offline replay task rejected"
-                 << ", user_id=" << user_id
-                 << ", status=" << BusinessSubmitStatusToString(status));
+                 << ", user_id=" << token.user_id
+                 << ", status=" << BusinessSubmitStatusToString(status)
+                 << ", epoch=" << token.epoch
+                 << ", generation=" << token.generation
+                 << ", admission_attempt=" << token.attempt
+                 << ", retained_for_retry=1");
     }
+    // A rejected or never-started TaskSpec releases its shared attempt lease.
+    // Its destructor re-arms the same generation with capped backoff + jitter.
 }
 
 void GatewayServer::PushGroupOfflineMessages(
@@ -12063,11 +12043,12 @@ void GatewayServer::PushGroupOfflineMessages(
     if (user_id == 0 || !connection || !connection->IsConnected()) {
         return;
     }
-    if (!HasMessageRpcClient() || !HasBusinessExecutor()) {
+    if (!HasMessageRpcClient() || (!HasBusinessExecutor() && replay_executor_ == nullptr)) {
         LOG_WARN("gateway postponed group offline replay: dependency unavailable"
                  << ", user_id=" << user_id
                  << ", message_rpc=" << HasMessageRpcClient()
-                 << ", business_runtime=" << HasBusinessExecutor());
+                 << ", business_runtime=" << HasBusinessExecutor()
+                 << ", replay_runtime=" << (replay_executor_ != nullptr));
         return;
     }
 
@@ -12077,7 +12058,7 @@ void GatewayServer::PushGroupOfflineMessages(
     }
 
     const BusinessSubmitStatus status = SubmitSessionBusinessTask(
-        business_executor_,
+        replay_executor_ != nullptr ? replay_executor_ : business_executor_,
         &session_manager_,
         connection,
         *session,

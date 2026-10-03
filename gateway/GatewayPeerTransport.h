@@ -93,10 +93,7 @@ struct GatewayPeerTransportOptions {
 };
 
 
-class GatewayPeerTransport
-    : public std::enable_shared_from_this<
-          GatewayPeerTransport
-      > {
+class GatewayPeerTransport: public std::enable_shared_from_this<GatewayPeerTransport> {
 public:
     using ForwardChatCallback =
         std::function<void(

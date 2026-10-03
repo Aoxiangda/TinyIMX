@@ -5,6 +5,7 @@ foreach(required_target IN ITEMS
     tinyimx_rpc_client
     tinyimx_repository
     tinyimx_service_registry
+    tinyimx_concurrency
 )
   if(NOT TARGET ${required_target})
     message(FATAL_ERROR
@@ -42,6 +43,7 @@ target_compile_features(tinyimx_user_grpc PUBLIC cxx_std_20)
 target_link_libraries(tinyimx_user_grpc PUBLIC
   tinyimx_user_core
   tinyimx_rpc_proto
+  tinyimx_concurrency
   gRPC::grpc++
 )
 

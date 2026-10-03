@@ -302,7 +302,7 @@ int main(int argc, char* argv[]) {
         );
         if (!zookeeper_registrar->Start(
                 std::chrono::milliseconds(
-                    config.ZooKeeper().connect_timeout_ms
+                    config.ZooKeeper().registration_timeout_ms
                 )
             )) {
             LOG_ERROR(

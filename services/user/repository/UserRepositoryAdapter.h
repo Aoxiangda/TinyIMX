@@ -25,6 +25,10 @@ public:
         std::uint64_t user_id
     ) override;
 
+    [[nodiscard]] bool RecordSuccessfulLogin(
+        std::uint64_t user_id
+    ) override;
+
 private:
     [[nodiscard]] static UserProfileView ToProfile(
         const tinyimx::UserRecord& user

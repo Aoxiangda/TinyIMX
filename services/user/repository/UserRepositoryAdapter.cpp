@@ -87,6 +87,17 @@ UserRepositoryAdapter::Authenticate(
     return output;
 }
 
+bool UserRepositoryAdapter::RecordSuccessfulLogin(
+    std::uint64_t user_id
+) {
+    if (repository_ == nullptr || user_id == 0) {
+        return false;
+    }
+
+    const auto result = repository_->UpdateLastLogin(user_id);
+    return result.Succeeded();
+}
+
 UserProfileRepositoryResult
 UserRepositoryAdapter::GetProfile(
     std::uint64_t user_id

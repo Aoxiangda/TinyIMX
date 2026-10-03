@@ -92,7 +92,7 @@ int main(int argc, char* argv[]) {
         if (!zk_client->Start(config.ZooKeeper())) { LOG_ERROR("FileService ZooKeeper connect failed" << ", error=" << zk_client->LastError()); server.Shutdown(); server.Wait(); pool.Shutdown(); return 1; }
         registrar = std::make_unique<tinyimx::registry::zookeeper::ZooKeeperServiceRegistrar>(
             zk_client.get(), std::move(instance), config.ZooKeeper().service_root);
-        if (!registrar->Start(std::chrono::milliseconds(config.ZooKeeper().connect_timeout_ms))) {
+        if (!registrar->Start(std::chrono::milliseconds(config.ZooKeeper().registration_timeout_ms))) {
             LOG_ERROR("FileService ZooKeeper registration failed" << ", error=" << registrar->LastError());
             registrar->Stop(); zk_client->Stop(); server.Shutdown(); server.Wait(); pool.Shutdown(); return 1;
         }

@@ -171,7 +171,7 @@ int main(int argc, char* argv[]) {
             config.ZooKeeper().service_root
         );
         if (!zookeeper_registrar->Start(
-                std::chrono::milliseconds(config.ZooKeeper().connect_timeout_ms))) {
+                std::chrono::milliseconds(config.ZooKeeper().registration_timeout_ms))) {
             LOG_ERROR("GroupService ZooKeeper registration failed" << ", error=" << zookeeper_registrar->LastError());
             zookeeper_registrar->Stop();
             zookeeper_client->Stop();

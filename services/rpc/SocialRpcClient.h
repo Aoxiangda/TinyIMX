@@ -22,8 +22,7 @@ namespace tinyimx::rpc {
 class SocialRpcClient {
 public:
     explicit SocialRpcClient(
-        std::shared_ptr<const ServiceEndpointProvider>
-            endpoint_provider
+        std::shared_ptr<const ServiceEndpointProvider> endpoint_provider
     );
 
     SocialRpcClient(const SocialRpcClient&) = delete;
@@ -34,9 +33,33 @@ public:
         const RpcCallOptions& options
     ) const;
 
-    // M15-B acceptance introspection. These do not perform network I/O and
-    // are intentionally read-only so tests can prove multi-target reuse and
-    // bounded cache growth.
+    [[nodiscard]] RpcResult<CheckPrivateChatPermissionRpcResponse>
+    CheckPrivateChatPermission(
+        const CheckPrivateChatPermissionRpcRequest& request,
+        const RpcCallOptions& options
+    ) const;
+
+    [[nodiscard]] CreateFriendRequestRpcCallResult CreateFriendRequest(
+        const CreateFriendRequestRpcRequest& request,
+        const RpcCallOptions& options
+    ) const;
+
+    [[nodiscard]] RpcResult<ListPendingIncomingFriendRequestsRpcResponse>
+    ListPendingIncomingFriendRequests(
+        const ListPendingIncomingFriendRequestsRpcRequest& request,
+        const RpcCallOptions& options
+    ) const;
+
+    [[nodiscard]] AcceptFriendRequestRpcCallResult AcceptFriendRequest(
+        const AcceptFriendRequestRpcRequest& request,
+        const RpcCallOptions& options
+    ) const;
+
+    [[nodiscard]] RejectFriendRequestRpcCallResult RejectFriendRequest(
+        const RejectFriendRequestRpcRequest& request,
+        const RpcCallOptions& options
+    ) const;
+
     [[nodiscard]] std::size_t CachedTargetCountForTest() const;
     [[nodiscard]] std::uint64_t StubCreationCountForTest() const;
 
@@ -45,17 +68,14 @@ private:
         tinyimx::social::v1::SocialService::StubInterface;
 
     [[nodiscard]] std::shared_ptr<SocialStubInterface>
-    GetOrCreateStub(
-        const ServiceEndpoint& endpoint
-    ) const;
+    GetOrCreateStub(const ServiceEndpoint& endpoint) const;
 
     [[nodiscard]] static RpcStatus MapGrpcStatus(
         const grpc::Status& status
     );
 
 private:
-    const std::shared_ptr<const ServiceEndpointProvider>
-        endpoint_provider_;
+    const std::shared_ptr<const ServiceEndpointProvider> endpoint_provider_;
 
     struct CachedStubEntry {
         std::shared_ptr<grpc::Channel> channel;
@@ -65,7 +85,6 @@ private:
 
     static constexpr std::size_t kMaxCachedTargets = 16;
 
-    // Protects cache lookup/replacement only. Never held during a network RPC.
     mutable std::mutex cache_mutex_;
     mutable std::unordered_map<std::string, CachedStubEntry> stub_cache_;
     mutable std::uint64_t cache_use_sequence_{0};

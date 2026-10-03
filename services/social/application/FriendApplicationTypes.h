@@ -13,6 +13,26 @@ enum class FriendApplicationStatus {
     kStorageError,
 };
 
+enum class ChatPermissionApplicationStatus {
+    kAllowed = 0,
+    kInvalidArgument,
+    kNotFriend,
+    kBlockedBySelf,
+    kBlockedByPeer,
+    kStorageError,
+};
+
+struct ChatPermissionApplicationResult {
+    ChatPermissionApplicationStatus status{
+        ChatPermissionApplicationStatus::kStorageError
+    };
+    std::string message;
+
+    [[nodiscard]] bool Allowed() const noexcept {
+        return status == ChatPermissionApplicationStatus::kAllowed;
+    }
+};
+
 struct FriendView {
     std::uint64_t friend_user_id{0};
     std::string username;

@@ -4,13 +4,16 @@
 #include "services/user/application/UserApplicationService.h"
 #include "services/user/server/UserServiceServer.h"
 #include "services/user/service/UserServiceImpl.h"
+#include "common/concurrency/ThreadPool.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -64,6 +67,14 @@ public:
         return result;
     }
 
+    bool RecordSuccessfulLogin(
+        std::uint64_t user_id
+    ) override {
+        record_successful_login_calls.fetch_add(1, std::memory_order_relaxed);
+        last_recorded_user_id.store(user_id, std::memory_order_relaxed);
+        return record_successful_login_result;
+    }
+
     static tinyimx::user::UserProfileView MakeProfile(
         std::uint64_t user_id,
         const std::string& username
@@ -82,6 +93,10 @@ public:
     std::string last_username;
     std::string last_password;
     std::uint64_t last_user_id{0};
+
+    bool record_successful_login_result{true};
+    std::atomic<std::size_t> record_successful_login_calls{0};
+    std::atomic<std::uint64_t> last_recorded_user_id{0};
 };
 
 bool Expect(bool condition, const char* name) {
@@ -96,11 +111,31 @@ bool Expect(bool condition, const char* name) {
 
 bool TestRealGrpcUserService() {
     FakeUserRepositoryPort repository;
+    repository.record_successful_login_result = false;
     tinyimx::user::UserApplicationService application(&repository);
-    tinyimx::user::UserServiceImpl service_impl(&application);
+
+    tinyimx::ThreadPoolOptions metadata_options;
+    metadata_options.name = "user-service-test-metadata";
+    metadata_options.worker_threads = 1;
+    metadata_options.queue_capacity = 8;
+    metadata_options.queue_full_policy = tinyimx::QueueFullPolicy::kDiscard;
+    metadata_options.enable_dynamic_resize = false;
+    tinyimx::ThreadPool metadata_executor(metadata_options);
+    if (!metadata_executor.Start()) {
+        return Expect(false, "UserService.MetadataExecutorStart");
+    }
+
+    tinyimx::user::UserServiceImpl service_impl(
+        &application,
+        &metadata_executor
+    );
     tinyimx::user::UserServiceServer server(&service_impl);
 
     if (!server.Start("127.0.0.1:0")) {
+        metadata_executor.Shutdown(
+            tinyimx::ShutdownMode::kGraceful,
+            std::chrono::milliseconds(1000)
+        );
         return Expect(false, "UserService.RealGrpcServerStart");
     }
 
@@ -133,6 +168,22 @@ bool TestRealGrpcUserService() {
             "UserService.RealGrpcAuthenticateSuccess"
         );
 
+    for (int i = 0;
+         i < 100 &&
+         repository.record_successful_login_calls.load(std::memory_order_relaxed) == 0;
+         ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    ok = Expect(
+        repository.record_successful_login_calls.load(std::memory_order_relaxed) == 1 &&
+        repository.last_recorded_user_id.load(std::memory_order_relaxed) == 10001,
+        "UserService.LastLoginMetadataBestEffort"
+    ) && ok;
+
+    // Metadata persistence failure is explicitly non-authoritative: the RPC
+    // above must still authenticate successfully even though the fake returns
+    // false from RecordSuccessfulLogin().
     auth_request.password = "wrong";
     const auto wrong_result =
         client.Authenticate(auth_request, options);
@@ -143,6 +194,12 @@ bool TestRealGrpcUserService() {
         wrong_result.value->outcome ==
             tinyimx::rpc::AuthenticateRpcOutcome::kWrongPassword,
         "UserService.AuthenticationOutcomeMapping"
+    ) && ok;
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    ok = Expect(
+        repository.record_successful_login_calls.load(std::memory_order_relaxed) == 1,
+        "UserService.WrongPasswordSkipsLastLoginMetadata"
     ) && ok;
 
     tinyimx::rpc::GetUserProfileRpcRequest profile_request;
@@ -178,6 +235,10 @@ bool TestRealGrpcUserService() {
 
     server.Shutdown();
     server.Wait();
+    metadata_executor.Shutdown(
+        tinyimx::ShutdownMode::kGraceful,
+        std::chrono::milliseconds(1000)
+    );
     return ok;
 }
 

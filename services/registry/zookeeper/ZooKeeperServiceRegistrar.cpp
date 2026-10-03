@@ -178,15 +178,27 @@ bool ZooKeeperServiceRegistrar::RegisterWithin(
             return true;
         }
 
-        if (result == ReconcileResult::kOwnershipConflict ||
-            result == ReconcileResult::kFatal) {
+        if (result == ReconcileResult::kOwnershipConflict) {
+            // Never delete or overwrite a node owned by another session.
+            // A replacement process may observe the previous process'
+            // ephemeral node until ZooKeeper expires that old session, so
+            // wait within the caller's bounded registration budget and retry.
+            std::this_thread::sleep_for(kReconcileInterval);
+            continue;
+        }
+        if (result == ReconcileResult::kFatal) {
             return false;
         }
 
         std::this_thread::sleep_for(kReconcileInterval);
     }
 
-    SetError("service registration confirmation timeout");
+    const std::string last_error = LastError();
+    if (last_error.find(
+            "registration path is owned by another ZooKeeper session"
+        ) == std::string::npos) {
+        SetError("service registration confirmation timeout");
+    }
     return false;
 }
 

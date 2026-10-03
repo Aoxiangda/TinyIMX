@@ -16,6 +16,33 @@ FriendApplicationService::FriendApplicationService(
     : repository_(repository) {
 }
 
+ChatPermissionApplicationResult
+FriendApplicationService::CheckPrivateChatPermission(
+    std::uint64_t from_user_id,
+    std::uint64_t to_user_id
+) {
+    if (from_user_id == 0 ||
+        to_user_id == 0 ||
+        from_user_id == to_user_id) {
+        return {
+            ChatPermissionApplicationStatus::kInvalidArgument,
+            "invalid private chat permission request"
+        };
+    }
+
+    if (repository_ == nullptr) {
+        return {
+            ChatPermissionApplicationStatus::kStorageError,
+            "friend repository port is unavailable"
+        };
+    }
+
+    return repository_->CheckPrivateChatPermission(
+        from_user_id,
+        to_user_id
+    );
+}
+
 ListFriendsApplicationResult
 FriendApplicationService::ListFriends(
     std::uint64_t actor_user_id,
@@ -41,8 +68,6 @@ FriendApplicationService::ListFriends(
         return result;
     }
 
-    // Query one extra row so has_more is determined without exposing
-    // repository implementation details to the RPC transport layer.
     const std::size_t query_limit =
         static_cast<std::size_t>(limit) + 1U;
 

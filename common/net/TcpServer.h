@@ -25,7 +25,8 @@ public:
         EventLoop* loop,
         const InetAddress& listen_address,
         std::string name,
-        std::size_t io_thread_count = 0
+        std::size_t io_thread_count = 0,
+        int listen_backlog = 128
     );
 
     ~TcpServer();
@@ -60,6 +61,10 @@ public:
     ListenAddress() const;
 
     std::size_t ConnectionCount() const;
+    std::size_t PeakConnectionCount() const;
+    std::uint64_t AcceptedTotal() const;
+    std::uint64_t ClosedTotal() const;
+    int ListenBacklog() const;
 
     bool IsStarted() const;
 
@@ -87,6 +92,7 @@ private:
     const InetAddress listen_address_;
 
     const std::size_t io_thread_count_{0};
+    const int listen_backlog_{128};
 
     std::unique_ptr<EventLoopThreadPool>
         thread_pool_;
@@ -101,6 +107,12 @@ private:
 
     std::atomic<std::size_t>
         connection_count_{0};
+    std::atomic<std::size_t>
+        peak_connection_count_{0};
+    std::atomic<std::uint64_t>
+        accepted_total_{0};
+    std::atomic<std::uint64_t>
+        closed_total_{0};
 
     std::uint64_t
         next_connection_id_{0};

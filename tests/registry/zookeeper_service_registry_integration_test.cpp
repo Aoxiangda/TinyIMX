@@ -144,9 +144,20 @@ int main(int argc, char* argv[]) {
         instance,
         root
     );
+    const auto conflict_started = std::chrono::steady_clock::now();
+    const bool conflict_result =
+        conflicting.Start(std::chrono::milliseconds(1500));
+    const auto conflict_elapsed =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - conflict_started
+        );
     if (!Expect(
-            !conflicting.Start(std::chrono::milliseconds(1500)),
+            !conflict_result,
             "different session cannot steal deterministic path"
+        ) ||
+        !Expect(
+            conflict_elapsed >= std::chrono::milliseconds(1000),
+            "ownership conflict waits within bounded registration window"
         ) ||
         !Expect(
             conflicting.LastError().find("another ZooKeeper session") !=
@@ -160,26 +171,31 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    registrar.Stop();
-    if (!Expect(
-            contender.GetNode(path, &node) == OperationStatus::kNoNode,
-            "graceful unregister removes owned znode"
-        )) {
-        contender.Stop();
-        owner.Stop();
-        return 1;
-    }
-
     ZooKeeperServiceRegistrar takeover(
         &contender,
         instance,
         root
     );
+    bool takeover_result = false;
+    std::thread takeover_thread([&]() {
+        takeover_result =
+            takeover.Start(std::chrono::milliseconds(4000));
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    registrar.Stop();
+    takeover_thread.join();
+
     if (!Expect(
-            takeover.Start(std::chrono::milliseconds(3000)),
-            "replacement session registers after owner release"
+            takeover_result,
+            "replacement session waits for owner release then registers"
+        ) ||
+        !Expect(
+            contender.GetNode(path, &node) == OperationStatus::kOk &&
+                node.ephemeral_owner == contender.SessionId(),
+            "replacement session owns deterministic path after handoff"
         )) {
         std::cerr << "error=" << takeover.LastError() << '\n';
+        takeover.Stop();
         contender.Stop();
         owner.Stop();
         return 1;

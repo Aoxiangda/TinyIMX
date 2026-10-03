@@ -28,6 +28,14 @@ public:
         return profile_result;
     }
 
+    bool RecordSuccessfulLogin(
+        std::uint64_t user_id
+    ) override {
+        ++record_successful_login_calls;
+        last_recorded_user_id = user_id;
+        return record_successful_login_result;
+    }
+
     std::size_t authenticate_calls{0};
     std::size_t profile_calls{0};
     std::string last_username;
@@ -35,6 +43,10 @@ public:
     std::uint64_t last_user_id{0};
     tinyimx::user::AuthenticateRepositoryResult authenticate_result;
     tinyimx::user::UserProfileRepositoryResult profile_result;
+
+    bool record_successful_login_result{true};
+    std::size_t record_successful_login_calls{0};
+    std::uint64_t last_recorded_user_id{0};
 };
 
 bool Expect(bool condition, const char* name) {
@@ -142,6 +154,22 @@ bool TestStorageFailurePropagation() {
     );
 }
 
+bool TestRecordSuccessfulLogin() {
+    FakeUserRepositoryPort repository;
+    tinyimx::user::UserApplicationService service(&repository);
+
+    const bool ok = service.RecordSuccessfulLogin(10001);
+    const bool invalid = service.RecordSuccessfulLogin(0);
+
+    return Expect(
+        ok &&
+        !invalid &&
+        repository.record_successful_login_calls == 1 &&
+        repository.last_recorded_user_id == 10001,
+        "UserApplication.RecordSuccessfulLogin"
+    );
+}
+
 bool TestGetUserProfile() {
     FakeUserRepositoryPort repository;
     repository.profile_result.status =
@@ -172,10 +200,11 @@ int main() {
     failed += TestAuthenticateBusinessRejection() ? 0 : 1;
     failed += TestStorageFailurePropagation() ? 0 : 1;
     failed += TestGetUserProfile() ? 0 : 1;
+    failed += TestRecordSuccessfulLogin() ? 0 : 1;
 
     std::cout
         << "===========================================================\n"
-        << "total = 5, failed = " << failed << '\n';
+        << "total = 6, failed = " << failed << '\n';
 
     return failed == 0 ? 0 : 1;
 }

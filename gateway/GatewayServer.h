@@ -8,7 +8,8 @@
 #include "gateway/OfflineMessageStore.h"
 #include "gateway/MessageDeliveryDeduplicator.h"
 #include "gateway/ReceiverDeliveryTracker.h"
-#include "services/repository/FriendRepository.h"
+#include "gateway/PrivateReplayAdmission.h"
+#include "common/net/TimerId.h"
 
 #include <atomic>
 #include <cstddef>
@@ -18,8 +19,6 @@
 #include <chrono>
 
 namespace tinyimx {
-
-class FriendRequestRepository;
 
 class OnlineStatusCache;
 class UnreadCountCache;
@@ -70,6 +69,8 @@ struct GatewayServerOptions {
     bool close_on_decode_error{true};
 
     std::size_t io_thread_count{0};
+
+    int listen_backlog{128};
 
     std::size_t
         max_offline_messages_per_user{
@@ -173,6 +174,8 @@ public:
 
     bool Start();
     void Stop();
+    // Stop timer admission before bootstrap drains accepted business work.
+    void StopPrivateReplayAdmission();
 
     void SetPacketHandler(PacketHandler handler);
 
@@ -202,15 +205,25 @@ public:
     * Repository / Cache等业务依赖仍然存活。
     */
     void SetBusinessExecutor(BusinessExecutor* business_executor);
+
+    // Private-message work has its own bounded bulkhead so synchronous RPC
+    // waits cannot consume Login/control-plane workers. Non-owning.
+    void SetMessageExecutor(BusinessExecutor* message_executor);
+
+    // Presence/online-status maintenance is isolated from Login/control work.
+    // Heartbeat refresh and disconnect cleanup are Redis-heavy but must not be
+    // dropped merely because a reconnect/auth storm saturates foreground work.
+    // Non-owning, bootstrap-owned; falls back to business_executor_ for tests.
+    void SetPresenceExecutor(BusinessExecutor* presence_executor);
+
+    // Background durable replay is throughput-oriented and must not compete
+    // with latency-sensitive Login/Chat work. Non-owning, bootstrap-owned.
+    void SetReplayExecutor(BusinessExecutor* replay_executor);
     void SetSocialRpcClient(rpc::SocialRpcClient* social_rpc_client);
     void SetUserRpcClient(rpc::UserRpcClient* user_rpc_client);
     void SetMessageRpcClient(rpc::MessageRpcClient* message_rpc_client);
     void SetGroupRpcClient(rpc::GroupRpcClient* group_rpc_client);
     void SetFileRpcClient(rpc::FileRpcClient* file_rpc_client);
-    void SetFriendRepository(FriendRepository* repository);
-    void SetFriendRequestRepository(
-        FriendRequestRepository* repository
-    );
 
     void SetOnlineStatusCache(OnlineStatusCache* online_status_cache);
     void SetGatewayRouteResolver(GatewayRouteResolver* route_resolver);
@@ -601,6 +614,10 @@ private:
     void PushOfflineMessages(UserId user_id,
                          const TcpConnectionPtr& connection);
 
+    void PumpPrivateReplayAdmission();
+    void SubmitPrivateReplayAdmissionAttempt(
+        PrivateReplayAdmission::AttemptPtr attempt);
+
     void PushPersistentOfflineMessages(UserId user_id,
                                    const TcpConnectionPtr& connection);
     void ExecutePersistentOfflineReplay(
@@ -624,13 +641,15 @@ private:
     );
 
     bool HasBusinessExecutor() const;
+    bool HasMessageExecutor() const;
+    bool HasPresenceExecutor() const;
+    BusinessExecutor* MessageExecutor() const;
+    BusinessExecutor* PresenceExecutor() const;
     bool HasSocialRpcClient() const;
     bool HasUserRpcClient() const;
     bool HasMessageRpcClient() const;
     bool HasGroupRpcClient() const;
     bool HasFileRpcClient() const;
-    bool HasFriendRepository() const;
-    bool HasFriendRequestRepository() const;
 
     bool HasOnlineStatusCache() const;
     bool HasGatewayRouteResolver() const;
@@ -732,6 +751,25 @@ private:
     */
     BusinessExecutor* business_executor_{nullptr};
 
+    // Optional isolated executor for latency-sensitive private-message work.
+    // Falls back to business_executor_ for tests/legacy bootstrap paths.
+    BusinessExecutor* message_executor_{nullptr};
+
+    // Optional isolated executor for Redis presence maintenance. Heartbeat
+    // refresh and disconnect cleanup use this bulkhead so a reconnect/login
+    // storm cannot starve online-state convergence. Falls back to foreground.
+    BusinessExecutor* presence_executor_{nullptr};
+
+    // Optional isolated executor for offline/group replay. Falls back to the
+    // foreground executor when not configured so tests/legacy demos preserve
+    // their behavior.
+    BusinessExecutor* replay_executor_{nullptr};
+
+    struct PrivateReplayTimerFence;
+    std::shared_ptr<PrivateReplayAdmission> private_replay_admission_;
+    std::shared_ptr<PrivateReplayTimerFence> private_replay_timer_fence_;
+    TimerId private_replay_timer_;
+
     /*
     * M14-A3 internal RPC dependency. Non-owning.
     * Bootstrap owns SocialRpcClient and must keep it alive until the
@@ -764,8 +802,6 @@ private:
     std::atomic<std::uint64_t>
         next_internal_rpc_id_{1};
 
-    FriendRepository* friend_repository_{nullptr};
-    FriendRequestRepository* friend_request_repository_{nullptr};
 
     OnlineStatusCache* online_status_cache_{nullptr};
     GatewayRouteResolver* gateway_route_resolver_{nullptr};

@@ -7,8 +7,11 @@
 #include "services/registry/zookeeper/ZooKeeperClient.h"
 #include "services/registry/zookeeper/ZooKeeperServiceRegistrar.h"
 #include "services/repository/FriendRepository.h"
+#include "services/repository/FriendRequestRepository.h"
 #include "services/social/application/FriendApplicationService.h"
+#include "services/social/application/FriendRequestApplicationService.h"
 #include "services/social/repository/FriendRepositoryAdapter.h"
+#include "services/social/repository/FriendRequestRepositoryAdapter.h"
 #include "services/social/server/SocialServiceServer.h"
 #include "services/social/service/SocialServiceImpl.h"
 
@@ -130,15 +133,26 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    tinyimx::FriendRepository repository(&mysql_pool);
-    tinyimx::social::FriendRepositoryAdapter repository_adapter(
-        &repository
+    tinyimx::FriendRepository friend_repository(&mysql_pool);
+    tinyimx::FriendRequestRepository friend_request_repository(&mysql_pool);
+
+    tinyimx::social::FriendRepositoryAdapter friend_repository_adapter(
+        &friend_repository
     );
-    tinyimx::social::FriendApplicationService application_service(
-        &repository_adapter
+    tinyimx::social::FriendRequestRepositoryAdapter friend_request_repository_adapter(
+        &friend_request_repository
     );
+
+    tinyimx::social::FriendApplicationService friend_application_service(
+        &friend_repository_adapter
+    );
+    tinyimx::social::FriendRequestApplicationService friend_request_application_service(
+        &friend_request_repository_adapter
+    );
+
     tinyimx::social::SocialServiceImpl service_impl(
-        &application_service
+        &friend_application_service,
+        &friend_request_application_service
     );
     tinyimx::social::SocialServiceServer server(&service_impl);
 
@@ -209,7 +223,7 @@ int main(int argc, char* argv[]) {
         );
         if (!zookeeper_registrar->Start(
                 std::chrono::milliseconds(
-                    config.ZooKeeper().connect_timeout_ms
+                    config.ZooKeeper().registration_timeout_ms
                 )
             )) {
             LOG_ERROR(

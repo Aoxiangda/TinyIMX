@@ -158,6 +158,7 @@ struct ZooKeeperConfig {
     std::string connect_string{"127.0.0.1:2181"};
     int session_timeout_ms{10000};
     int connect_timeout_ms{5000};
+    int registration_timeout_ms{15000};
     std::string service_root{"/tinyimx/services"};
     std::string advertise_host{"127.0.0.1"};
     std::string service_version{"v1"};

@@ -23,6 +23,12 @@ public:
     [[nodiscard]] virtual UserProfileRepositoryResult GetProfile(
         std::uint64_t user_id
     ) = 0;
+
+    // Best-effort metadata update. Authentication correctness must never
+    // depend on this path succeeding.
+    [[nodiscard]] virtual bool RecordSuccessfulLogin(
+        std::uint64_t user_id
+    ) = 0;
 };
 
 }  // namespace tinyimx::user

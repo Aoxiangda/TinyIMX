@@ -365,6 +365,25 @@ bool WaitForServerShutdown(
 }  // namespace
 
 void RegisterTcpServerTests(TestRunner& runner) {
+    runner.Add("TcpServer.ConfiguredListenBacklog", []() {
+        EventLoop loop;
+        TINYIMX_EXPECT_TRUE(loop.IsValid());
+        TcpServer server(
+            &loop,
+            InetAddress("127.0.0.1", 19998),
+            "net-test-backlog",
+            0,
+            4096
+        );
+        TINYIMX_EXPECT_EQ(server.ListenBacklog(), 4096);
+        TINYIMX_EXPECT_EQ(
+            server.PeakConnectionCount(),
+            static_cast<std::size_t>(0)
+        );
+        TINYIMX_EXPECT_EQ(server.AcceptedTotal(), static_cast<std::uint64_t>(0));
+        TINYIMX_EXPECT_EQ(server.ClosedTotal(), static_cast<std::uint64_t>(0));
+    });
+
     runner.Add("TcpServer.EchoOneClient", []() {
         constexpr std::uint16_t kTestPort =
             19000;
@@ -1501,6 +1520,19 @@ runner.Add(
         TINYIMX_EXPECT_EQ(
             final_count_before_stop,
             static_cast<std::size_t>(0)
+        );
+
+        TINYIMX_EXPECT_EQ(
+            server.PeakConnectionCount(),
+            static_cast<std::size_t>(1)
+        );
+        TINYIMX_EXPECT_EQ(
+            server.AcceptedTotal(),
+            static_cast<std::uint64_t>(1)
+        );
+        TINYIMX_EXPECT_EQ(
+            server.ClosedTotal(),
+            static_cast<std::uint64_t>(1)
         );
     }
 );

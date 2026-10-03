@@ -133,6 +133,21 @@ add_test(
     COMMAND social_rpc_client_tests
 )
 
+add_executable(social_ownership_rpc_tests
+    tests/rpc/social_ownership_rpc_test.cpp
+)
+
+target_compile_features(social_ownership_rpc_tests PRIVATE cxx_std_20)
+
+target_link_libraries(social_ownership_rpc_tests PRIVATE
+    tinyimx_rpc_client
+)
+
+add_test(
+    NAME social_ownership_rpc_tests
+    COMMAND social_ownership_rpc_tests
+)
+
 add_executable(group_rpc_client_tests
     tests/rpc/group_rpc_client_test.cpp
 )
@@ -381,6 +396,34 @@ target_link_libraries(tinyimx_protocol PUBLIC
     nlohmann_json::nlohmann_json
 )
 
+# M21 enterprise performance: event-driven real IM load generator.
+add_executable(tinyimx_im_loadgen
+    benchmark/tinyimx_im_loadgen.cpp
+)
+
+target_compile_features(tinyimx_im_loadgen PRIVATE
+    cxx_std_20
+)
+
+target_link_libraries(tinyimx_im_loadgen PRIVATE
+    tinyimx_protocol
+    nlohmann_json::nlohmann_json
+)
+
+# Final Capstone: failover-aware reconnect/re-auth load generator.
+add_executable(tinyimx_failover_loadgen
+    benchmark/tinyimx_failover_loadgen.cpp
+)
+
+target_compile_features(tinyimx_failover_loadgen PRIVATE
+    cxx_std_20
+)
+
+target_link_libraries(tinyimx_failover_loadgen PRIVATE
+    tinyimx_protocol
+    nlohmann_json::nlohmann_json
+)
+
 add_executable(protocol_codec_demo
     examples/protocol_codec_demo.cpp
 )
@@ -449,6 +492,7 @@ add_library(tinyimx_gateway
     gateway/GroupFanoutCoordinator.cpp
     gateway/MessageDeliveryDeduplicator.cpp
     gateway/ReceiverDeliveryTracker.cpp
+    gateway/PrivateReplayAdmission.cpp
 )
 
 target_include_directories(tinyimx_gateway PUBLIC
@@ -758,7 +802,6 @@ target_link_libraries(tinyimx_gateway PUBLIC
     tinyimx_logging
     tinyimx_net
     tinyimx_protocol
-    tinyimx_repository
     tinyimx_cache_service
     tinyimx_concurrency
     nlohmann_json::nlohmann_json
@@ -768,8 +811,6 @@ target_link_libraries(gateway_demo PRIVATE
     tinyimx_config
     tinyimx_logging
     tinyimx_gateway
-    tinyimx_db
-    tinyimx_repository
     tinyimx_cache
     tinyimx_cache_service
 )
@@ -1454,3 +1495,21 @@ include(
 include(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXObservability.cmake"
 )
+
+# P1-B R1 focused admission regression (no fault injection / no 10k).
+add_executable(private_replay_admission_tests
+    tests/gateway/private_replay_admission_test.cpp)
+target_link_libraries(private_replay_admission_tests PRIVATE tinyimx_gateway)
+target_include_directories(private_replay_admission_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME private_replay_admission_tests COMMAND private_replay_admission_tests)
+
+# BEGIN P1B SMALL E2E TEST ONLY
+include("${CMAKE_CURRENT_SOURCE_DIR}/tests/p1b_small_e2e/fixture.cmake")
+# END P1B SMALL E2E TEST ONLY
+
+# Local capacity test target; original production targets unchanged.
+include("${CMAKE_CURRENT_SOURCE_DIR}/benchmark/local_capacity/LocalCapacity.cmake")
+
+# BEGIN TINYIMX_R2A_PRIVATE_CHAT_ACK
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/TinyIMXPrivateChatAckBoundary.cmake")
+# END TINYIMX_R2A_PRIVATE_CHAT_ACK

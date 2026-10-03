@@ -21,8 +21,34 @@ namespace tinyimx::test {
             TINYIMX_EXPECT_EQ(address.Port(), static_cast<uint16_t>(9000));
         });
 
-        runner.Add("InetAddress.InvalidAddress", []() {
-            InetAddress address("invalid-ip", 9000);
+
+    runner.Add(
+        "InetAddress.HostnameAddress",
+        []() {
+            InetAddress address(
+                "localhost",
+                19000
+            );
+
+            TINYIMX_EXPECT_TRUE(
+                address.IsValid()
+            );
+
+            TINYIMX_EXPECT_EQ(
+                address.Port(),
+                static_cast<std::uint16_t>(
+                    19000
+                )
+            );
+
+            TINYIMX_EXPECT_TRUE(
+                !address.Ip().empty()
+            );
+        }
+    );
+
+runner.Add("InetAddress.InvalidAddress", []() {
+            InetAddress address("not a valid host name", 9000);
 
             TINYIMX_EXPECT_TRUE(!address.IsValid());
         });

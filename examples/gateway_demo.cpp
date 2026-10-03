@@ -1,16 +1,14 @@
 #include "common/config/Config.h"
 #include "common/logging/Logger.h"
 #include "common/logging/LogMacros.h"
+#include "common/observability/ProcessTelemetry.h"
 #include "common/net/EventLoop.h"
 #include "gateway/business/BusinessExecutor.h"
 #include "common/net/InetAddress.h"
 #include "gateway/GatewayServer.h"
-#include "common/db/MySqlConnectionPool.h"
 #include "common/cache/RedisConnectionPool.h"
 #include "services/cache/OnlineStatusCache.h"
 #include "services/cache/UnreadCountCache.h"
-#include "services/repository/FriendRepository.h"
-#include "services/repository/FriendRequestRepository.h"
 #include "services/registry/GatewayRegistry.h"
 #include "services/registry/GatewayRegistryLease.h"
 #include "services/registry/GatewayDiscovery.h"
@@ -71,6 +69,17 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    tinyimx::ProcessTelemetry process_telemetry;
+    if (!process_telemetry.Initialize(
+            config,
+            "tinyimx-gateway",
+            "gateway"
+        )) {
+        std::cerr << "gateway observability initialization failed\n";
+        tinyimx::Logger::Instance().Shutdown();
+        return 1;
+    }
+
     std::signal(SIGINT, HandleSignal);
     std::signal(SIGTERM, HandleSignal);
 
@@ -104,7 +113,8 @@ int main(int argc, char* argv[]) {
         options.gateway_id = config.App().instance_id;
         options.max_body_size = config.Protocol().max_body_size;
         options.close_on_decode_error = true;
-        options.io_thread_count =static_cast<std::size_t>(config.Server().io_thread_count);
+        options.io_thread_count = static_cast<std::size_t>(config.Server().io_thread_count);
+        options.listen_backlog = config.Server().backlog;
 
         /*
         * ============================================================
@@ -205,9 +215,6 @@ int main(int argc, char* argv[]) {
         }
 
 
-        std::unique_ptr<tinyimx::MySqlConnectionPool> mysql_pool;
-        std::unique_ptr<tinyimx::FriendRepository> friend_repository;
-        std::unique_ptr<tinyimx::FriendRequestRepository> friend_request_repository;
 
         std::unique_ptr<tinyimx::RedisConnectionPool> redis_pool;
         std::unique_ptr<tinyimx::GatewayRegistry> gateway_registry;
@@ -220,6 +227,9 @@ int main(int argc, char* argv[]) {
         std::shared_ptr<tinyimx::GatewayPeerTransportManager> gateway_peer_transport_manager;
         std::unique_ptr<tinyimx::GroupFanoutCoordinator> group_fanout_coordinator;
         std::unique_ptr<tinyimx::BusinessExecutor> business_executor;
+        std::unique_ptr<tinyimx::BusinessExecutor> message_executor;
+        std::unique_ptr<tinyimx::BusinessExecutor> presence_executor;
+        std::unique_ptr<tinyimx::BusinessExecutor> replay_executor;
         std::shared_ptr<const tinyimx::rpc::ServiceEndpointProvider>
             service_endpoint_provider;
         std::shared_ptr<
@@ -238,30 +248,6 @@ int main(int argc, char* argv[]) {
             group_rpc_client;
         std::unique_ptr<tinyimx::rpc::FileRpcClient>
             file_rpc_client;
-        if (config.MySql().enable) {
-            mysql_pool = std::make_unique<tinyimx::MySqlConnectionPool>();
-
-            if (!mysql_pool->Initialize(config.MySql())) {
-                LOG_ERROR("gateway mysql pool initialize failed");
-                tinyimx::Logger::Instance().Shutdown();
-                return 1;
-            }
-
-            friend_repository =
-                std::make_unique<tinyimx::FriendRepository>(
-                    mysql_pool.get()
-                );
-
-            friend_request_repository =
-                std::make_unique<
-                    tinyimx::FriendRequestRepository
-                >(
-                    mysql_pool.get()
-                );
-
-            LOG_INFO("gateway mysql persistence enabled");
-        }
-
         if (config.Redis().enable) {
             redis_pool = std::make_unique<tinyimx::RedisConnectionPool>();
 
@@ -305,6 +291,8 @@ int main(int argc, char* argv[]) {
 
         tinyimx::BusinessExecutorOptions
             business_options;
+
+        business_options.name = "gateway-foreground-runtime";
 
 
         business_options.worker_threads =
@@ -350,14 +338,7 @@ int main(int argc, char* argv[]) {
 
 
             business_executor.reset();
-
-
-            if (mysql_pool) {
-                mysql_pool->Shutdown();
-            }
-
-
-            if (redis_pool) {
+if (redis_pool) {
                 redis_pool->Shutdown();
             }
 
@@ -403,10 +384,7 @@ int main(int argc, char* argv[]) {
                     << ", error=" << rpc_zookeeper_client->LastError()
                 );
                 business_executor->ShutdownGraceful();
-                if (mysql_pool) {
-                    mysql_pool->Shutdown();
-                }
-                if (redis_pool) {
+if (redis_pool) {
                     redis_pool->Shutdown();
                 }
                 tinyimx::Logger::Instance().Shutdown();
@@ -433,10 +411,7 @@ int main(int argc, char* argv[]) {
                 rpc_service_discovery->Stop();
                 rpc_zookeeper_client->Stop();
                 business_executor->ShutdownGraceful();
-                if (mysql_pool) {
-                    mysql_pool->Shutdown();
-                }
-                if (redis_pool) {
+if (redis_pool) {
                     redis_pool->Shutdown();
                 }
                 tinyimx::Logger::Instance().Shutdown();
@@ -653,18 +628,7 @@ int main(int argc, char* argv[]) {
         if (file_rpc_client) {
             gateway.SetFileRpcClient(file_rpc_client.get());
         }
-
-        if (friend_repository) {
-            gateway.SetFriendRepository(friend_repository.get());
-        }
-
-        if (friend_request_repository) {
-            gateway.SetFriendRequestRepository(
-                friend_request_repository.get()
-            );
-        }
-
-        if (online_status_cache) {
+if (online_status_cache) {
             gateway.SetOnlineStatusCache(online_status_cache.get());
         }
 
@@ -763,12 +727,7 @@ int main(int argc, char* argv[]) {
                 );
 
                 gateway.Stop();
-
-                if (mysql_pool) {
-                    mysql_pool->Shutdown();
-                }
-
-                tinyimx::Logger::
+tinyimx::Logger::
                     Instance().
                     Shutdown();
 
@@ -830,12 +789,7 @@ int main(int argc, char* argv[]) {
                 gateway_registry.reset();
 
                 gateway.Stop();
-
-                if (mysql_pool) {
-                    mysql_pool->Shutdown();
-                }
-
-                if (redis_pool) {
+if (redis_pool) {
                     redis_pool->Shutdown();
                 }
 
@@ -868,12 +822,7 @@ int main(int argc, char* argv[]) {
                 gateway_registry.reset();
 
                 gateway.Stop();
-
-                if (mysql_pool) {
-                    mysql_pool->Shutdown();
-                }
-
-                if (redis_pool) {
+if (redis_pool) {
                     redis_pool->Shutdown();
                 }
 
@@ -1104,6 +1053,171 @@ int main(int argc, char* argv[]) {
         }
 
 
+        // P0 Message Plane bulkhead. Private chat send / receiver ACK / peer
+        // forward execute synchronous RPCs and must not occupy Login/control
+        // workers. Keep the queue bounded: capacity is not a latency fix.
+        tinyimx::BusinessExecutorOptions message_options;
+        message_options.name = "gateway-message-runtime";
+        message_options.worker_threads =
+            std::max<std::size_t>(
+                4,
+                std::min<std::size_t>(
+                    8,
+                    business_options.worker_threads * 2
+                )
+            );
+        message_options.max_pending_tasks = business_options.max_pending_tasks;
+        message_options.stripe_count = business_options.stripe_count;
+        message_options.per_stripe_queue_capacity =
+            business_options.per_stripe_queue_capacity;
+        message_options.default_deadline = business_options.default_deadline;
+        message_options.shutdown_timeout = business_options.shutdown_timeout;
+
+        message_executor = std::make_unique<tinyimx::BusinessExecutor>(
+            message_options
+        );
+        if (!message_executor->Start()) {
+            LOG_ERROR("gateway message runtime start failed");
+            gateway.Stop();
+            business_executor->ShutdownGraceful();
+            if (redis_pool) {
+                redis_pool->Shutdown();
+            }
+            tinyimx::Logger::Instance().Shutdown();
+            return 1;
+        }
+
+        LOG_INFO(
+            "gateway message runtime started"
+            << ", workers=" << message_options.worker_threads
+            << ", max_pending=" << message_options.max_pending_tasks
+            << ", stripes=" << message_options.stripe_count
+            << ", per_stripe_capacity="
+            << message_options.per_stripe_queue_capacity
+            << ", default_deadline_ms="
+            << message_options.default_deadline.count()
+        );
+
+        gateway.SetMessageExecutor(message_executor.get());
+
+        // Presence/online-status maintenance has a dedicated bulkhead. During a
+        // Gateway failover thousands of clients can reconnect and authenticate at
+        // once; heartbeat refresh and disconnect cleanup must not contend with
+        // Login/control tasks in the foreground runtime. The larger bounded queue
+        // absorbs one 10k-class maintenance burst while 256 stripes keep per-user
+        // ordering without manufacturing hot stripes.
+        tinyimx::BusinessExecutorOptions presence_options;
+        presence_options.name = "gateway-presence-runtime";
+        presence_options.worker_threads =
+            std::max<std::size_t>(
+                2,
+                std::min<std::size_t>(4, business_options.worker_threads)
+            );
+        presence_options.max_pending_tasks =
+            std::max<std::size_t>(
+                4096,
+                std::min<std::size_t>(
+                    16384,
+                    business_options.max_pending_tasks * 32
+                )
+            );
+        presence_options.stripe_count =
+            std::max<std::size_t>(
+                128,
+                std::min<std::size_t>(
+                    256,
+                    business_options.stripe_count * 4
+                )
+            );
+        presence_options.per_stripe_queue_capacity =
+            std::max<std::size_t>(
+                64,
+                business_options.per_stripe_queue_capacity
+            );
+        presence_options.default_deadline = std::chrono::milliseconds(10000);
+        presence_options.shutdown_timeout = business_options.shutdown_timeout;
+
+        presence_executor = std::make_unique<tinyimx::BusinessExecutor>(
+            presence_options
+        );
+        if (!presence_executor->Start()) {
+            LOG_ERROR("gateway presence runtime start failed");
+            gateway.Stop();
+            if (message_executor) message_executor->ShutdownGraceful();
+            business_executor->ShutdownGraceful();
+            if (redis_pool) {
+                redis_pool->Shutdown();
+            }
+            tinyimx::Logger::Instance().Shutdown();
+            return 1;
+        }
+
+        LOG_INFO(
+            "gateway presence runtime started"
+            << ", workers=" << presence_options.worker_threads
+            << ", max_pending=" << presence_options.max_pending_tasks
+            << ", stripes=" << presence_options.stripe_count
+            << ", per_stripe_capacity="
+            << presence_options.per_stripe_queue_capacity
+            << ", default_deadline_ms="
+            << presence_options.default_deadline.count()
+        );
+
+        gateway.SetPresenceExecutor(presence_executor.get());
+
+        // Isolate durable replay from latency-sensitive foreground/message work. Replay
+        // keeps per-user ordering but has its own bounded queue and workers,
+        // preventing a reconnect storm from amplifying foreground queue delay.
+        tinyimx::BusinessExecutorOptions replay_options;
+        replay_options.name = "gateway-replay-runtime";
+        replay_options.worker_threads =
+            std::max<std::size_t>(1, std::min<std::size_t>(2, business_options.worker_threads));
+        replay_options.max_pending_tasks =
+            std::min<std::size_t>(256, business_options.max_pending_tasks);
+        replay_options.stripe_count = business_options.stripe_count;
+        replay_options.per_stripe_queue_capacity =
+            std::max<std::size_t>(
+                1,
+                std::min<std::size_t>(
+                    16,
+                    std::min(
+                        business_options.per_stripe_queue_capacity,
+                        replay_options.max_pending_tasks
+                    )
+                )
+            );
+        replay_options.default_deadline = std::chrono::milliseconds(5000);
+        replay_options.shutdown_timeout = business_options.shutdown_timeout;
+
+        replay_executor = std::make_unique<tinyimx::BusinessExecutor>(
+            replay_options
+        );
+        if (!replay_executor->Start()) {
+            LOG_ERROR("gateway replay runtime start failed");
+            gateway.Stop();
+            if (presence_executor) presence_executor->ShutdownGraceful();
+            if (message_executor) message_executor->ShutdownGraceful();
+            business_executor->ShutdownGraceful();
+            if (redis_pool) {
+                redis_pool->Shutdown();
+            }
+            tinyimx::Logger::Instance().Shutdown();
+            return 1;
+        }
+
+        LOG_INFO(
+            "gateway replay runtime started"
+            << ", workers=" << replay_options.worker_threads
+            << ", max_pending=" << replay_options.max_pending_tasks
+            << ", stripes=" << replay_options.stripe_count
+            << ", per_stripe_capacity=" << replay_options.per_stripe_queue_capacity
+            << ", default_deadline_ms=" << replay_options.default_deadline.count()
+        );
+
+        gateway.SetReplayExecutor(
+            replay_executor.get()
+        );
+
         const char* group_fanout_enable_env = std::getenv("TINYIMX_GROUP_FANOUT_ENABLE");
         const bool group_fanout_enabled =
             group_fanout_enable_env != nullptr && std::string(group_fanout_enable_env) == "1";
@@ -1111,9 +1225,11 @@ int main(int argc, char* argv[]) {
             if (!message_rpc_client) {
                 LOG_ERROR("group fanout requires MessageService RPC client");
                 gateway.Stop();
+                if (presence_executor) presence_executor->ShutdownGraceful();
+                if (message_executor) message_executor->ShutdownGraceful();
                 if (business_executor) business_executor->ShutdownGraceful();
-                if (mysql_pool) mysql_pool->Shutdown();
-                if (redis_pool) redis_pool->Shutdown();
+                if (replay_executor) replay_executor->ShutdownGraceful();
+if (redis_pool) redis_pool->Shutdown();
                 tinyimx::Logger::Instance().Shutdown();
                 return 1;
             }
@@ -1158,9 +1274,11 @@ int main(int argc, char* argv[]) {
             if (!group_fanout_coordinator->Start()) {
                 LOG_ERROR("group fanout coordinator start failed");
                 gateway.Stop();
+                if (presence_executor) presence_executor->ShutdownGraceful();
+                if (message_executor) message_executor->ShutdownGraceful();
                 if (business_executor) business_executor->ShutdownGraceful();
-                if (mysql_pool) mysql_pool->Shutdown();
-                if (redis_pool) redis_pool->Shutdown();
+                if (replay_executor) replay_executor->ShutdownGraceful();
+if (redis_pool) redis_pool->Shutdown();
                 tinyimx::Logger::Instance().Shutdown();
                 return 1;
             }
@@ -1174,6 +1292,7 @@ int main(int argc, char* argv[]) {
         std::cout << "Gateway instance ID: " << options.gateway_id<< '\n';
         std::cout << "Listening on " << listen_address.ToString() << '\n';
         std::cout << "IO thread count: " << options.io_thread_count << '\n';
+        std::cout << "Listen backlog: " << options.listen_backlog << '\n';
         std::cout << "Reactor mode: " << (options.io_thread_count == 0 ? "single reactor"
                     : "main/sub reactor") << '\n';
         /*
@@ -1210,6 +1329,7 @@ int main(int argc, char* argv[]) {
         );
 
         loop.Loop();
+        gateway.StopPrivateReplayAdmission();
         if (group_fanout_coordinator) {
             group_fanout_coordinator->Stop();
         }
@@ -1242,6 +1362,114 @@ int main(int argc, char* argv[]) {
         *
         * 然后才能Stop Gateway并销毁业务依赖。
         */
+        if (message_executor) {
+            const auto before_stats = message_executor->GetStats();
+            LOG_INFO(
+                "gateway message runtime draining"
+                << ", pending=" << before_stats.current_pending_tasks
+                << ", active=" << before_stats.current_active_tasks
+                << ", accepted=" << before_stats.accepted_total
+            );
+
+            const bool within_budget = message_executor->ShutdownGraceful();
+            const auto after_stats = message_executor->GetStats();
+            const std::uint64_t lifecycle_accounted =
+                after_stats.completed_total +
+                after_stats.worker_exception_total +
+                after_stats.deadline_expired_before_start_total +
+                after_stats.cancelled_before_start_total +
+                after_stats.completion_dropped_total +
+                after_stats.completion_exception_total;
+            const std::uint64_t accepted_unaccounted =
+                after_stats.accepted_total >= lifecycle_accounted
+                    ? after_stats.accepted_total - lifecycle_accounted
+                    : 0;
+
+            LOG_INFO(
+                "gateway message runtime drained"
+                << ", within_budget=" << within_budget
+                << ", submitted=" << after_stats.submitted_total
+                << ", accepted=" << after_stats.accepted_total
+                << ", completed=" << after_stats.completed_total
+                << ", rejected_overload="
+                << after_stats.rejected_overload_total
+                << ", rejected_hot_key="
+                << after_stats.rejected_hot_key_total
+                << ", rejected_deadline="
+                << after_stats.rejected_deadline_total
+                << ", deadline_before_start="
+                << after_stats.deadline_expired_before_start_total
+                << ", cancelled_before_start="
+                << after_stats.cancelled_before_start_total
+                << ", peak_pending=" << after_stats.peak_pending_tasks
+                << ", peak_active=" << after_stats.peak_active_tasks
+                << ", avg_queue_wait_ms="
+                << after_stats.average_queue_wait_ms
+                << ", max_queue_wait_ms="
+                << after_stats.max_queue_wait_ms
+                << ", avg_execution_ms="
+                << after_stats.average_execution_ms
+                << ", max_execution_ms="
+                << after_stats.max_execution_ms
+                << ", accepted_unaccounted=" << accepted_unaccounted
+            );
+        }
+
+
+        if (presence_executor) {
+            const auto before_stats = presence_executor->GetStats();
+            LOG_INFO(
+                "gateway presence runtime draining"
+                << ", pending=" << before_stats.current_pending_tasks
+                << ", active=" << before_stats.current_active_tasks
+                << ", accepted=" << before_stats.accepted_total
+            );
+
+            const bool within_budget = presence_executor->ShutdownGraceful();
+            const auto after_stats = presence_executor->GetStats();
+            const std::uint64_t lifecycle_accounted =
+                after_stats.completed_total +
+                after_stats.worker_exception_total +
+                after_stats.deadline_expired_before_start_total +
+                after_stats.cancelled_before_start_total +
+                after_stats.completion_dropped_total +
+                after_stats.completion_exception_total;
+            const std::uint64_t accepted_unaccounted =
+                after_stats.accepted_total >= lifecycle_accounted
+                    ? after_stats.accepted_total - lifecycle_accounted
+                    : 0;
+
+            LOG_INFO(
+                "gateway presence runtime drained"
+                << ", within_budget=" << within_budget
+                << ", submitted=" << after_stats.submitted_total
+                << ", accepted=" << after_stats.accepted_total
+                << ", completed=" << after_stats.completed_total
+                << ", rejected_overload="
+                << after_stats.rejected_overload_total
+                << ", rejected_hot_key="
+                << after_stats.rejected_hot_key_total
+                << ", rejected_deadline="
+                << after_stats.rejected_deadline_total
+                << ", deadline_before_start="
+                << after_stats.deadline_expired_before_start_total
+                << ", cancelled_before_start="
+                << after_stats.cancelled_before_start_total
+                << ", peak_pending=" << after_stats.peak_pending_tasks
+                << ", peak_active=" << after_stats.peak_active_tasks
+                << ", avg_queue_wait_ms="
+                << after_stats.average_queue_wait_ms
+                << ", max_queue_wait_ms="
+                << after_stats.max_queue_wait_ms
+                << ", avg_execution_ms="
+                << after_stats.average_execution_ms
+                << ", max_execution_ms="
+                << after_stats.max_execution_ms
+                << ", accepted_unaccounted=" << accepted_unaccounted
+            );
+        }
+
+
         if (business_executor) {
             const auto before_stats =
                 business_executor->GetStats();
@@ -1272,6 +1500,19 @@ int main(int argc, char* argv[]) {
             const auto after_stats =
                 business_executor->GetStats();
 
+            const std::uint64_t lifecycle_accounted =
+                after_stats.completed_total +
+                after_stats.worker_exception_total +
+                after_stats.deadline_expired_before_start_total +
+                after_stats.cancelled_before_start_total +
+                after_stats.completion_dropped_total +
+                after_stats.completion_exception_total;
+
+            const std::uint64_t accepted_unaccounted =
+                after_stats.accepted_total >= lifecycle_accounted
+                    ? after_stats.accepted_total - lifecycle_accounted
+                    : 0;
+
 
             LOG_INFO(
                 "gateway business runtime drained"
@@ -1295,6 +1536,24 @@ int main(int argc, char* argv[]) {
                 << ", rejected_shutdown="
                 << after_stats.
                     rejected_shutdown_total
+                << ", rejected_invalid="
+                << after_stats.
+                    rejected_invalid_total
+                << ", deadline_before_start="
+                << after_stats.
+                    deadline_expired_before_start_total
+                << ", cancelled_before_start="
+                << after_stats.
+                    cancelled_before_start_total
+                << ", deadline_terminal_callback="
+                << after_stats.
+                    deadline_terminal_callback_total
+                << ", deadline_terminal_dropped="
+                << after_stats.
+                    deadline_terminal_dropped_total
+                << ", deadline_terminal_exceptions="
+                << after_stats.
+                    deadline_terminal_exception_total
                 << ", worker_exceptions="
                 << after_stats.
                     worker_exception_total
@@ -1322,12 +1581,56 @@ int main(int argc, char* argv[]) {
                 << ", avg_queue_wait_ms="
                 << after_stats.
                     average_queue_wait_ms
+                << ", max_queue_wait_ms="
+                << after_stats.
+                    max_queue_wait_ms
                 << ", avg_execution_ms="
                 << after_stats.
                     average_execution_ms
+                << ", max_execution_ms="
+                << after_stats.
+                    max_execution_ms
+                << ", lifecycle_accounted="
+                << lifecycle_accounted
+                << ", accepted_unaccounted="
+                << accepted_unaccounted
             );
         }
 
+
+        if (replay_executor) {
+            const bool replay_within_budget =
+                replay_executor->ShutdownGraceful();
+            const auto replay_stats = replay_executor->GetStats();
+            const std::uint64_t replay_accounted =
+                replay_stats.completed_total +
+                replay_stats.worker_exception_total +
+                replay_stats.deadline_expired_before_start_total +
+                replay_stats.cancelled_before_start_total +
+                replay_stats.completion_dropped_total +
+                replay_stats.completion_exception_total;
+            const std::uint64_t replay_unaccounted =
+                replay_stats.accepted_total >= replay_accounted
+                    ? replay_stats.accepted_total - replay_accounted
+                    : 0;
+
+            LOG_INFO(
+                "gateway replay runtime drained"
+                << ", within_budget=" << replay_within_budget
+                << ", submitted=" << replay_stats.submitted_total
+                << ", accepted=" << replay_stats.accepted_total
+                << ", completed=" << replay_stats.completed_total
+                << ", deadline_before_start="
+                << replay_stats.deadline_expired_before_start_total
+                << ", cancelled_before_start="
+                << replay_stats.cancelled_before_start_total
+                << ", peak_pending=" << replay_stats.peak_pending_tasks
+                << ", peak_active=" << replay_stats.peak_active_tasks
+                << ", avg_queue_wait_ms=" << replay_stats.average_queue_wait_ms
+                << ", max_queue_wait_ms=" << replay_stats.max_queue_wait_ms
+                << ", accepted_unaccounted=" << replay_unaccounted
+            );
+        }
 
         if (rpc_service_discovery) {
             rpc_service_discovery->Stop();
@@ -1338,12 +1641,7 @@ int main(int argc, char* argv[]) {
         }
 
         gateway.Stop();
-
-        if (mysql_pool) {
-            mysql_pool->Shutdown();
-        }
-
-        if (redis_pool) {
+if (redis_pool) {
             redis_pool->Shutdown();
         }
 
@@ -1353,6 +1651,7 @@ int main(int argc, char* argv[]) {
         g_loop = nullptr;
     }
 
+    process_telemetry.Shutdown();
     tinyimx::Logger::Instance().Shutdown();
 
     return 0;

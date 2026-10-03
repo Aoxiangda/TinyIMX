@@ -91,6 +91,7 @@ foreach(observed_target IN ITEMS
     file_service_demo
     tinyimx_mcp_server
     tinyimx_ai_agent_demo
+    gateway_demo
 )
   if(TARGET ${observed_target})
     target_link_libraries(${observed_target} PRIVATE tinyimx_observability)

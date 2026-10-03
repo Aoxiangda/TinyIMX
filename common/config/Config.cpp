@@ -523,6 +523,11 @@ bool Config::ApplyJsonConfig(const std::string& json_content) {
             );
             ReadIfExists(
                 section,
+                "registration_timeout_ms",
+                &zookeeper_.registration_timeout_ms
+            );
+            ReadIfExists(
+                section,
                 "service_root",
                 &zookeeper_.service_root
             );
@@ -1043,6 +1048,12 @@ bool Config::Validate() {
         if (zookeeper_.connect_timeout_ms <= 0) {
             return SetError(
                 "zookeeper.connect_timeout_ms must be greater than 0"
+            );
+        }
+
+        if (zookeeper_.registration_timeout_ms <= 0) {
+            return SetError(
+                "zookeeper.registration_timeout_ms must be greater than 0"
             );
         }
 

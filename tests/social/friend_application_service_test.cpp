@@ -12,6 +12,20 @@ namespace {
 class FakeFriendRepositoryPort final
     : public tinyimx::social::FriendRepositoryPort {
 public:
+    tinyimx::social::ChatPermissionApplicationResult
+    CheckPrivateChatPermission(
+        std::uint64_t from_user_id,
+        std::uint64_t to_user_id
+    ) override {
+        tinyimx::social::ChatPermissionApplicationResult result;
+        result.status = tinyimx::social::ChatPermissionApplicationStatus::kAllowed;
+        result.message = "allowed";
+        last_permission_from_user_id = from_user_id;
+        last_permission_to_user_id = to_user_id;
+        ++permission_call_count;
+        return result;
+    }
+
     tinyimx::social::FriendRepositoryListResult ListFriends(
         std::uint64_t user_id,
         std::size_t limit
@@ -24,6 +38,9 @@ public:
         return result;
     }
 
+    std::size_t permission_call_count{0};
+    std::uint64_t last_permission_from_user_id{0};
+    std::uint64_t last_permission_to_user_id{0};
     std::size_t call_count{0};
     std::uint64_t last_user_id{0};
     std::size_t last_limit{0};
