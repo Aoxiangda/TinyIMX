@@ -370,6 +370,9 @@ def main():
             state['scenarios'].append(row)
             emit('scenario_pass', **row)
             if index == 1:
+                # SIGKILL leaves a live registry lease until TTL expiry. The
+                # next independent scenario must not steal or delete it.
+                gateway_config['source']['app']['instance_id'] = run + '-source-restarted'
                 source = start('source-2', gateway_config['source'], source_env)
                 wait_port('127.0.0.1', ports['source'], source)
                 sender = Client(ports['source'], USERS[0][0], USERS[0][1], password, emit)
