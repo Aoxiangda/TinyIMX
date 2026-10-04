@@ -601,3 +601,14 @@
 新增回归检查两类工具边界、缺省、无效类型与大整数，并验证无效参数不调用后端、其他三类工具仍允许 100。构建先在独立目录将原 domain 源码与新测试链接，保存应有失败；再只构建 MCP domain/core/server，使用缓存依赖并单线程，保存原二进制 SHA 与 red/green 日志。构建不会部署或改变 19 个服务，尤其不构建当前仍保存的已拒绝 Gateway 公平调度源码。之后真实隔离 MCP 验证需独立审计，当前没有性能接受结论。
 
 v16 脱敏归档本机 70 文件逐 SHA 通过，archive SHA 488f8ceb9a79614ac0848aa370ddf9abcae8b9c0c19e855572794bfa2b6bbcbc，保留提交合并失败、精确回滚及 CPU 对照。MCP 契约修正不等于私聊尾延迟改善；10k–50k 全功能极致性能、AI 服务/正式 principal 和每功能混合负载验证仍未完成。
+
+
+### 2026-10-05：MCP 分页修正原版失败/候选通过，真实验证待执行
+
+源码 Git 778ad55708b1806d09c7691b245f870b17861983。将精确原版 domain 源（SHA 1a5ef6126f113c057fc18c2538febb896cff6b96c7b08576467e808ba9b538f5）与新增边界测试在独立目录编译链接，原版明确失败于 schema matches each domain page contract，exit1；不是编译或运行错误。修正后 domain 89 项 PASS，core exit0，core 原测试没有逐项 PASS 输出，不能杜撰检查数量。仅 MCP 单线程缓存构建完成，候选 server SHA dbfef7cc761bc3253d4269038c63e1c347974c73574b5df1e07055fed201d926；原 MCP/core/domain 二进制已逐 SHA 备份，全部 19 实例/配置保持，未部署。
+
+本机生成候选时曾用 Windows 默认 GBK 读取中文文档而失败；部分本机 C++/测试候选保存于 evidence/mcp-page-preparation-encoding-failure-20261005，规范审计后只恢复两项本机 preimage，生成器明确 UTF-8 后成功。该失败发生在打包/上传前，Ubuntu/运行时未改变。生成和恢复工具随本次 Git 保存；保留失败，不掩盖。
+
+待执行真实验证使用已拥有的 principal519870/peer519872/group26/file16，候选原生进程只监听 127.0.0.1:18322，随机 token/私有配置不出目录。八类真实只读 RPC、消息 1/50/缺省、12 非法 limit、未授权/身份注入与其他三类 page100 均验证。strace 由父进程跟踪自己的子进程，-c 只保存 syscall 聚合，绝不附着正式服务或输出参数/凭据；计时受干扰，不能用于容量接受。15s 启动/5s 请求/150s 整体与自己的看护有界，INT/TERM/HUP finally 仅在 PID/cmdline/starttime 全部吻合时停止自己的候选；正式 19 服务/SQL1/1/1/0/0/所有应用保持，不做新 fixture 写入、模型推理、安装或删除。该真实验证此阶段尚未运行。
+
+主性能排查已核实 Message 通道按 target 缓存复用、ZooKeeper Resolve 读本地快照、TCP_NODELAY 已开、遥测为批处理导出。这些机制不支持重复修复“逐消息建连接/实时 ZK 查询/Nagle/同步逐条遥测”的猜测。尚需更细的实际 CPU/RPC 往返证据后实施主要性能修改；全部功能极致性能仍未达到。
