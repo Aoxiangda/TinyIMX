@@ -16,6 +16,8 @@ namespace {
 
 constexpr std::uint32_t kDefaultPageSize = 50;
 constexpr std::uint32_t kMaxPageSize = 100;
+// MessageService read RPCs support at most 50 records per page.
+constexpr std::uint32_t kMaxMessagePageSize = 50;
 
 [[noreturn]] void Invalid(std::string message) {
     throw ToolExecutionError("invalid_arguments", std::move(message));
@@ -59,11 +61,11 @@ std::uint64_t OptionalU64(const Json& args, const char* key) {
     return NonNegativeU64Value(args.at(key), key);
 }
 
-std::uint32_t PageSize(const Json& args) {
+std::uint32_t PageSize(const Json& args, std::uint32_t maximum = kMaxPageSize) {
     if (!args.contains("limit")) return kDefaultPageSize;
     const auto value = NonNegativeU64Value(args.at("limit"), "limit");
-    if (value == 0 || value > kMaxPageSize) {
-        Invalid("limit must be in range 1-100");
+    if (value == 0 || value > maximum) {
+        Invalid("limit must be in range 1-" + std::to_string(maximum));
     }
     return static_cast<std::uint32_t>(value);
 }
@@ -228,7 +230,9 @@ Json ObjectSchema(Json properties, Json required = Json::array()) {
 
 Json PositiveIdSchema() { return Json{{"type", "integer"}, {"minimum", 1}}; }
 Json CursorSchema() { return Json{{"type", "integer"}, {"minimum", 0}}; }
-Json LimitSchema() { return Json{{"type", "integer"}, {"minimum", 1}, {"maximum", kMaxPageSize}}; }
+Json LimitSchema(std::uint32_t maximum = kMaxPageSize) {
+    return Json{{"type", "integer"}, {"minimum", 1}, {"maximum", maximum}};
+}
 
 bool RegisterOne(Registry* registry, ToolDefinition def, ToolHandler handler, std::string* error) {
     if (!registry->RegisterTool(std::move(def), std::move(handler), error)) return false;
@@ -272,10 +276,10 @@ bool RegisterReadOnlyDomainTools(
 
     if (!RegisterOne(registry,
         {"tinyimx.message.list_conversations", "List conversations", "List recent private conversations for the authenticated TinyIMX user.",
-         ObjectSchema(Json{{"limit", LimitSchema()}}), scopes},
+         ObjectSchema(Json{{"limit", LimitSchema(kMaxMessagePageSize)}}), scopes},
         [backend](const RequestContext& ctx, const Json& args) {
             EnsureObjectWithKeys(args, {"limit"});
-            rpc::ListConversationsRpcRequest request{ctx.principal.user_id, PageSize(args)};
+            rpc::ListConversationsRpcRequest request{ctx.principal.user_id, PageSize(args, kMaxMessagePageSize)};
             auto response = RequireRpc(backend->ListConversations(request, RpcOptions(ctx)));
             Json items = Json::array();
             for (const auto& c : response.conversations) items.push_back(ConversationJson(c));
@@ -284,7 +288,7 @@ bool RegisterReadOnlyDomainTools(
 
     if (!RegisterOne(registry,
         {"tinyimx.message.list_history", "List message history", "List private message history between the authenticated TinyIMX user and one peer.",
-         ObjectSchema(Json{{"peer_user_id", PositiveIdSchema()}, {"before_message_id", CursorSchema()}, {"limit", LimitSchema()}},
+         ObjectSchema(Json{{"peer_user_id", PositiveIdSchema()}, {"before_message_id", CursorSchema()}, {"limit", LimitSchema(kMaxMessagePageSize)}},
                       Json::array({"peer_user_id"})), scopes},
         [backend](const RequestContext& ctx, const Json& args) {
             EnsureObjectWithKeys(args, {"peer_user_id", "before_message_id", "limit"});
@@ -292,7 +296,7 @@ bool RegisterReadOnlyDomainTools(
             request.actor_user_id = ctx.principal.user_id;
             request.peer_user_id = RequiredU64(args, "peer_user_id");
             request.before_message_id = OptionalU64(args, "before_message_id");
-            request.limit = PageSize(args);
+            request.limit = PageSize(args, kMaxMessagePageSize);
             auto response = RequireRpc(backend->ListHistory(request, RpcOptions(ctx)));
             Json items = Json::array();
             for (const auto& m : response.messages) items.push_back(MessageJson(m));

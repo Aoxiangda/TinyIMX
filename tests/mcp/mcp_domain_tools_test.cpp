@@ -18,6 +18,8 @@ public:
     mutable std::uint64_t last_peer{0};
     mutable std::uint64_t last_file{0};
     mutable bool fail_conversations{false};
+    mutable std::uint32_t last_limit{0};
+    mutable std::size_t page_backend_calls{0};
 
     tinyimx::rpc::RpcResult<tinyimx::rpc::GetUserProfileRpcResponse> GetSelfProfile(
         std::uint64_t actor, const tinyimx::rpc::RpcCallOptions&) const override {
@@ -31,6 +33,8 @@ public:
         const tinyimx::rpc::ListFriendsRpcRequest& r,
         const tinyimx::rpc::RpcCallOptions&) const override {
         last_actor = r.actor_user_id;
+        last_limit = r.limit;
+        ++page_backend_calls;
         tinyimx::rpc::ListFriendsRpcResponse out;
         out.friends.push_back({77, "bob", "Bob", "avatar-bob", 1, 1, "2026-01-01", "2026-01-02"});
         return tinyimx::rpc::RpcResult<tinyimx::rpc::ListFriendsRpcResponse>::Success(std::move(out));
@@ -40,6 +44,8 @@ public:
         const tinyimx::rpc::ListConversationsRpcRequest& r,
         const tinyimx::rpc::RpcCallOptions&) const override {
         last_actor = r.actor_user_id;
+        last_limit = r.limit;
+        ++page_backend_calls;
         if (fail_conversations) {
             return tinyimx::rpc::RpcResult<tinyimx::rpc::ListConversationsRpcResponse>::Failure(
                 tinyimx::rpc::RpcErrorCode::kUnavailable, "message service unavailable");
@@ -61,7 +67,9 @@ public:
     tinyimx::rpc::RpcResult<tinyimx::rpc::ListHistoryRpcResponse> ListHistory(
         const tinyimx::rpc::ListHistoryRpcRequest& r,
         const tinyimx::rpc::RpcCallOptions&) const override {
-        last_actor = r.actor_user_id; last_peer = r.peer_user_id;
+        last_actor = r.actor_user_id;
+        last_limit = r.limit;
+        ++page_backend_calls; last_peer = r.peer_user_id;
         tinyimx::rpc::ListHistoryRpcResponse out;
         tinyimx::rpc::MessageRpcRecord item;
         item.message_id = 9002;
@@ -91,6 +99,8 @@ public:
         const tinyimx::rpc::ListMyGroupsRpcRequest& r,
         const tinyimx::rpc::RpcCallOptions&) const override {
         last_actor = r.actor_user_id;
+        last_limit = r.limit;
+        ++page_backend_calls;
         tinyimx::rpc::ListMyGroupsRpcResponse out;
         tinyimx::rpc::GroupRpcView group;
         group.group_id = 123;
@@ -104,6 +114,8 @@ public:
         const tinyimx::rpc::ListGroupMembersRpcRequest& r,
         const tinyimx::rpc::RpcCallOptions&) const override {
         last_actor = r.actor_user_id;
+        last_limit = r.limit;
+        ++page_backend_calls;
         tinyimx::rpc::ListGroupMembersRpcResponse out;
         tinyimx::rpc::GroupMemberRpcView member;
         member.group_id = r.group_id;
@@ -132,6 +144,7 @@ public:
 
 bool Check(bool condition, const char* message) {
     if (!condition) std::cerr << "CHECK failed: " << message << '\n';
+    else std::cout << "[PASS] " << message << '\n';
     return condition;
 }
 
@@ -161,6 +174,15 @@ int main() {
     std::vector<std::string> names;
     for (const auto& item : tools) names.push_back(item.at("name").get<std::string>());
     if (!Check(std::is_sorted(names.begin(), names.end()), "deterministic tool order")) return 1;
+    for (const auto& item : tools) {
+        const auto name = item.at("name").get<std::string>();
+        if (!item.at("inputSchema").at("properties").contains("limit")) continue;
+        const bool message_page = name == "tinyimx.message.list_conversations" ||
+                                  name == "tinyimx.message.list_history";
+        if (!Check(item.at("inputSchema").at("properties").at("limit").at("maximum") ==
+                   (message_page ? 50 : 100), "schema matches each domain page contract")) return 1;
+    }
+
 
     tinyimx::mcp::RequestContext ctx;
     ctx.principal.user_id = 42;
@@ -223,6 +245,42 @@ int main() {
                "file response lifetime")) return 1;
     if (!Check(file["result"]["structuredContent"]["message"] == "available",
                "file response message lifetime")) return 1;
+
+    // A permissive fake must still prove which requests reach the backend.
+    int boundary_id = 100;
+    for (const std::string tool : {"tinyimx.message.list_conversations", "tinyimx.message.list_history"}) {
+        const auto base = tool == "tinyimx.message.list_history" ? Json{{"peer_user_id", 77}} : Json::object();
+        for (const Json limit : {Json(1), Json(50), Json()}) {
+            auto args = base;
+            if (!limit.is_null()) args["limit"] = limit;
+            const auto before = backend->page_backend_calls;
+            const auto result = Call(dispatcher, ctx, tool, args, boundary_id++);
+            if (!Check(result["result"]["isError"] == false, "message valid page or default succeeds")) return 1;
+            if (!Check(backend->page_backend_calls == before + 1 && backend->last_actor == 42 &&
+                       backend->last_limit == (limit.is_null() ? 50 : limit.get<int>()),
+                       "message valid limit forwarded without clamping")) return 1;
+        }
+        for (const Json limit : {Json(0), Json(-1), Json(51), Json(100), Json(101), Json(1.25),
+                                 Json("50"), Json(true), Json(), Json(UINT64_MAX)}) {
+            auto args = base;
+            args["limit"] = limit;
+            const auto before = backend->page_backend_calls;
+            const auto result = Call(dispatcher, ctx, tool, args, boundary_id++);
+            if (!Check(result["result"]["isError"] == true &&
+                       result["result"]["structuredContent"]["error"]["code"] == "invalid_arguments",
+                       "invalid message limit produces argument error")) return 1;
+            if (!Check(backend->page_backend_calls == before,
+                       "invalid message limit rejected before backend RPC")) return 1;
+        }
+    }
+    for (const std::string tool : {"tinyimx.social.list_friends", "tinyimx.group.list_my_groups", "tinyimx.group.list_members"}) {
+        Json args{{"limit", 100}};
+        if (tool == "tinyimx.group.list_members") args["group_id"] = 123;
+        const auto before = backend->page_backend_calls;
+        const auto result = Call(dispatcher, ctx, tool, args, boundary_id++);
+        if (!Check(result["result"]["isError"] == false && backend->page_backend_calls == before + 1 &&
+                   backend->last_limit == 100, "friends and group tools retain page100")) return 1;
+    }
 
     backend->fail_conversations = true;
     auto unavailable = Call(dispatcher, ctx, "tinyimx.message.list_conversations", Json::object(), 14);
