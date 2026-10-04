@@ -11,6 +11,10 @@ class MessageApplicationService;
 class MessageServiceImpl final
     : public tinyimx::message::v1::MessageService::Service {
 public:
+    grpc::Status ListPendingRecipientsAfter(
+        grpc::ServerContext*,
+        const tinyimx::message::v1::ListPendingRecipientsAfterRequest*,
+        tinyimx::message::v1::ListPendingRecipientsAfterResponse*) override;
     explicit MessageServiceImpl(
         MessageApplicationService* application_service,
         tinyimx::rpc::GroupRpcClient* group_rpc_client = nullptr

@@ -18,6 +18,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -26,6 +27,19 @@ namespace {
 class FakeMessageRepositoryPort final
     : public tinyimx::message::MessageRepositoryPort {
 public:
+    tinyimx::message::PendingRecipientsResult ListPendingRecipientsAfter(
+        std::uint64_t after, std::size_t limit) override {
+        tinyimx::message::PendingRecipientsResult out;
+        out.status = discovery_status;
+        if (!out.Succeeded()) return out;
+        for (const auto id : {10002ULL, 10003ULL, 10009ULL})
+            if (id > after) out.recipient_user_ids.push_back(id);
+        out.has_more = out.recipient_user_ids.size() > limit;
+        if (out.has_more) out.recipient_user_ids.resize(limit);
+        return out;
+    }
+    tinyimx::message::MessageApplicationStatus discovery_status{
+        tinyimx::message::MessageApplicationStatus::kSucceeded};
     tinyimx::message::MessageRepositoryGetResult FindPrivateMessageByClientMessageId(
         std::uint64_t sender, const std::string& cid
     ) override {
@@ -488,6 +502,26 @@ void Expect(bool condition, const char* name) {
 class ResolveResponseFixture final : public tinyimx::message::v1::MessageService::Service {
 public:
     std::atomic<int> mode{0};
+    std::atomic<int> discovery_mode{0};
+    std::atomic<int> discovery_calls{0};
+    grpc::Status ListPendingRecipientsAfter(
+        grpc::ServerContext*,
+        const tinyimx::message::v1::ListPendingRecipientsAfterRequest* request,
+        tinyimx::message::v1::ListPendingRecipientsAfterResponse* response) override {
+        ++discovery_calls;
+        const auto behavior = discovery_mode.load();
+        if (behavior == 7) return {grpc::StatusCode::UNIMPLEMENTED, "legacy service"};
+        response->add_recipient_user_ids(request->after_user_id() + 1);
+        response->add_recipient_user_ids(request->after_user_id() + 2);
+        response->set_has_more(true);
+        if (behavior == 1) response->set_recipient_user_ids(0, 0);
+        if (behavior == 2) response->set_recipient_user_ids(0, request->after_user_id());
+        if (behavior == 3) response->set_recipient_user_ids(1, response->recipient_user_ids(0));
+        if (behavior == 4) response->set_recipient_user_ids(0, request->after_user_id() + 3);
+        if (behavior == 5) response->add_recipient_user_ids(request->after_user_id() + 3);
+        if (behavior == 6) response->clear_recipient_user_ids();
+        return grpc::Status::OK;
+    }
     grpc::Status ResolvePrivateMessage(
         grpc::ServerContext*,
         const tinyimx::message::v1::ResolvePrivateMessageRequest* request,
@@ -519,6 +553,17 @@ public:
         if (behavior == 12) record->set_delivery_state(MESSAGE_DELIVERY_STATE_FAILED);
         return grpc::Status::OK;
     }
+};
+
+class DelayedDiscoveryEndpoint final : public tinyimx::rpc::ServiceEndpointProvider {
+public:
+    explicit DelayedDiscoveryEndpoint(std::string target) : target_(std::move(target)) {}
+    std::optional<tinyimx::rpc::ServiceEndpoint> Resolve(tinyimx::rpc::ServiceKind) const override {
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        return tinyimx::rpc::ServiceEndpoint{target_};
+    }
+private:
+    std::string target_;
 };
 
 void TestResolveResponseValidation() {
@@ -560,6 +605,30 @@ void TestResolveResponseValidation() {
     const auto legacy = client.ResolvePrivateMessage(request, options);
     Expect(!legacy.ok() && legacy.status.code == tinyimx::rpc::RpcErrorCode::kUnimplemented,
            "Resolve.LegacyServiceIsErrorNotNotObserved");
+    tinyimx::rpc::ListPendingRecipientsAfterRpcRequest discovery_request{100, 2};
+    const auto discovery = client.ListPendingRecipientsAfter(discovery_request, options);
+    Expect(discovery.ok() && discovery.value->recipient_user_ids == std::vector<std::uint64_t>{101, 102} &&
+               discovery.value->has_more, "Discovery.ClientAcceptsStrictBoundedPage");
+    for (int behavior = 1; behavior <= 6; ++behavior) {
+        service.discovery_mode.store(behavior);
+        const auto corrupt = client.ListPendingRecipientsAfter(discovery_request, options);
+        Expect(!corrupt.ok() && corrupt.status.code == tinyimx::rpc::RpcErrorCode::kDataLoss,
+               "Discovery.ClientRejectsMalformedPage");
+    }
+    service.discovery_mode.store(7);
+    const auto old_discovery = client.ListPendingRecipientsAfter(discovery_request, options);
+    Expect(!old_discovery.ok() && old_discovery.status.code == tinyimx::rpc::RpcErrorCode::kUnimplemented,
+           "Discovery.LegacyEndpointRemainsError");
+    service.discovery_mode.store(0);
+    const auto calls_before_budget = service.discovery_calls.load();
+    tinyimx::rpc::MessageRpcClient delayed(std::make_shared<DelayedDiscoveryEndpoint>(
+        "127.0.0.1:" + std::to_string(port)));
+    auto short_budget = options;
+    short_budget.remaining_timeout = std::chrono::milliseconds(10);
+    const auto exhausted = delayed.ListPendingRecipientsAfter(discovery_request, short_budget);
+    Expect(!exhausted.ok() && exhausted.status.code == tinyimx::rpc::RpcErrorCode::kDeadlineExceeded &&
+               service.discovery_calls.load() == calls_before_budget,
+           "Discovery.EndpointResolutionCannotResetBudget");
     server->Shutdown();
     server->Wait();
 }
@@ -836,6 +905,33 @@ int main() {
            "Resolve.MissingEndpointIsError");
     Expect(repository.persist_calls == writes_before_resolve && repository.messages.at(7001).delivery_state ==
                tinyimx::message::MessageDeliveryState::kPending, "Resolve.RealGrpcNoMutation");
+
+    tinyimx::rpc::ListPendingRecipientsAfterRpcRequest discovery_request{0, 2};
+    const auto recipients = client.ListPendingRecipientsAfter(discovery_request, options);
+    Expect(recipients.ok() && recipients.value->recipient_user_ids ==
+               std::vector<std::uint64_t>{10002, 10003} && recipients.value->has_more,
+           "Discovery.RealGrpcFirstPage");
+    discovery_request.after_user_id = 10003;
+    const auto next_recipients = client.ListPendingRecipientsAfter(discovery_request, options);
+    Expect(next_recipients.ok() && next_recipients.value->recipient_user_ids ==
+               std::vector<std::uint64_t>{10009} && !next_recipients.value->has_more,
+           "Discovery.RealGrpcCursorAndTerminalPage");
+    repository.discovery_status = tinyimx::message::MessageApplicationStatus::kStorageError;
+    const auto discovery_error = client.ListPendingRecipientsAfter(discovery_request, options);
+    Expect(!discovery_error.ok() && discovery_error.status.code == tinyimx::rpc::RpcErrorCode::kUnavailable,
+           "Discovery.RealGrpcStorageFailureIsError");
+    repository.discovery_status = tinyimx::message::MessageApplicationStatus::kSucceeded;
+    const auto expired_discovery = client.ListPendingRecipientsAfter(discovery_request, tinyimx::rpc::RpcCallOptions{});
+    Expect(!expired_discovery.ok() && expired_discovery.status.code == tinyimx::rpc::RpcErrorCode::kDeadlineExceeded,
+           "Discovery.ZeroBudgetRejected");
+    const auto no_discovery_endpoint = empty_client.ListPendingRecipientsAfter(discovery_request, options);
+    Expect(!no_discovery_endpoint.ok() && no_discovery_endpoint.status.code == tinyimx::rpc::RpcErrorCode::kUnavailable,
+           "Discovery.MissingEndpointRejected");
+    discovery_request.limit = 257;
+    Expect(!client.ListPendingRecipientsAfter(discovery_request, options).ok(),
+           "Discovery.ClientRejectsExcessPageLimit");
+    Expect(repository.persist_calls == writes_before_resolve && repository.messages.at(7001).delivery_state ==
+               tinyimx::message::MessageDeliveryState::kPending, "Discovery.RealGrpcNeverMutatesMessage");
 
     tinyimx::rpc::CountPendingRpcRequest count_request;
     count_request.to_user_id = 10002;

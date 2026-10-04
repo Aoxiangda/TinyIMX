@@ -22,6 +22,8 @@ namespace tinyimx::message {
 class MessageRepositoryAdapter final
     : public MessageRepositoryPort {
 public:
+    [[nodiscard]] PendingRecipientsResult ListPendingRecipientsAfter(
+        std::uint64_t after_user_id, std::size_t limit) override;
     MessageRepositoryAdapter(
         tinyimx::MessageRepository* repository,
         tinyimx::MySqlConnectionPool* pool,

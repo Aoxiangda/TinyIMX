@@ -311,6 +311,16 @@ struct MessageRepositoryPendingResult {
     }
 };
 
+struct PendingRecipientsResult {
+    MessageApplicationStatus status{MessageApplicationStatus::kStorageError};
+    std::vector<std::uint64_t> recipient_user_ids;
+    bool has_more{false};
+    std::string message;
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return status == MessageApplicationStatus::kSucceeded;
+    }
+};
+
 struct MessageRepositoryMutationResult {
     MessageApplicationStatus status{MessageApplicationStatus::kStorageError};
     std::uint64_t affected_rows{0};

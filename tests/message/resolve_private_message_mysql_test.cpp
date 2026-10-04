@@ -14,6 +14,8 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <vector>
+#include <limits>
 
 namespace {
 int failed = 0;
@@ -58,6 +60,52 @@ int main(int argc, char** argv) {
     options.caller_service = "read-only-mysql-validation";
     options.caller_instance = "r2b1-local";
     const auto unique = std::chrono::steady_clock::now().time_since_epoch().count();
+    std::vector<std::uint64_t> all_pending_recipients;
+    std::uint64_t cursor = 0;
+    std::size_t pages = 0;
+    bool scan_valid = true;
+    const auto discovery_started = std::chrono::steady_clock::now();
+    while (pages < 2048) {
+        tinyimx::rpc::ListPendingRecipientsAfterRpcRequest query{cursor, 256};
+        const auto page = client.ListPendingRecipientsAfter(query, options);
+        if (!page.ok()) { scan_valid = false; break; }
+        ++pages;
+        for (const auto recipient : page.value->recipient_user_ids) {
+            if (recipient <= cursor) scan_valid = false;
+            cursor = recipient;
+            all_pending_recipients.push_back(recipient);
+        }
+        if (!page.value->has_more) break;
+    }
+    Expect(scan_valid && pages > 1 && pages < 2048 && all_pending_recipients.size() > 256,
+           "Discovery.RealGrpcMySQLBoundedFullCycle", 0);
+    const auto direct = repository.ListPendingRecipientsAfter(0, 256);
+    const auto first = client.ListPendingRecipientsAfter({0, 256}, options);
+    Expect(direct.Succeeded() && first.ok() && direct.recipient_user_ids == first.value->recipient_user_ids &&
+               direct.has_more == first.value->has_more,
+           "Discovery.MySQLAdapterAndRpcSameSnapshotPage", 0);
+    Expect(!repository.ListPendingRecipientsAfter(0, 257).Succeeded() &&
+               !repository.ListPendingRecipientsAfter(0, 0).Succeeded(),
+           "Discovery.MySQLBoundsRejected", 0);
+    const auto terminal = client.ListPendingRecipientsAfter(
+        {std::numeric_limits<std::uint64_t>::max(), 256}, options);
+    Expect(terminal.ok() && terminal.value->recipient_user_ids.empty() && !terminal.value->has_more,
+           "Discovery.MySQLMaximumCursorHasNoOverflow", 0);
+    tinyimx::message::MessageApplicationService independent_application(&adapter);
+    tinyimx::message::MessageServiceImpl independent_service(&independent_application);
+    tinyimx::message::MessageServiceServer independent_server(&independent_service);
+    if (independent_server.Start("127.0.0.1:0")) {
+        tinyimx::rpc::MessageRpcClient independent_client(
+            std::make_shared<tinyimx::rpc::StaticServiceEndpointProvider>("", "", independent_server.BoundTarget()));
+        const auto independent = independent_client.ListPendingRecipientsAfter({0, 256}, options);
+        Expect(first.ok() && independent.ok() && first.value->recipient_user_ids == independent.value->recipient_user_ids,
+               "Discovery.FreshServiceNeedsNoSourceGatewayMemory", 0);
+        independent_server.Shutdown();
+        independent_server.Wait();
+    } else Expect(false, "Discovery.FreshServiceStart", 0);
+    std::cout << "DISCOVERY_PAGES=" << pages << " RECIPIENTS=" << all_pending_recipients.size()
+              << " CYCLE_MS=" << std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::steady_clock::now() - discovery_started).count() << '\n';
     for (const std::uint64_t id : {398858ULL, 398888ULL, 421466ULL, 421467ULL}) {
         const auto before = repository.FindPrivateMessageById(id);
         Expect(before.Found(), "Resolve.MySQLHistoricalSampleExists", id);

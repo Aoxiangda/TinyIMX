@@ -1612,6 +1612,67 @@ MessageRepository::ListPendingMessagesAfter(
     );
 }
 
+ListPendingRecipientsResult MessageRepository::ListPendingRecipientsAfter(
+    std::uint64_t after_user_id, std::size_t limit
+) {
+    ListPendingRecipientsResult output;
+    if (limit == 0 || limit > 256) {
+        output.status = MessageQueryStatus::kInvalidArgument;
+        output.message = "invalid pending recipient page limit";
+        return output;
+    }
+    if (pool_ == nullptr) {
+        output.message = "pending recipient discovery pool is unavailable";
+        return output;
+    }
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        output.message = "pending recipient discovery connection is unavailable";
+        return output;
+    }
+    // Existing (to_user_id, delivery_status, message_id) covering index supports
+    // deduplication. Neither a message body nor a per-online-user query is used.
+    const std::string sql =
+        "SELECT DISTINCT to_user_id FROM im_private_messages "
+        "WHERE to_user_id > " + std::to_string(after_user_id) +
+        " AND delivery_status = 0 ORDER BY to_user_id ASC LIMIT " +
+        std::to_string(limit + 1);
+    MySqlQueryResult result;
+    if (!connection->Query(sql, &result)) {
+        output.message = connection->LastError();
+        if (output.message.empty()) output.message = "pending recipient discovery query failed";
+        return output;
+    }
+    if (result.rows.size() > limit + 1) {
+        output.status = MessageQueryStatus::kInvalidRecord;
+        output.message = "pending recipient discovery exceeded bounded page";
+        return output;
+    }
+    std::uint64_t previous = after_user_id;
+    for (const auto& row : result.rows) {
+        std::uint64_t id = 0;
+        try {
+            std::size_t consumed = 0;
+            if (row.size() != 1 || row[0].empty() || row[0][0] == '-')
+                throw std::invalid_argument("invalid recipient row");
+            id = std::stoull(row[0], &consumed);
+            if (consumed != row[0].size() || id == 0 || id <= previous)
+                throw std::invalid_argument("invalid recipient ordering");
+        } catch (...) {
+            output.status = MessageQueryStatus::kInvalidRecord;
+            output.message = "pending recipient discovery returned invalid id";
+            output.recipient_user_ids.clear();
+            return output;
+        }
+        previous = id;
+        output.recipient_user_ids.push_back(id);
+    }
+    output.has_more = output.recipient_user_ids.size() > limit;
+    if (output.has_more) output.recipient_user_ids.resize(limit);
+    output.status = MessageQueryStatus::kSucceeded;
+    return output;
+}
+
 
 CountPendingMessagesResult
 MessageRepository::CountPendingMessages(

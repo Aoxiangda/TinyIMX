@@ -98,6 +98,26 @@
 
 ### TEST-002：当前 LocalCapacity 执行器仅支持 hold/private
 
+### REL-003：Pending 需要跨进程持续发现，而非只在登录时查询
+
+- 实测基线：2026-10-04 的只读查询发现 Pending 46,419 条、接收者 2,367 个。其中 46,210 条创建于 9 月 30 日，208 条创建于 10 月 3 日，另 1 条创建于 10 月 1 日。旧数据不删除、不改状态，不与 10k 实验的 208 条混为同一结果。
+- 索引证据：现有 `(to_user_id, delivery_status, message_id)` 索引支持去重覆盖扫描；单次 `EXPLAIN ANALYZE` 返回 257 个 ID 的本次测量约 13.3ms，不代表负载中的 P99。
+- 源码原因：R1 记录入队前责任，`MarkStarted` 后释放；重放查询失败不持续恢复。原网关退出后，仍在线接收者缺少持久发现触发。
+- 当前候选：新增只读 `ListPendingRecipientsAfter`，最多 256 个去重 ID 加一个 SQL sentinel，不加载正文、不依赖原网关内存、不更改表。领域和 RPC 双层校验游标、排序、数量和 continuation；预算包含端点发现时间；旧服务不支持接口保持错误。
+- 审计与回滚：`audit/r2b2-before.json` 保存逐文件 SHA 和参考副本；远端安装要求 Git HEAD、文件前后 SHA、路径边界全部匹配，先归档再替换。
+- 验证：候选尚待构建、真实 MySQL 和 gRPC 测试，结果另存每次日志。自动公平调度、投递窗口、运行容器部署和 10k～50k 验收仍未完成。
+- 状态：候选；仅补齐持久扫描基础，尚未关闭完整恢复缺口。
+
+### PERF-002：新私聊投递注册遍历所有跟踪记录
+
+- 源码证据：`ReceiverDeliveryTracker::RegisterAttempt` 为新私聊检查 receiver mismatch 时遍历 `entries_`；`RegisterRetryAttempt` 与未知消息 ACK 也有同类遍历。
+- 含义：累计 n 个未确认记录时，逐个新建的检查累计可能达到平方级；当前仅已确认缓存有上限，未确认集合需额外资源窗口。
+- 处理方向：保留 M/receiver 与迟到 ACK 语义，以直接索引消除遍历；配合有上限的投递窗口、每接收者公平扫描与持续持久责任。
+- 验证：尚未修改跟踪器；尚无新的性能成绩。
+- 状态：已确认源码开销与资源边界缺口，未关闭。
+
+### TEST-002（详情）：当前 LocalCapacity 执行器仅支持 hold/private
+
 - 源码证据：`benchmark/local_capacity/capacity_worker.cpp` 的 mode 校验只有 hold/private；group delivery 的计数名称明确标注不是 group test。
 - 含义：它可作为连接和私聊的规模证据基础，不能作为群管理、File、AI/MCP 或全部交叉功能的规模验收工具。
 - 处理方向：根据实际 Packet/RPC 全量清单补齐 actor、状态链、混合流量及逐项核对，再分别运行各档在线规模。

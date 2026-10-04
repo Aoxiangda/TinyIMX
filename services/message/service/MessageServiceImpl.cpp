@@ -737,6 +737,25 @@ grpc::Status MessageServiceImpl::ListPendingAfter(
     return grpc::Status::OK;
 }
 
+grpc::Status MessageServiceImpl::ListPendingRecipientsAfter(
+    grpc::ServerContext* context,
+    const tinyimx::message::v1::ListPendingRecipientsAfterRequest* request,
+    tinyimx::message::v1::ListPendingRecipientsAfterResponse* response
+) {
+    if (!ValidateRpcArguments(context, request, response))
+        return {grpc::StatusCode::INVALID_ARGUMENT, "invalid pending recipient RPC arguments"};
+    if (!application_service_)
+        return {grpc::StatusCode::UNAVAILABLE, "MessageService application service is unavailable"};
+    if (context->IsCancelled())
+        return {grpc::StatusCode::CANCELLED, "pending recipient discovery cancelled"};
+    auto result = application_service_->ListPendingRecipientsAfter(
+        request->after_user_id(), request->limit());
+    if (!result.Succeeded()) return MapApplicationFailure(result.status, result.message);
+    for (const auto id : result.recipient_user_ids) response->add_recipient_user_ids(id);
+    response->set_has_more(result.has_more);
+    return grpc::Status::OK;
+}
+
 grpc::Status MessageServiceImpl::ConfirmReceiver(
     grpc::ServerContext* context,
     const tinyimx::message::v1::ConfirmReceiverRequest* request,

@@ -901,6 +901,23 @@ MessageRepositoryAdapter::ListPendingAfter(
     return output;
 }
 
+PendingRecipientsResult MessageRepositoryAdapter::ListPendingRecipientsAfter(
+    std::uint64_t after_user_id, std::size_t limit
+) {
+    PendingRecipientsResult output;
+    if (!repository_) {
+        output.message = "message repository is unavailable";
+        return output;
+    }
+    auto result = repository_->ListPendingRecipientsAfter(after_user_id, limit);
+    output.status = MapStatus(result.status);
+    output.message = std::move(result.message);
+    if (!result.Succeeded()) return output;
+    output.recipient_user_ids = std::move(result.recipient_user_ids);
+    output.has_more = result.has_more;
+    return output;
+}
+
 MessageRepositoryMutationResult
 MessageRepositoryAdapter::ConfirmReceiver(
     std::uint64_t message_id

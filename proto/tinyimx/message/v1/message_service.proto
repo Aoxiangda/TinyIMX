@@ -55,6 +55,20 @@ service MessageService {
     // the original 15 methods and all existing field numbers stay unchanged.
     rpc ResolvePrivateMessage(ResolvePrivateMessageRequest)
         returns (ResolvePrivateMessageResponse);
+    // Durable receiver-centric discovery, appended after the frozen 16 RPCs.
+    rpc ListPendingRecipientsAfter(ListPendingRecipientsAfterRequest)
+        returns (ListPendingRecipientsAfterResponse);
+}
+
+message ListPendingRecipientsAfterRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 after_user_id = 2;
+    uint32 limit = 3;
+}
+
+message ListPendingRecipientsAfterResponse {
+    repeated uint64 recipient_user_ids = 1;
+    bool has_more = 2;
 }
 
 message ResolvePrivateMessageRequest {

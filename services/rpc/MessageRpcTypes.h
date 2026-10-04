@@ -329,6 +329,15 @@ struct ListPendingAfterRpcRequest {
     std::uint32_t limit{0};
 };
 
+struct ListPendingRecipientsAfterRpcRequest {
+    std::uint64_t after_user_id{0};
+    std::uint32_t limit{0};
+};
+struct ListPendingRecipientsAfterRpcResponse {
+    std::vector<std::uint64_t> recipient_user_ids;
+    bool has_more{false};
+};
+
 struct ListPendingAfterRpcResponse {
     std::vector<MessageRpcRecord> messages;
     bool has_more{false};

@@ -1184,6 +1184,52 @@ MessageRpcClient::ListPendingAfter(
     return RpcResult<ListPendingAfterRpcResponse>::Success(std::move(output));
 }
 
+RpcResult<ListPendingRecipientsAfterRpcResponse> MessageRpcClient::ListPendingRecipientsAfter(
+    const ListPendingRecipientsAfterRpcRequest& request, const RpcCallOptions& options
+) const {
+    using Result = RpcResult<ListPendingRecipientsAfterRpcResponse>;
+    if (request.limit == 0 || request.limit > 256)
+        return Result::Failure(RpcErrorCode::kInvalidArgument, "invalid pending recipient page limit");
+    if (options.remaining_timeout <= std::chrono::milliseconds::zero())
+        return Result::Failure(RpcErrorCode::kDeadlineExceeded, "pending recipient budget exhausted");
+    const auto deadline = std::chrono::system_clock::now() + options.remaining_timeout;
+    if (!endpoint_provider_)
+        return Result::Failure(RpcErrorCode::kUnavailable, "MessageService endpoint provider unavailable");
+    const auto endpoint = endpoint_provider_->Resolve(ServiceKind::kMessage);
+    if (!endpoint || endpoint->target.empty())
+        return Result::Failure(RpcErrorCode::kUnavailable, "MessageService endpoint unavailable");
+    auto stub = GetOrCreateStub(*endpoint);
+    if (!stub)
+        return Result::Failure(RpcErrorCode::kUnavailable, "MessageService stub unavailable");
+    tinyimx::message::v1::ListPendingRecipientsAfterRequest input;
+    FillMeta(options, input.mutable_meta());
+    input.set_after_user_id(request.after_user_id);
+    input.set_limit(request.limit);
+    if (std::chrono::system_clock::now() >= deadline)
+        return Result::Failure(RpcErrorCode::kDeadlineExceeded, "pending recipient budget exhausted before RPC");
+    tinyimx::message::v1::ListPendingRecipientsAfterResponse response;
+    grpc::ClientContext context;
+    context.set_deadline(deadline);
+    const auto status = stub->ListPendingRecipientsAfter(&context, input, &response);
+    if (!status.ok()) {
+        const auto mapped = MapGrpcStatus(status);
+        return Result::Failure(mapped.code, mapped.message);
+    }
+    if (response.recipient_user_ids_size() > static_cast<int>(request.limit) ||
+        (response.has_more() && response.recipient_user_ids_size() != static_cast<int>(request.limit)))
+        return Result::Failure(RpcErrorCode::kDataLoss, "invalid pending recipient count or continuation");
+    ListPendingRecipientsAfterRpcResponse output;
+    output.has_more = response.has_more();
+    std::uint64_t previous = request.after_user_id;
+    for (const auto id : response.recipient_user_ids()) {
+        if (id == 0 || id <= previous)
+            return Result::Failure(RpcErrorCode::kDataLoss, "invalid pending recipient ordering");
+        previous = id;
+        output.recipient_user_ids.push_back(id);
+    }
+    return Result::Success(std::move(output));
+}
+
 MessageMutationRpcCallResult
 MessageRpcClient::ConfirmReceiver(
     const ConfirmReceiverRpcRequest& request,

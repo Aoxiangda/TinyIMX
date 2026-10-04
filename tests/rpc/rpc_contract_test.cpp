@@ -499,8 +499,8 @@ int main() {
   const auto* message_service =
       message_file == nullptr ? nullptr :
       message_file->FindServiceByName("MessageService");
-  Expect(message_service != nullptr && message_service->method_count() == 16,
-         "MessageService appends read-only resolution after original 15 methods");
+  Expect(message_service != nullptr && message_service->method_count() == 17,
+         "MessageService appends read-only recipient discovery after original 16 methods");
 
   const char* const expected_message_methods[] = {
       "PersistPrivateMessage",
@@ -519,9 +519,10 @@ int main() {
       "MarkDialogRead",
       "ClaimGroupMessageDeliveriesForRecipient",
       "ResolvePrivateMessage",
+      "ListPendingRecipientsAfter",
   };
   if (message_service != nullptr) {
-    for (int i = 0; i < message_service->method_count() && i < 16; ++i) {
+    for (int i = 0; i < message_service->method_count() && i < 17; ++i) {
       const std::string label =
           std::string("MessageService method frozen: ") +
           expected_message_methods[i];
@@ -531,6 +532,17 @@ int main() {
   }
 
   const auto* resolve_descriptor = tinyimx::message::v1::ResolvePrivateMessageRequest::descriptor();
+  const auto* discovery_descriptor = tinyimx::message::v1::ListPendingRecipientsAfterRequest::descriptor();
+  const char* const discovery_fields[] = {"meta", "after_user_id", "limit"};
+  for (int i = 0; i < 3; ++i) {
+    const auto* field = discovery_descriptor->FindFieldByName(discovery_fields[i]);
+    Expect(field != nullptr && field->number() == i + 1, "Discovery.RequestFieldNumbersFrozen");
+  }
+  const auto* discovery_response = tinyimx::message::v1::ListPendingRecipientsAfterResponse::descriptor();
+  Expect(discovery_response->FindFieldByName("recipient_user_ids")->number() == 1 &&
+             discovery_response->FindFieldByName("recipient_user_ids")->is_repeated() &&
+             discovery_response->FindFieldByName("has_more")->number() == 2,
+         "Discovery.ResponseFieldNumbersFrozen");
   const char* const resolve_fields[] = {"meta", "from_user_id", "to_user_id", "client_message_id", "message_type", "content"};
   for (int i = 0; i < 6; ++i) {
     const auto* field = resolve_descriptor->FindFieldByName(resolve_fields[i]);

@@ -542,6 +542,43 @@ MessageApplicationService::ListPendingAfter(
     return output;
 }
 
+PendingRecipientsResult MessageApplicationService::ListPendingRecipientsAfter(
+    std::uint64_t after_user_id, std::uint32_t limit
+) {
+    PendingRecipientsResult output;
+    if (limit == 0 || limit > 256) {
+        output.status = MessageApplicationStatus::kInvalidArgument;
+        output.message = "invalid pending recipient page limit";
+        return output;
+    }
+    if (!repository_) {
+        output.message = "message repository port is unavailable";
+        return output;
+    }
+    auto result = repository_->ListPendingRecipientsAfter(after_user_id, limit);
+    if (!result.Succeeded()) {
+        output.status = result.status;
+        output.message = std::move(result.message);
+        return output;
+    }
+    if (result.recipient_user_ids.size() > limit ||
+        (result.has_more && result.recipient_user_ids.size() != limit)) {
+        output.status = MessageApplicationStatus::kInvalidRecord;
+        output.message = "invalid pending recipient page count or continuation";
+        return output;
+    }
+    std::uint64_t previous = after_user_id;
+    for (const auto id : result.recipient_user_ids) {
+        if (id == 0 || id <= previous) {
+            output.status = MessageApplicationStatus::kInvalidRecord;
+            output.message = "invalid pending recipient page ordering";
+            return output;
+        }
+        previous = id;
+    }
+    return result;
+}
+
 MessageMutationApplicationResult
 MessageApplicationService::ConfirmReceiver(
     std::uint64_t message_id,

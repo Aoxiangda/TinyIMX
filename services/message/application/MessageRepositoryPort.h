@@ -11,6 +11,12 @@ namespace tinyimx::message {
 
 class MessageRepositoryPort {
 public:
+    [[nodiscard]] virtual PendingRecipientsResult ListPendingRecipientsAfter(
+        std::uint64_t, std::size_t) {
+        PendingRecipientsResult out;
+        out.message = "pending recipient discovery is unavailable";
+        return out;
+    }
     virtual ~MessageRepositoryPort() = default;
 
     // Compatibility implementations fail explicitly; an unsupported lookup

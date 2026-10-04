@@ -22,6 +22,13 @@ void Expect(bool condition, const char* label) {
 
 class FakeRepository final : public tinyimx::message::MessageRepositoryPort {
 public:
+    tinyimx::message::PendingRecipientsResult ListPendingRecipientsAfter(
+        std::uint64_t, std::size_t) override {
+        ++recipient_discovery_calls;
+        return recipient_page;
+    }
+    std::size_t recipient_discovery_calls{0};
+    tinyimx::message::PendingRecipientsResult recipient_page;
 
     tinyimx::message::MessageRepositoryGetResult FindPrivateMessageByClientMessageId(
         std::uint64_t sender, const std::string& cid
@@ -499,6 +506,51 @@ void TestMarkDialogRead() {
            "MarkDialogRead");
 }
 
+void TestPendingRecipientDiscovery() {
+    using namespace tinyimx::message;
+    FakeRepository repository;
+    MessageApplicationService app(&repository);
+    auto& page = repository.recipient_page;
+    page.status = MessageApplicationStatus::kSucceeded;
+    auto result = app.ListPendingRecipientsAfter(0, 2);
+    Expect(result.Succeeded() && result.recipient_user_ids.empty() && !result.has_more,
+           "Discovery.EmptySnapshotDoesNotInventWork");
+    page.recipient_user_ids = {101, 103};
+    page.has_more = true;
+    result = app.ListPendingRecipientsAfter(100, 2);
+    Expect(result.Succeeded() && result.recipient_user_ids == page.recipient_user_ids && result.has_more,
+           "Discovery.OrderedFullPagePreservesContinuation");
+    for (const std::vector<std::uint64_t>& ids : {
+             std::vector<std::uint64_t>{0}, {100}, {103, 101}, {101, 101}, {101, 102, 103}}) {
+        page.recipient_user_ids = ids;
+        page.has_more = false;
+        Expect(app.ListPendingRecipientsAfter(100, 2).status == MessageApplicationStatus::kInvalidRecord,
+               "Discovery.CorruptIdOrderCursorOrCountRejected");
+    }
+    for (const std::vector<std::uint64_t>& ids : {std::vector<std::uint64_t>{}, {101}}) {
+        page.recipient_user_ids = ids;
+        page.has_more = true;
+        Expect(app.ListPendingRecipientsAfter(100, 2).status == MessageApplicationStatus::kInvalidRecord,
+               "Discovery.ContinuationNeedsFullPage");
+    }
+    page.recipient_user_ids = {101};
+    page.has_more = false;
+    Expect(app.ListPendingRecipientsAfter(100, 2).Succeeded(), "Discovery.TerminalShortPageAccepted");
+    page.status = MessageApplicationStatus::kStorageError;
+    result = app.ListPendingRecipientsAfter(0, 2);
+    Expect(!result.Succeeded() && result.recipient_user_ids.empty() && !result.has_more,
+           "Discovery.StorageErrorDoesNotInventEmptySuccess");
+    const auto before = repository.recipient_discovery_calls;
+    Expect(!app.ListPendingRecipientsAfter(0, 0).Succeeded() &&
+               !app.ListPendingRecipientsAfter(0, 257).Succeeded() &&
+               repository.recipient_discovery_calls == before,
+           "Discovery.BoundsCheckedBeforeRepository");
+    MessageApplicationService unavailable(nullptr);
+    Expect(!unavailable.ListPendingRecipientsAfter(0, 256).Succeeded(), "Discovery.MissingRepositoryIsError");
+    Expect(repository.persist_calls == 0 && repository.batch_calls == 0 && repository.read_calls == 0,
+           "Discovery.NeverMutatesDurableState");
+}
+
 }  // namespace
 
 int main() {
@@ -510,6 +562,7 @@ int main() {
     TestConversationSentinelPagination();
     TestGetPrivateMessage();
     TestResolvePrivateMessage();
+    TestPendingRecipientDiscovery();
     TestPendingReadFoundation();
     TestConfirmReceiverMonotonicOwnership();
     TestConfirmReceiverBatch();

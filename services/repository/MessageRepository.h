@@ -139,6 +139,16 @@ struct CountPendingMessagesResult {
     }
 };
 
+struct ListPendingRecipientsResult {
+    MessageQueryStatus status{MessageQueryStatus::kStorageError};
+    std::vector<std::uint64_t> recipient_user_ids;
+    bool has_more{false};
+    std::string message;
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return status == MessageQueryStatus::kSucceeded;
+    }
+};
+
 
 struct FindPrivateMessageResult {
     MessageQueryStatus status{
@@ -465,6 +475,11 @@ public:
         std::uint64_t to_user_id,
         std::size_t limit
     );
+
+    // Read-only discovery independent of a source Gateway/session. The cursor
+    // is scan progress, never delivery evidence. Max 256 ids + one sentinel.
+    ListPendingRecipientsResult ListPendingRecipientsAfter(
+        std::uint64_t after_user_id, std::size_t limit);
 
     /*
      * 按稳定server message_id做Keyset Pagination。

@@ -11,6 +11,8 @@ namespace tinyimx::message {
 
 class MessageApplicationService final {
 public:
+    [[nodiscard]] PendingRecipientsResult ListPendingRecipientsAfter(
+        std::uint64_t after_user_id, std::uint32_t limit);
     explicit MessageApplicationService(
         MessageRepositoryPort* repository
     );

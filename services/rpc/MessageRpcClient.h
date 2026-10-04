@@ -21,6 +21,8 @@ namespace tinyimx::rpc {
 
 class MessageRpcClient {
 public:
+    [[nodiscard]] RpcResult<ListPendingRecipientsAfterRpcResponse> ListPendingRecipientsAfter(
+        const ListPendingRecipientsAfterRpcRequest&, const RpcCallOptions&) const;
     explicit MessageRpcClient(
         std::shared_ptr<const ServiceEndpointProvider> endpoint_provider
     );
