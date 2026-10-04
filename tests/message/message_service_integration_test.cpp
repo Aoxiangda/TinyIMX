@@ -949,6 +949,62 @@ int main() {
                pending_result.value->messages[1].message_id == 7002,
            "MessageService.RealGrpcListPendingAfter");
 
+    // 100 near-TEXT-sized canonical bodies exceed a default gRPC receive
+    // frame if returned together. Actual RPC pages must remain bounded and
+    // resume after their last returned message, including short pages.
+    for (std::uint64_t id = 10000; id < 10100; ++id) {
+        auto row = FakeMessageRepositoryPort::MakeMessage(id, 777001, 777002,
+            tinyimx::message::MessageDeliveryState::kPending);
+        row.client_message_id = "large-page-" + std::to_string(id);
+        row.content = "{\"from\":777001,\"to\":777002,\"text\":\"" + std::string(65000, 'x') + "\"}";
+        repository.messages.emplace(id, std::move(row));
+    }
+    tinyimx::rpc::ListPendingAfterRpcRequest large_request;
+    large_request.to_user_id = 777002;
+    large_request.limit = 100;
+    auto large_options = options;
+    large_options.remaining_timeout = std::chrono::seconds(10);
+    std::size_t received_large = 0;
+    bool large_ordered = true, large_finished = false;
+    for (int page_index = 0; page_index < 10; ++page_index) {
+        const auto page = client.ListPendingAfter(large_request, large_options);
+        Expect(page.ok() && !page.value->messages.empty(), "PendingPage.RealGrpcLargeBodiesReadable");
+        if (!page.ok() || page.value->messages.empty()) break;
+        std::size_t bytes = 0;
+        for (const auto& row : page.value->messages) {
+            large_ordered = large_ordered && row.message_id == 10000 + received_large++;
+            bytes += row.content.size();
+            large_request.after_message_id = row.message_id;
+        }
+        Expect(bytes <= 2 * 1024 * 1024, "PendingPage.RealGrpcBodyBytesBounded");
+        if (!page.value->has_more) { large_finished = true; break; }
+    }
+    Expect(large_finished && large_ordered && received_large == 100,
+           "PendingPage.RealGrpcCursorReturnsAllRowsOnce");
+    auto raw_stub = tinyimx::message::v1::MessageService::NewStub(grpc::CreateChannel(
+        server.BoundTarget(), grpc::InsecureChannelCredentials()));
+    tinyimx::message::v1::ListPendingAfterRequest raw_request;
+    raw_request.set_to_user_id(777002);
+    raw_request.set_limit(100);
+    raw_request.mutable_meta()->set_request_id("large-page-wire-budget");
+    raw_request.mutable_meta()->set_trace_id("large-page-wire-budget-trace");
+    raw_request.mutable_meta()->set_caller_service("gateway-test");
+    raw_request.mutable_meta()->set_caller_instance("gateway-test-a");
+    tinyimx::message::v1::ListPendingAfterResponse raw_response;
+    grpc::ClientContext raw_context;
+    raw_context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(10));
+    const auto raw_status = raw_stub->ListPendingAfter(&raw_context, raw_request, &raw_response);
+    Expect(raw_status.ok() && raw_response.ByteSizeLong() <= 2 * 1024 * 1024 &&
+               raw_response.has_more() && raw_response.messages_size() > 0 && raw_response.messages_size() < 100,
+           "PendingPage.ActualProtobufWireSizeBoundedWithShortContinuation");
+    bool large_rows_pending = true;
+    for (std::uint64_t id = 10000; id < 10100; ++id) {
+        large_rows_pending = large_rows_pending && repository.messages.at(id).delivery_state ==
+            tinyimx::message::MessageDeliveryState::kPending;
+        repository.messages.erase(id);
+    }
+    Expect(large_rows_pending, "PendingPage.RealGrpcReadNeverConfirmsMessages");
+
     tinyimx::rpc::ConfirmReceiverRpcRequest wrong_confirm;
     wrong_confirm.message_id = 7001;
     wrong_confirm.receiver_user_id = 10003;

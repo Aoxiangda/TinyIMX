@@ -10,6 +10,10 @@ namespace {
 
 constexpr std::uint32_t kMaxReadPageLimit = 50;
 constexpr std::uint32_t kMaxPendingPageLimit = 100;
+// Includes all variable fields and conservative protobuf framing allowance.
+// Keep well below default gRPC receive size without changing the wire schema.
+constexpr std::size_t kMaxPendingPageBytes = 2 * 1024 * 1024;
+constexpr std::size_t kPendingRecordOverheadBytes = 256;
 constexpr std::size_t kMaxConfirmBatchSize = 100;
 
 }  // namespace
@@ -519,6 +523,11 @@ MessageApplicationService::ListPendingAfter(
         return output;
     }
 
+    if (result.records.size() > limit) {
+        output.status = MessageApplicationStatus::kInvalidRecord;
+        output.message = "message repository exceeded pending page count";
+        return output;
+    }
     std::uint64_t previous_id = after_message_id;
     for (const auto& message : result.records) {
         if (message.message_id == 0 ||
@@ -532,11 +541,35 @@ MessageApplicationService::ListPendingAfter(
         previous_id = message.message_id;
     }
 
+    const auto record_count = result.records.size();
+    std::size_t page_bytes = 0, take = 0;
+    for (const auto& message : result.records) {
+        std::size_t record_bytes = kPendingRecordOverheadBytes;
+        bool record_fits = true;
+        for (const auto* field : {&message.content, &message.client_message_id,
+                                  &message.created_at, &message.receiver_confirmed_at, &message.read_at}) {
+            if (field->size() > kMaxPendingPageBytes - record_bytes) {
+                record_fits = false;
+                break;
+            }
+            record_bytes += field->size();
+        }
+        if (!record_fits || record_bytes > kMaxPendingPageBytes - page_bytes) {
+            if (take == 0) {
+                output.status = MessageApplicationStatus::kInvalidRecord;
+                output.message = "pending message exceeds response byte budget";
+                return output;
+            }
+            break;
+        }
+        page_bytes += record_bytes;
+        ++take;
+    }
     output.messages = std::move(result.records);
-    // MessageRepository intentionally caps pending pages at 100, so C3 uses
-    // keyset pagination and a conservative full-page hint instead of a 101st
-    // sentinel row. A full page causes one harmless follow-up query.
-    output.has_more = output.messages.size() == limit;
+    output.messages.resize(take);
+    // Byte-limited short pages continue after the last returned M; omitted
+    // rows remain in SQL. A count-full page retains the conservative hint.
+    output.has_more = take < record_count || record_count == limit;
     output.status = MessageApplicationStatus::kSucceeded;
     output.message = "pending messages queried";
     return output;

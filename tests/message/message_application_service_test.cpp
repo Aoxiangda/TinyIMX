@@ -401,6 +401,55 @@ void TestPendingReadFoundation() {
            "PendingReadFoundation");
 }
 
+void TestPendingPageByteBudget() {
+    using namespace tinyimx::message;
+    FakeRepository repository;
+    for (std::uint64_t id = 1; id <= 100; ++id) {
+        auto row = FakeRepository::MakeMessage(id, 10001, 10002, MessageDeliveryState::kPending);
+        row.content = std::string(65000, 'x');
+        repository.pending_rows.push_back(std::move(row));
+    }
+    MessageApplicationService app(&repository);
+    std::uint64_t cursor = 0;
+    std::size_t received = 0;
+    bool bounded = true, ordered = true, finished = false;
+    for (int page_index = 0; page_index < 10; ++page_index) {
+        const auto page = app.ListPendingAfter(10002, cursor, 100);
+        if (!page.Succeeded() || page.messages.empty()) { bounded = false; break; }
+        std::size_t body_bytes = 0;
+        for (const auto& row : page.messages) {
+            ordered = ordered && row.message_id == ++received;
+            body_bytes += row.content.size();
+            cursor = row.message_id;
+        }
+        bounded = bounded && body_bytes <= 2 * 1024 * 1024;
+        repository.pending_rows.erase(repository.pending_rows.begin(),
+                                      repository.pending_rows.begin() + page.messages.size());
+        if (!page.has_more) { finished = true; break; }
+        if (repository.pending_rows.empty()) { finished = true; break; }
+    }
+    Expect(bounded, "PendingPage.LargeBodiesRespectByteBudget");
+    Expect(ordered && finished && received == 100, "PendingPage.ByteContinuationNeverSkipsRows");
+    auto row = FakeRepository::MakeMessage(1, 10001, 10002, MessageDeliveryState::kPending);
+    row.content = std::string(3 * 1024 * 1024, 'x');
+    repository.pending_rows = {row};
+    const auto oversize = app.ListPendingAfter(10002, 0, 100);
+    Expect(oversize.status == MessageApplicationStatus::kInvalidRecord && oversize.messages.empty(),
+           "PendingPage.OversizedFirstRecordFailsWithoutFalseCompletion");
+    row.content = "small";
+    row.created_at = std::string(3 * 1024 * 1024, 'x');
+    repository.pending_rows = {row};
+    Expect(app.ListPendingAfter(10002, 0, 100).status == MessageApplicationStatus::kInvalidRecord,
+           "PendingPage.VariableMetadataAlsoCounts");
+    repository.pending_rows.clear();
+    for (std::uint64_t id = 1; id <= 101; ++id)
+        repository.pending_rows.push_back(FakeRepository::MakeMessage(id, 10001, 10002, MessageDeliveryState::kPending));
+    Expect(app.ListPendingAfter(10002, 0, 100).status == MessageApplicationStatus::kInvalidRecord,
+           "PendingPage.RepositoryCannotExceedRequestedCount");
+    Expect(repository.persist_calls == 0 && repository.confirm_calls == 0,
+           "PendingPage.PaginationNeverMutatesDurableState");
+}
+
 void TestConfirmReceiverMonotonicOwnership() {
     FakeRepository repository;
     repository.messages.emplace(1, FakeRepository::MakeMessage(
@@ -564,6 +613,7 @@ int main() {
     TestResolvePrivateMessage();
     TestPendingRecipientDiscovery();
     TestPendingReadFoundation();
+    TestPendingPageByteBudget();
     TestConfirmReceiverMonotonicOwnership();
     TestConfirmReceiverBatch();
     TestMarkDialogRead();
