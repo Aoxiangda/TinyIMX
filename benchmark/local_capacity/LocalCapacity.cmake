@@ -11,3 +11,11 @@ add_executable(tinyimx_capacity_worker EXCLUDE_FROM_ALL
 target_include_directories(tinyimx_capacity_worker PRIVATE ${PROJECT_SOURCE_DIR} ${TINYIMX_CAPACITY_BOOST_HEADERS})
 target_compile_features(tinyimx_capacity_worker PRIVATE cxx_std_17)
 target_compile_definitions(tinyimx_capacity_worker PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
+
+# Explicit live-MySQL regression; all fixtures are connection-local temporary
+# shadows. Not in the default external-resource-free CTest suite.
+add_executable(unread_snapshot_aggregate_tests EXCLUDE_FROM_ALL
+    ${PROJECT_SOURCE_DIR}/tests/projection/unread_snapshot_aggregate_test.cpp)
+target_compile_features(unread_snapshot_aggregate_tests PRIVATE cxx_std_20)
+target_link_libraries(unread_snapshot_aggregate_tests PRIVATE
+    tinyimx_config tinyimx_logging tinyimx_db tinyimx_unread_projection)

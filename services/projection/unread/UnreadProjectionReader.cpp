@@ -46,29 +46,6 @@ bool ParseUserId(const std::string& text, std::uint64_t* value) {
     }
 }
 
-bool QuerySingleCount(
-    MySqlConnection* connection,
-    const std::string& sql,
-    std::int64_t* value,
-    std::string* error
-) {
-    MySqlQueryResult query;
-    if (!connection->Query(sql, &query)) {
-        if (error != nullptr) {
-            *error = connection->LastError();
-        }
-        return false;
-    }
-    if (query.rows.size() != 1 || query.rows.front().size() != 1 ||
-        !ParseCount(query.rows.front().front(), value)) {
-        if (error != nullptr) {
-            *error = "unread projection query returned invalid count";
-        }
-        return false;
-    }
-    return true;
-}
-
 }  // namespace
 
 UnreadProjectionReader::UnreadProjectionReader(MySqlConnectionPool* pool)
@@ -92,44 +69,28 @@ UnreadProjectionReader::LoadDialogSnapshot(
         result.message = "unread projection dialog read failed: acquire MySQL connection";
         return result;
     }
-    if (!connection->BeginTransaction()) {
-        result.message = connection->LastError();
-        return result;
-    }
-
     DialogUnreadSnapshot snapshot;
     snapshot.receiver_user_id = receiver_user_id;
     snapshot.peer_user_id = peer_user_id;
 
-    const std::string private_sql =
-        "SELECT COUNT(*) FROM im_private_messages WHERE to_user_id = " +
-        std::to_string(receiver_user_id) +
-        " AND from_user_id = " + std::to_string(peer_user_id) +
-        " AND delivery_status IN (0, 1)";
-    if (!QuerySingleCount(
-            connection.operator->(),
-            private_sql,
-            &snapshot.private_unread,
-            &result.message)) {
-        (void)connection->Rollback();
-        return result;
-    }
-
-    const std::string total_sql =
-        "SELECT COUNT(*) FROM im_private_messages WHERE to_user_id = " +
+    // Both counts come from the same ordinary InnoDB SELECT read view. The
+    // statement cannot mix a private count before a concurrent write with a
+    // total count after it. COALESCE preserves zero for an empty receiver.
+    const std::string sql =
+        "SELECT COALESCE(SUM(from_user_id = " + std::to_string(peer_user_id) +
+        "), 0), COUNT(*) FROM im_private_messages WHERE to_user_id = " +
         std::to_string(receiver_user_id) +
         " AND delivery_status IN (0, 1)";
-    if (!QuerySingleCount(
-            connection.operator->(),
-            total_sql,
-            &snapshot.total_unread,
-            &result.message)) {
-        (void)connection->Rollback();
-        return result;
-    }
-
-    if (!connection->Commit()) {
+    MySqlQueryResult query;
+    if (!connection->Query(sql, &query)) {
         result.message = connection->LastError();
+        return result;
+    }
+    if (query.rows.size() != 1 || query.rows.front().size() != 2 ||
+        !ParseCount(query.rows.front()[0], &snapshot.private_unread) ||
+        !ParseCount(query.rows.front()[1], &snapshot.total_unread) ||
+        snapshot.private_unread > snapshot.total_unread) {
+        result.message = "unread projection query returned invalid count snapshot";
         return result;
     }
 
@@ -154,11 +115,8 @@ UnreadProjectionReader::LoadUserSnapshot(
         result.message = "unread projection user read failed: acquire MySQL connection";
         return result;
     }
-    if (!connection->BeginTransaction()) {
-        result.message = connection->LastError();
-        return result;
-    }
-
+    // This grouped SELECT already yields every peer and the total derived
+    // below from one read view, including historical peers with zero unread.
     const std::string sql =
         "SELECT from_user_id, "
         "SUM(CASE WHEN delivery_status IN (0, 1) THEN 1 ELSE 0 END) "
@@ -169,7 +127,6 @@ UnreadProjectionReader::LoadUserSnapshot(
     MySqlQueryResult query;
     if (!connection->Query(sql, &query)) {
         result.message = connection->LastError();
-        (void)connection->Rollback();
         return result;
     }
 
@@ -179,28 +136,20 @@ UnreadProjectionReader::LoadUserSnapshot(
     for (const auto& row : query.rows) {
         if (row.size() != 2) {
             result.message = "unread projection user read returned invalid shape";
-            (void)connection->Rollback();
             return result;
         }
         std::uint64_t peer = 0;
         std::int64_t count = 0;
         if (!ParseUserId(row[0], &peer) || !ParseCount(row[1], &count)) {
             result.message = "unread projection user read returned invalid row";
-            (void)connection->Rollback();
             return result;
         }
         snapshot.peer_counts.emplace_back(peer, count);
         if (count > std::numeric_limits<std::int64_t>::max() - snapshot.total_unread) {
             result.message = "unread projection total count overflow";
-            (void)connection->Rollback();
             return result;
         }
         snapshot.total_unread += count;
-    }
-
-    if (!connection->Commit()) {
-        result.message = connection->LastError();
-        return result;
     }
 
     result.success = true;

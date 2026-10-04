@@ -279,3 +279,16 @@
 - `redo1k16a`原账本最后一次发送为59986.768ms，序号5999；最后计划due=59990ms没有发送，最大既有调度延迟12.164ms。源码到end即将未发计划全部记为skip，导致最后一次epoll等待跨界后遗漏尾部请求。原FAIL不重标PASS。
 - 候选：在固定15s drain内继续每次最多256条追赶所有due<end的绝对计划；迟发保留原scheduled时间并独立late_offered_requests计数。活跃ACK吞吐窗口不扩大，坏连接或在途冲突仍skip并FAIL；drain结束仍未发的计划保持skip失败。
 - 增加scheduled-to-ACK P99≤100ms门槛，覆盖客户端调度等待，原正ACK P99、全计划/零skip、SQL与wire等门槛都保留。状态：执行器候选待构建及真实复测；不修改服务器性能指标或掩盖任何原失败。
+
+### TEST-006（完整计划的新轮验证）
+
+- `b4e5bfa` 客户端构建/链接、协调器语法检查均通过。`redo1k16b` 6000计划/6000实际发送，skip0、late0，6000正ACK/wire/SQL确认，负ACK0，心跳5000/5000、断连0；正ACK P99 176.1ms、scheduled-to-ACK178.1ms、最大346.610ms，两个延迟门槛均FAIL。旧5999发送的报告保留。
+- 本轮没有实际迟发，尚需专门边界验证；不得把计划完整但P99失败解释为达标。
+
+### PERF-009：未读快照冗余往返与重复扫描
+
+- 源码 LoadDialogSnapshot 每次BEGIN、两个COUNT、COMMIT，统计private与total；LoadUserSnapshot 已为单个grouped SELECT但仍额外BEGIN/COMMIT。实测两类读取均持有连接池，投影消费与消息持久化共享SQL资源。
+- `unread-single-query-probe-20261004/` 在8个既有合成接收者的只读一致快照比较 COUNT/SUM 与原两个 COUNT，结果等价。EXPLAIN ANALYZE 单个示例合并4.23ms、原private17.2ms及total10.2ms；单个执行计划是诊断证据，不能代表P99改善。
+- 候选：单 SELECT `COALESCE(SUM(from_user_id=peer),0),COUNT(*)`，按receiver及0/1状态过滤；同一个InnoDB读视图返回两个计数，校验private≤total。用户grouped SELECT原语义不变，包含历史zero-unread peer并在C++求同视图total。移除两处多余BEGIN/COMMIT，不更改isolation/autocommit、表行、索引、RPC或Redis幂等规则。
+- 官方一致读说明：https://docs.oracle.com/cd/E17952_01/mysql-8.0-en/innodb-consistent-read.html 。池lease没有外部未结束事务，原池Release仍负责异常事务回滚。
+- 验证计划：MySQL连接局部 TEMPORARY shadow，覆盖多个peer、全部0/1/2/3状态、其他receiver隔离、空计数、zero-unread历史peer、非法身份及无连接错误；临时表仅在本测试唯一连接可见，关闭连接自动退役。再运行原只读真实SQL回归、Release服务构建和实际容量复测。状态：源码候选，不是性能PASS。
