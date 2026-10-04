@@ -49,6 +49,7 @@ def run(a):
     assert 100000 <= a.user_id_base <= 1000000000000
     assert re.fullmatch(r'[a-zA-Z0-9_-]{1,40}', a.username_prefix)
     assert re.fullmatch(r'sha256:[0-9a-f]{64}', a.gateway_image)
+    assert re.fullmatch(r'sha256:[0-9a-f]{64}', a.message_image)
     count=math.ceil(a.users/10000)
     ipaddress.IPv4Address(a.host)
     sources=['127.0.0.'+str(i+2) for i in range(count)]
@@ -73,7 +74,7 @@ def run(a):
     identity = container_identity()
     for s in ['gateway-a', 'gateway-b', 'message-service']:
         c = next(c for c in identity if c['name'] == '/tinyimx-m21-' + s + '-1')
-        expected = IMAGE if s=='message-service' else a.gateway_image
+        expected = a.message_image if s=='message-service' else a.gateway_image
         assert c['image'] == expected and c['health'] == 'healthy', 'Candidate runtime identity'
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     resource.setrlimit(resource.RLIMIT_NOFILE, (min(hard, max(soft, 20000)), hard))
@@ -242,6 +243,7 @@ if __name__=='__main__':
     p.add_argument('--host',default='127.0.0.1')
     p.add_argument('--source-ips',default=None,help='Comma-separated existing local IPv4 addresses, one per worker; no network changes')
     p.add_argument('--gateway-image',default=IMAGE)
+    p.add_argument('--message-image',default=IMAGE,help='Exact expected MessageService image SHA; default preserves original candidate pin')
     a=p.parse_args()
     # A duplicate run is rejected before error handling can touch its evidence.
     assert re.fullmatch(r'[a-zA-Z0-9-]{1,20}',a.run)

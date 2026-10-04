@@ -389,3 +389,11 @@
 - 真实MessageService两个fault-delay环境变量都UNSET；85ms阶段不是残留人工延迟。新增默认OFF的数字计时，明确precheck、获取连接(含Ping)、BEGIN、INSERT、identityread、outboxinsert、COMMIT、recoveryread/ROLLBACK耗时，8条/秒限速，不含C/内容/账号密码/token。
 - SQL顺序、身份核验、幂等冲突、事务与outbox原子性及结果不改；计时不会延長截止时间或隐藏失败。关闭时不调用诊断时钟/sink；测试覆盖move-only返回、void、异常原样传播、重复阶段累计、未执行-1、数字结果、慢失败采样和限速。后续构建/部署须等owned capacity停止并另审计。
 - nginx已预验并保持inode平滑重载；19容器ID/image/start及应用私有configSHA全部保持。记录nginxMEM343.6->448.3MiB，低于额外1GiB保守预算。ng30khold1真实30000认证、30s保持、HB380377/380377、断连0，PASS。50k还在运行；这不代表私聊/其他功能P99通过。
+
+- 后续`ng50khold1`真实50000全部认证，30s保持窗口，HB971681/971681，断连0，PASS；总wall553.149s含500s ramp与drain，不是553s全员在线稳态。无新私聊发送、ACKP99为null。nginx单参数修正消除了本轮明确入口预算故障；不推断全部业务容量通过。
+- 计时候选构建PASS：12项数字trace、49项MessageApplication、25项真实MySQL只读Resolve检查，0FAIL；binarySHA=a40c9a6c5ac97fafea456610d50255fa3f1cba351295231ec23d65f11c9830ef，C++构建HEAD6674787。尚未部署。
+
+### TEST-019：压测运行镜像身份需显式绑定
+
+- 新coordinator增加message-image exactSHA参数，默认仍为原05380镜像，Gateway43a与健康门禁不变。不能绕过镜像检查或把旧服务压测当新候选结果；错误SHA必须预检拒绝并保存FAIL。
+- C++binary构建commit与后续coordinator/docs commit分开记录。新image必须保留真实compiledrevision6674787及binarySHA，不把纯测试文档HEAD伪称重编译版本；部署对比只允许源头后的Python/docs差异，其他C++源码不变。先旧运行服务1k100/s60control，再独立审计部署MessageService、同参数重测和逐规模真实功能负载。
