@@ -81,11 +81,15 @@ def run(a):
     base=a.user_id_base
     total = int(sql(f"SELECT COUNT(*) FROM im_users WHERE user_id BETWEEN {base+1} AND {base+a.users} AND username=CONCAT('{a.username_prefix}',LPAD(user_id-{base},6,'0')) AND status=1;"))
     assert total == a.users, 'Existing owned fixture range incomplete; do not reset credentials'
-    # Only missing ring edges between known synthetic users may be inserted.
-    rows = sql(f"SELECT u.user_id, {base+1}+MOD(u.user_id-{base},{a.users}), IFNULL(r.relation_status,0) FROM im_users u LEFT JOIN im_user_relations r ON r.user_id=u.user_id AND r.peer_user_id={base+1}+MOD(u.user_id-{base},{a.users}) WHERE u.user_id BETWEEN {base+1} AND {base+a.users};")
+    # Permissions require mutual friendship, including a smaller ring's closure.
+    # UNION deduplicates the two-user case. Existing non-friend rows are refused.
+    forward=f"SELECT user_id AS u, {base+1}+MOD(user_id-{base},{a.users}) AS v FROM im_users WHERE user_id BETWEEN {base+1} AND {base+a.users}"
+    rows = sql(f"SELECT e.u,e.v,r.user_id IS NOT NULL,IFNULL(r.relation_status,0) FROM ({forward} UNION SELECT v,u FROM ({forward}) AS reverse_edges) AS e LEFT JOIN im_user_relations r ON r.user_id=e.u AND r.peer_user_id=e.v ORDER BY e.u,e.v;")
     relations = [tuple(map(int, x.split('\t'))) for x in rows.splitlines()]
-    assert len(relations) == a.users and all(s in (0,1) for u,v,s in relations), 'Refuse override blocked/unknown relations'
-    missing = [(u,v) for u,v,s in relations if s == 0 and u != v]
+    assert len(relations) == (2 if a.users==2 else 2*a.users), 'Mutual ring enumeration incomplete'
+    assert all(base<u<=base+a.users and base<v<=base+a.users and u!=v for u,v,present,s in relations), 'Owned ring bounds'
+    assert all(present in (0,1) and (not present or s==1) for u,v,present,s in relations), 'Refuse override existing non-friend relations'
+    missing = [(u,v) for u,v,present,s in relations if not present]
     assert a.users > 1
     save(stage/'audit-before.json', {'utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
         'source_commit':cmd(['git','rev-parse','HEAD']).strip(), 'coordinator_sha256':hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),

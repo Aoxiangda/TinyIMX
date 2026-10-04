@@ -397,3 +397,9 @@
 
 - 新coordinator增加message-image exactSHA参数，默认仍为原05380镜像，Gateway43a与健康门禁不变。不能绕过镜像检查或把旧服务压测当新候选结果；错误SHA必须预检拒绝并保存FAIL。
 - C++binary构建commit与后续coordinator/docs commit分开记录。新image必须保留真实compiledrevision6674787及binarySHA，不把纯测试文档HEAD伪称重编译版本；部署对比只允许源头后的Python/docs差异，其他C++源码不变。先旧运行服务1k100/s60control，再独立审计部署MessageService、同参数重测和逐规模真实功能负载。
+
+### TEST-020：较小压测环的好友关系缺少反向闭环
+
+- `pctrl1k1`旧MessageService对照1000用户、100消息/s、60s：6000发送、5994正ACK、6负ACK，HB5217/5217，P99=349.5ms、scheduled354.1ms，FAIL。保存的六条回包全部是701000发向700001的not_friend，每轮1000消息一次；不是已证实的持久化失败。
+- 新50k原始数据是双向ring；coordinator切出较小用户范围时仅补最后用户到首用户一条边，实际权限要求互为好友。修复枚举所有测试ring边及反向边，UNION去重两用户情形，只INSERT审计中明确不存在的合成账号关系。任何已有非好友状态，包括0/blocked，都拒绝；不覆盖、删除或重置关系。
+- 本轮仅Python/docs变更。先在同一旧运行镜像05380下重新对照，保留原FAIL和P99，不把消除夹具负ACK当成延迟通过或新MessageService优化成果。后续候选仍绑定compiled667与binary/image SHA。
