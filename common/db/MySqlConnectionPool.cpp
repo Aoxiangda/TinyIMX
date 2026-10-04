@@ -185,6 +185,9 @@ MySqlConnectionLease MySqlConnectionPool::Acquire(
         if (!connection->Connect(config_)) {
             LOG_ERROR("mysql connection reconnect failed"
                       << ", error=" << connection->LastError());
+            // Keep the slot for a later retry after the dependency recovers.
+            // Release also respects shutdown and transaction cleanup.
+            Release(std::move(connection));
             return {};
         }
     }

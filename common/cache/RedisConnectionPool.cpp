@@ -185,6 +185,9 @@ RedisConnectionLease RedisConnectionPool::Acquire(
         if (!connection->Connect(config_)) {
             LOG_ERROR("redis connection reconnect failed"
                       << ", error=" << connection->LastError());
+            // A failed request must not permanently shrink the pool.
+            // Release drops the slot if shutdown has already begun.
+            Release(std::move(connection));
             return {};
         }
     }

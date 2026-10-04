@@ -362,3 +362,7 @@
 - 源码Acquire弹出连接后，Ping和Connect都失败时直接返回空lease，unique_ptr销毁、AvailableCount永久减少而Size不变。MySQL/Redis均有该路径；重复瞬态故障可能耗尽所有槽位。MySQL Connect另有mysql_为空立即拒绝的前置条件，Close或失败Connect后无法再初始化。
 - 先新增显式opt-in组件探针，以真实MySQL/Redis连接经过自有loopback relay。故障仅关闭测试连接，执行SELECT1/PING、空事务，三个连续故障Acquire、恢复后无需重新Initialize及Shutdown持有lease不复活槽位。共享服务、业务行与其他应用不改变；真实密码配置仅在runtime-private，输出仅白名单测试标记。
 - 当前修复尚未应用，先保存原实现真实FAIL，再按独立审计修正并对照重验。正确性修复不自动代表容量或P99改善。
+
+- 原实现`pool-recovery-original1`已真实复现：MySQL关闭后重连FAIL，三个故障Acquire均丢失slot，恢复后SELECT1无法通过；Redis同样三次slot检查FAIL，恢复PING不能成功。共享服务未停止，所有失败保留。
+- 本次候选删除MySQL空句柄拒绝前置条件，Close后总是mysql_init；两种pool重连失败时经Release归还slot再返回空lease，Shutdown已有锁/guard保持。不会重放业务事务，也不把失败请求当成功。组件fixed1待对照验证，运行镜像尚未部署。
+- `hold30kreason1`同100用户/s登录-only诊断到28230/30000，三个worker最终RECV_ERRNO_104，未达到all-online、没有稳态业务发送。入口与Gateway无重启/OOM、nofile262144；选定nginx错误类别均0。不同于原nf30k的较早登录拒绝。需要验证Docker发布端口NAT连接元组限制，尚不能断言数据库/P99修复即可解决。

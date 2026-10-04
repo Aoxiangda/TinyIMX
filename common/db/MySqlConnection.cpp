@@ -20,11 +20,8 @@ MySqlConnection::~MySqlConnection() {
 }
 
 bool MySqlConnection::Connect(const MySqlConfig& config) {
-    if (mysql_ == nullptr) {
-        SetError("mysql handle is null");
-        return false;
-    }
-
+    // Close and failed Connect intentionally clear the handle. Always allocate
+    // a new one so a transient failure cannot make this object unrecoverable.
     Close();
 
     mysql_ = ::mysql_init(nullptr);
