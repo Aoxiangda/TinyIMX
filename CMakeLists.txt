@@ -615,6 +615,13 @@ add_custom_target(run_gateway_tests
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+add_executable(durable_private_recovery_tests
+    tests/gateway/durable_private_recovery_test.cpp)
+target_include_directories(durable_private_recovery_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(durable_private_recovery_tests PRIVATE cxx_std_20)
+target_link_libraries(durable_private_recovery_tests PRIVATE tinyimx_concurrency)
+add_test(NAME durable_private_recovery_tests COMMAND durable_private_recovery_tests)
+
 
 # M13: Business Execution Runtime unit tests.
 add_executable(business_runtime_tests

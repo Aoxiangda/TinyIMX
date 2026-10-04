@@ -1,4 +1,5 @@
 #include "gateway/GatewayServer.h"
+#include <limits>
 
 #include "common/logging/LogMacros.h"
 #include "common/net/EventLoop.h"
@@ -1538,6 +1539,7 @@ GatewayServer::GatewayServer(
               max_offline_messages_per_user
       ) {
     private_replay_admission_ = std::make_shared<PrivateReplayAdmission>();
+    durable_private_recovery_ = std::make_shared<DurablePrivateRecovery>();
     private_replay_timer_fence_ = std::make_shared<PrivateReplayTimerFence>();
     server_.SetConnectionCallback([this](
         const TcpConnectionPtr& connection
@@ -1600,6 +1602,7 @@ bool GatewayServer::Start() {
     // TcpServer::Start is idempotent. Do not create a second admission timer.
     if (private_replay_timer_.IsValid()) return true;
     private_replay_admission_->Resume();
+    durable_private_recovery_->Resume();
     {
         std::lock_guard lock(private_replay_timer_fence_->mutex);
         private_replay_timer_fence_->owner = this;
@@ -1645,6 +1648,7 @@ void GatewayServer::StopPrivateReplayAdmission() {
     }
     const auto before = private_replay_admission_->GetStats();
     private_replay_admission_->Stop();
+    durable_private_recovery_->Stop();
     if (!before.stopped) {
         LOG_INFO("gateway private replay admission stopping"
                  << ", retained_before_stop=" << before.retained
@@ -3352,6 +3356,7 @@ void GatewayServer::HandleConnection(
     // Admission bookkeeping only; Presence maintenance below is unchanged.
     if (unbind_result.unbound) {
         private_replay_admission_->Retire(unbind_result.user_id, unbind_result.epoch);
+        durable_private_recovery_->Retire(unbind_result.user_id, unbind_result.epoch);
     }
 
     if (
@@ -11979,6 +11984,51 @@ void GatewayServer::PumpPrivateReplayAdmission() {
     // Timer does short bookkeeping and nonblocking Submit only. Never does RPC.
     for (auto& attempt : private_replay_admission_->TakeDue(128, 32))
         SubmitPrivateReplayAdmissionAttempt(std::move(attempt));
+    if (!options_.enable_durable_private_recovery) return;
+    for (const auto user : durable_private_recovery_->TakeRecipients()) {
+        const auto session = session_manager_.FindSession(user);
+        if (session && session->connection &&
+            session_manager_.IsCurrent(user, session->epoch, session->connection))
+            PushPersistentOfflineMessages(user, session->connection);
+    }
+    auto* executor = replay_executor_ ? replay_executor_ : business_executor_;
+    if (!executor || !HasMessageRpcClient() || session_manager_.OnlineCount() == 0) return;
+    auto attempt = durable_private_recovery_->AcquireQuery();
+    if (!attempt) return;
+    BusinessExecutor::TaskSpec task;
+    task.request.operation = "gateway.durable-private-discovery";
+    task.request.received_at = BusinessClock::now();
+    task.request.deadline = task.request.received_at + std::chrono::milliseconds{3000};
+    task.request.ordering_key = std::numeric_limits<std::uint64_t>::max();
+    auto recovery = durable_private_recovery_;
+    task.still_valid = [recovery] { return recovery->Running(); };
+    task.dispatcher = [](BusinessExecutor::Completion completion) { if (completion) completion(); };
+    // Bootstrap keeps the client alive until replay executor drain. The worker
+    // owns only a shared coordinator lease; it never captures Gateway/Session.
+    auto* client = message_rpc_client_;
+    const auto gateway_id = options_.gateway_id;
+    task.work = [client, recovery, attempt, gateway_id](const BusinessExecutor::ExecutionContext& context)
+        -> BusinessExecutor::Completion {
+        if (context.CancellationRequested() || context.DeadlineExpired()) return {};
+        rpc::RpcCallOptions options;
+        options.request_id = gateway_id + ":durable-discovery:" + std::to_string(attempt->Cursor());
+        options.caller_service = "gateway";
+        options.caller_instance = gateway_id;
+        options.remaining_timeout = context.Request().RemainingTime();
+        const auto result = client->ListPendingRecipientsAfter(
+            {attempt->Cursor(), attempt->Limit()}, options);
+        if (!result.ok()) {
+            LOG_WARN("gateway durable private discovery failed"
+                     << ", cursor=" << attempt->Cursor()
+                     << ", error=" << result.status.message << ", retained_in_sql=1");
+            return {};
+        }
+        attempt->Complete(result.value->recipient_user_ids, result.value->has_more);
+        return {};
+    };
+    // Rejection, queued cancellation and pre-start deadline all destroy the
+    // lease and rearm discovery with backoff. No cursor is advanced on error.
+    (void)executor->Submit(std::move(task));
 }
 
 void GatewayServer::SubmitPrivateReplayAdmissionAttempt(
@@ -12012,6 +12062,11 @@ void GatewayServer::SubmitPrivateReplayAdmissionAttempt(
                 private_replay_admission_->Retire(token.user_id, token.epoch);
                 return {};
             }
+            DurablePrivateRecovery::ReplayAttemptPtr recovery_attempt;
+            if (options_.enable_durable_private_recovery) {
+                recovery_attempt = durable_private_recovery_->BeginReplay(token.user_id, token.epoch);
+                if (!recovery_attempt) return {};
+            }
             if (!attempt->MarkStarted()) return {};
             LOG_INFO("gateway private replay admitted work started"
                      << ", user_id=" << token.user_id
@@ -12020,7 +12075,7 @@ void GatewayServer::SubmitPrivateReplayAdmissionAttempt(
                      << ", admission_attempt=" << token.attempt);
             ScopedBusinessDispatchContext dispatch_scope(
                 connection, token.user_id, token.epoch);
-            ExecutePersistentOfflineReplay(token.user_id, connection, context.Request());
+            ExecutePersistentOfflineReplay(token.user_id, connection, context.Request(), std::move(recovery_attempt));
             return {};
         });
     if (status != BusinessSubmitStatus::kAccepted) {
@@ -12242,7 +12297,8 @@ void GatewayServer::ExecuteGroupOfflineReplay(
 void GatewayServer::ExecutePersistentOfflineReplay(
     UserId user_id,
     const TcpConnectionPtr& connection,
-    const BusinessRequestContext& business_request
+    const BusinessRequestContext& business_request,
+    DurablePrivateRecovery::ReplayAttemptPtr recovery_attempt
 ) {
     if (user_id == 0 || !connection || !connection->IsConnected() ||
         !HasMessageRpcClient()) {
@@ -12250,14 +12306,13 @@ void GatewayServer::ExecutePersistentOfflineReplay(
     }
 
     constexpr std::uint32_t kPendingReplayPageSize = 100;
-    std::uint64_t after_message_id = 0;
+    std::uint64_t after_message_id = recovery_attempt ? recovery_attempt->Cursor() : 0;
     std::size_t page_index = 0;
     std::size_t total_scanned = 0;
 
     auto session_is_current = [&]() {
-        const TcpConnectionPtr active =
-            session_manager_.FindConnection(user_id);
-        return active && active == connection && active->IsConnected();
+        return connection->IsConnected() &&
+            session_manager_.IsCurrent(user_id, business_request.session_epoch, connection);
     };
 
     auto make_options = [&](const char* operation) {
@@ -12278,7 +12333,8 @@ void GatewayServer::ExecutePersistentOfflineReplay(
         return options;
     };
 
-    while (session_is_current() && !business_request.DeadlineExpired()) {
+    while (session_is_current() && !business_request.DeadlineExpired() &&
+           (!recovery_attempt || page_index < 1)) {
         ++page_index;
 
         rpc::ListPendingAfterRpcRequest list_request;
@@ -12299,6 +12355,7 @@ void GatewayServer::ExecutePersistentOfflineReplay(
 
         const auto& pending_messages = list_result.value->messages;
         if (pending_messages.empty()) {
+            if (recovery_attempt) recovery_attempt->Complete(0, false);
             break;
         }
 
@@ -12408,6 +12465,8 @@ void GatewayServer::ExecutePersistentOfflineReplay(
         }
 
         total_scanned += pending_messages.size();
+        if (recovery_attempt && session_is_current())
+            recovery_attempt->Complete(page_last_message_id, list_result.value->has_more);
         if (!list_result.value->has_more) {
             break;
         }

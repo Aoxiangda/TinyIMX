@@ -9,6 +9,7 @@
 #include "gateway/MessageDeliveryDeduplicator.h"
 #include "gateway/ReceiverDeliveryTracker.h"
 #include "gateway/PrivateReplayAdmission.h"
+#include "gateway/DurablePrivateRecovery.h"
 #include "common/net/TimerId.h"
 
 #include <atomic>
@@ -122,6 +123,9 @@ struct GatewayServerOptions {
         receiver_delivery_max_attempts{
             3
         };
+
+    // Kept gated until bounded delivery resources and real recovery pass.
+    bool enable_durable_private_recovery{false};
 
 
     /*
@@ -623,7 +627,8 @@ private:
     void ExecutePersistentOfflineReplay(
         UserId user_id,
         const TcpConnectionPtr& connection,
-        const BusinessRequestContext& business_request
+        const BusinessRequestContext& business_request,
+        DurablePrivateRecovery::ReplayAttemptPtr recovery_attempt = {}
     );
 
     void PushGroupOfflineMessages(
@@ -767,6 +772,7 @@ private:
 
     struct PrivateReplayTimerFence;
     std::shared_ptr<PrivateReplayAdmission> private_replay_admission_;
+    std::shared_ptr<DurablePrivateRecovery> durable_private_recovery_;
     std::shared_ptr<PrivateReplayTimerFence> private_replay_timer_fence_;
     TimerId private_replay_timer_;
 
