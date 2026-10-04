@@ -1,10 +1,97 @@
 #include "common/db/MySqlConnectionPool.h"
 
 #include "common/logging/LogMacros.h"
+#include "common/db/StorageWaitTiming.h"
+#include <cstdint>
 
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <time.h>
 #include <utility>
 
 namespace tinyimx {
+namespace {
+
+using AcquireClock = std::chrono::steady_clock;
+
+bool SampleAcquireTrace() noexcept {
+    static const bool enabled = [] {
+        const char* flag = std::getenv("TINYIMX_MYSQL_POOL_TRACE");
+        return flag != nullptr && flag[0] == '1' && flag[1] == '\0';
+    }();
+    if (!enabled) return false;
+    static std::atomic<std::int64_t> next_ns{0};
+    const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        AcquireClock::now().time_since_epoch()).count();
+    auto expected = next_ns.load(std::memory_order_relaxed);
+    return now >= expected && next_ns.compare_exchange_strong(
+        expected, now + 125000000, std::memory_order_relaxed);
+}
+
+std::int64_t AcquireThreadCpuNs() noexcept {
+#if defined(__linux__)
+    timespec value{};
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &value) == 0)
+        return static_cast<std::int64_t>(value.tv_sec) * 1000000000 + value.tv_nsec;
+#endif
+    return -1;
+}
+
+// Created before the pool lock so its destructor logs after the lock releases,
+// including early returns. A diagnostic failure must not change lease behavior.
+class AcquirePhaseTrace {
+public:
+    AcquirePhaseTrace() noexcept : selected_(SampleAcquireTrace()) {
+        if (selected_) {
+            start_ = AcquireClock::now();
+            cpu_start_ = AcquireThreadCpuNs(); thread_ = diagnostics::CurrentThreadId();
+        }
+    }
+    ~AcquirePhaseTrace() noexcept {
+        if (!selected_) return;
+        const auto total = Micros(AcquireClock::now() - start_);
+        const auto cpu_end = AcquireThreadCpuNs();
+        const auto cpu = cpu_start_ >= 0 && cpu_end >= cpu_start_
+            ? (cpu_end - cpu_start_) / 1000 : -1;
+        try {
+            LOG_WARN("mysql_pool_acquire_phase"
+                << " status=" << status_ << " pool_size=" << size_
+                << " free_slots_before=" << free_ << " tid=" << thread_ << " started_us=" << std::chrono::duration_cast<std::chrono::microseconds>(start_.time_since_epoch()).count() << " mutex_wait_us=" << mutex_wait_us_
+                << " slot_wait_us=" << wait_us_ << " ping_us=" << ping_us_
+                << " reconnect_us=" << reconnect_us_ << " total_us=" << total
+                << " thread_cpu_us=" << cpu);
+        } catch (...) {
+            // Numeric observability must never throw into a business request.
+        }
+    }
+    void Slots(std::size_t size, std::size_t free) noexcept {
+        size_ = size; free_ = free;
+    }
+    void Outcome(int status) noexcept { status_ = status; }
+    void MutexLocked() noexcept { if(selected_){mutex_wait_us_=Micros(AcquireClock::now()-start_);phase_=AcquireClock::now();} }
+    void SlotReady() noexcept {
+        if (selected_) wait_us_ = Micros(AcquireClock::now() - phase_);
+    }
+    void PhaseStart() noexcept { if (selected_) phase_ = AcquireClock::now(); }
+    void PingDone() noexcept {
+        if (selected_) ping_us_ = Micros(AcquireClock::now() - phase_);
+    }
+    void ReconnectDone() noexcept {
+        if (selected_) reconnect_us_ = Micros(AcquireClock::now() - phase_);
+    }
+private:
+    static std::int64_t Micros(AcquireClock::duration value) noexcept {
+        return std::chrono::duration_cast<std::chrono::microseconds>(value).count();
+    }
+    bool selected_;
+    int status_{0}; // 0=healthy/reconnected lease,1=unavailable,2=timeout,3=reconnect failure
+    std::size_t size_{0}, free_{0}; std::uint64_t thread_{0}; std::int64_t mutex_wait_us_{0};
+    AcquireClock::time_point start_{}, phase_{};
+    std::int64_t cpu_start_{-1}, wait_us_{0}, ping_us_{0}, reconnect_us_{0};
+};
+
+} // namespace
 
 MySqlConnectionLease::MySqlConnectionLease(
     MySqlConnectionPool* pool,
@@ -157,9 +244,14 @@ void MySqlConnectionPool::Shutdown() {
 MySqlConnectionLease MySqlConnectionPool::Acquire(
     std::chrono::milliseconds timeout
 ) {
+    AcquirePhaseTrace trace;
     std::unique_lock<std::mutex> lock(mutex_);
+    trace.MutexLocked();
+    trace.Slots(size_, connections_.size());
 
     if (!initialized_ || shutting_down_) {
+        trace.Outcome(1);
+        trace.SlotReady();
         LOG_ERROR("mysql connection pool acquire failed: pool not available");
         return {};
     }
@@ -169,20 +261,30 @@ MySqlConnectionLease MySqlConnectionPool::Acquire(
     });
 
     if (!ready || shutting_down_) {
+        trace.Outcome(2);
+        trace.SlotReady();
         LOG_ERROR("mysql connection pool acquire timeout");
         return {};
     }
 
     auto connection = std::move(connections_.front());
     connections_.pop_front();
+    trace.SlotReady();
 
     lock.unlock();
 
-    if (!connection->Ping()) {
+    trace.PhaseStart();
+    const bool ping_ok = connection->Ping();
+    trace.PingDone();
+    if (!ping_ok) {
         LOG_WARN("mysql connection ping failed, reconnecting"
                  << ", error=" << connection->LastError());
 
-        if (!connection->Connect(config_)) {
+        trace.PhaseStart();
+        const bool reconnected = connection->Connect(config_);
+        trace.ReconnectDone();
+        if (!reconnected) {
+            trace.Outcome(3);
             LOG_ERROR("mysql connection reconnect failed"
                       << ", error=" << connection->LastError());
             // Keep the slot for a later retry after the dependency recovers.

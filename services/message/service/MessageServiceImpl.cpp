@@ -1,6 +1,7 @@
 #include "services/message/service/MessageServiceImpl.h"
 
 #include "common/observability/GrpcTracing.h"
+#include "common/db/StorageWaitTiming.h"
 
 #include "services/message/application/MessageApplicationService.h"
 #include "services/rpc/GroupRpcClient.h"
@@ -275,6 +276,8 @@ grpc::Status MessageServiceImpl::PersistPrivateMessage(
         return grpc::Status(grpc::StatusCode::UNAVAILABLE,
                             "MessageService application service is unavailable");
     }
+    diagnostics::StorageOperationTrace storage_trace(
+        1, request->from_user_id(), request->to_user_id());
     if (!ApplyFaultDelay(
             context,
             "TINYIMX_FAULT_MESSAGE_PERSIST_PRE_REPOSITORY_DELAY_MS")) {
@@ -289,6 +292,7 @@ grpc::Status MessageServiceImpl::PersistPrivateMessage(
         request->message_type(),
         request->content()
     );
+    storage_trace.Result(static_cast<int>(result.status), result.message_id);
     if (!result.Completed()) {
         return MapApplicationFailure(result.status, result.message);
     }
@@ -770,8 +774,11 @@ grpc::Status MessageServiceImpl::ConfirmReceiver(
                             "MessageService application service is unavailable");
     }
 
+    diagnostics::StorageOperationTrace storage_trace(
+        2, 0, request->receiver_user_id(), request->message_id());
     auto result = application_service_->ConfirmReceiver(
         request->message_id(), request->receiver_user_id());
+    storage_trace.Result(static_cast<int>(result.status), request->message_id());
     if (!result.Succeeded()) {
         return MapApplicationFailure(result.status, result.message);
     }

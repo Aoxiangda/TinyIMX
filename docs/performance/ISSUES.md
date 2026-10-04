@@ -522,3 +522,12 @@
 - dc7083a候选构建125项相关检查PASS。第一次真实独立MySQL pool1回归46个PASS、1个实际断言FAIL和最终整体FAIL（脚本计数2FAIL）；pool4未执行。原日志/schema/audit保留，不部署、不压测。
 - 失败用例假定Pending确认与Read同时发生时最终必为Read。原MarkReadByDialogOnConnection明确只UPDATE status1；若Read先于确认则合法最终status1，属于新增用例契约错误。没有修改生产SQL来迎合测试。
 - 修正仅测试/文档三文件：并发后两操作成功且状态只能1或2；之后显式Read必须到2，晚到确认affected0且不降级。不会接受0/3或吞掉错误。重建测试后以新schema重跑pool1/pool4，保留原失败；Message候选二进制编译版本仍dc7083a，测试/编排Git单独记录。
+
+### PERF-037：确认单租约无已证实性能收益，恢复运行基线并拆分等待
+
+- 修正测试后pool1/pool4各49检查、snapshot14通过，加既有125，共237检查PASS。0a9657候选仅替换Message，其他18/env/config/pool16/013保持。rc100a6000正ACK/P9994.3/scheduled97.9ms，HB82557，原窗口49链PASS；rc150a9000正ACK/P99177.2/scheduled179.3ms，HB81879，延迟FAIL。无skip/late/断连，真实SQL/确认/wire全部匹配，仍无改善证据，不接受候选。
+- 限速慢样本rc150派发年龄中位1.983ms、均值9.542ms；work均值118.884ms；persistRPC均值81.910ms；仓储均值20.530ms；Acquire均值1.971ms。31同M配对RPC-minus-repository均值29.827ms。不同总体数字不能相减/相加当P99，也不能据此把Acquire视为主要拐点原因。
+- 已审计只回退Message到原b24/pool16，其他18及所有配置SHA保持；失败代码dc7083a、测试修正b7c969b和237回归/两点结果全保留。v11本机151文件SHA通过，归档SHA82fcffdf3829477ed0a87a5b7033877513ffa453f70abe2a530fbbe944938ec6。
+- 核心7容器未配置独立Docker CPU/memory限额；GWa/b、Message、Social日志warn/同步console+文件、不每条刷文件，User为info。关键服务没有TINYIMX_FAULT_*环境值。配置不证明实际CPU/IO等待或日志阻塞，不能据此宣称唯一原因。
+- 下一诊断候选恢复recipient-aware adapter到原完整查询+条件更新双租约兼容路径，避免带入未接受的优化。默认OFF的pool mutex/slot/Ping/reconnect/wall/CPU数字计时，以及RPC handler/仓储阶段CPU；成功稳定M%64样本关联，日志限速8/bucket/process。只看实际handler内部不能测到gRPC入口前排队或返回后transport；CPU短于wall也不能独自区分IO与可运行调度等待。
+- 原652本地pool计时草稿先审计保存为held-draft，再恢复精确原CPP并以b7c969b重新审计九路径，禁止应用过时文档包。诊断构建/真实回归/部署/测量此时NOT_RUN；当前运行仍b24。

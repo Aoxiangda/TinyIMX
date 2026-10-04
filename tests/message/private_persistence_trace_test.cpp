@@ -6,6 +6,12 @@
 using Trace=tinyimx::message::PrivatePersistenceTrace;
 namespace {
 std::int64_t ticks=0;unsigned clocks=0,emitted=0,failed=0;Trace::Snapshot captured;
+using StorageTrace=tinyimx::diagnostics::StorageOperationTrace;
+StorageTrace::Snapshot storage_captured;unsigned storage_emitted=0;
+std::int64_t cpu_ticks=0;unsigned cpu_clocks=0;
+std::int64_t CpuNow() noexcept{++cpu_clocks;return cpu_ticks;}
+std::int64_t NoCpu() noexcept{return -1;}
+void StorageSink(const StorageTrace::Snapshot& s) noexcept{storage_captured=s;++storage_emitted;}
 std::int64_t Now() noexcept{++clocks;return ticks;}
 void Sink(const Trace::Snapshot& s) noexcept{captured=s;++emitted;}
 void Check(bool ok,const char* label){std::cout<<(ok?"[PASS] ":"[FAIL] ")<<label<<'\n';failed+=!ok;}
@@ -47,5 +53,16 @@ int main(){
     unsigned allowed=0;for(unsigned i=0;i<100;++i)allowed+=limiter.Admit(10);
     Check(allowed==8,"Default numeric logger bounded to eight per second");
     Check(limiter.Admit(11)&&!limiter.Admit(10),"Next bucket resumes and stale bucket rejected");
+    const auto before_clocks=clocks;
+    {StorageTrace trace(1,11,22,64,false,StorageSink,Now,CpuNow);trace.Result(0,64);}
+    Check(clocks==before_clocks&&cpu_clocks==0&&storage_emitted==0,"Storage timing disabled invokes no clocks or sink");
+    {StorageTrace trace(1,11,22,0,true,StorageSink,Now,CpuNow);ticks+=40;cpu_ticks+=7;trace.Result(0,64);}
+    Check(storage_emitted==1&&storage_captured.total_us==40&&storage_captured.cpu_us==7&&storage_captured.mid==64&&storage_captured.status==0,
+          "Storage timing separates wall and thread CPU with final numeric identity");
+    {StorageTrace trace(2,0,22,65,true,StorageSink,Now,CpuNow);trace.Result(0,65);}
+    Check(storage_emitted==1,"Storage timing successful identity sampling omits non64 messages");
+    {StorageTrace trace(2,0,22,128,true,StorageSink,Now,NoCpu);trace.Result(0,128);}
+    Check(storage_emitted==2&&storage_captured.cpu_us==-1,"Storage timing unavailable CPU remains explicit minus1");
+    Check(captured.cpu_us==-1&&captured.phase_cpu_us[1]==-1,"Legacy persistence timing leaves CPU unavailable while storage flagOFF");
     return failed?1:0;
 }
