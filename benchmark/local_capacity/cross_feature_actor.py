@@ -130,7 +130,8 @@ class Run:
         self.until(lambda: (kind+1, seq) in c.replies or (9999, seq) in c.replies, name)
         assert (9999, seq) not in c.replies, f'{name}: unexpected server error {c.replies.get((9999, seq))}'
         reply = c.replies.pop((kind+1, seq))
-        row = {'name': name, 'uid': c.uid, 'type': kind, 'ms': (time.monotonic_ns()-start)/1e6,
+        finished = time.monotonic_ns()
+        row = {'name': name, 'uid': c.uid, 'type': kind, 'start_mono_ns': start, 'end_mono_ns': finished, 'ms': (finished-start)/1e6,
                'expected_success': success, 'actual_success': reply.get('success'), 'reason': reply.get('reason')}
         self.operations.append(row)
         assert reply.get('success') is success, f'{name}: {reply}'
@@ -228,8 +229,9 @@ class Run:
                      success=False, reason={'invalid_group_request'})
         until = future.strftime('%Y-%m-%dT%H:%M:%S.000Z')
         self.group(a, 'group-mute', 2041, gid, target_user_id=c.uid, muted_until=until)
-        denied = self.request(c, 'muted-group-send-denied', 2049, {'group_id': gid, 'client_message_id': self.prefix+'-muted', 'message_type': 1, 'content': text}, success=False)
-        self.check('mute-negative-reason', 'mut' in str(denied.get('reason', '')).lower() or 'mut' in str(denied.get('message', '')).lower())
+        self.authoritative('group-mute-authoritative-active', f'SELECT COUNT(*) FROM im_group_members WHERE group_id={gid} AND user_id={c.uid} AND status=1 AND muted_until>UTC_TIMESTAMP(3)', '1')
+        self.request(c, 'muted-group-send-denied', 2049, {'group_id': gid, 'client_message_id': self.prefix+'-muted', 'message_type': 1, 'content': text}, success=False, reason={'group_send_permission_denied'})
+        self.authoritative('denied-group-send-not-persisted', f"SELECT COUNT(*) FROM im_group_messages WHERE group_id={gid} AND client_message_id='{self.prefix}-muted'", '0')
         self.group(a, 'group-unmute', 2041, gid, target_user_id=c.uid, muted_until='')
         group_body = {'group_id': gid, 'client_message_id': self.prefix+'-gm', 'message_type': 1, 'content': self.prefix+'-group-content'}
         gs = self.request(a, 'group-send-with-fanout', 2049, group_body)
@@ -297,9 +299,11 @@ def main():
     parser.add_argument('--users', type=int, nargs=4, default=[519800,519802,519804,519806])
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=9000)
+    parser.add_argument('--background-run')
     args = parser.parse_args()
     assert re.fullmatch('[a-zA-Z0-9-]{1,20}', args.run)
     assert len(set(args.users)) == 4 and all(519800<=u<=519950 for u in args.users), 'Owned reserved actors only'
+    assert args.background_run is None or re.fullmatch('[a-zA-Z0-9-]{1,20}', args.background_run)
     os.chdir(ROOT)
     os.umask(0o077)
     out = ROOT/'.local/codex'/('cross-feature-'+args.run)
@@ -327,7 +331,16 @@ def main():
                  'rollback': 'Close own actor sockets only; keep test history/files, never arbitrary row/file delete',
                  'coverage': 'Functional chain sample; no capacity P99 proof, TLS/MCP/offline/fault/soak not yet covered'}
         (out/'audit-before.json').write_text(json.dumps(audit,indent=2)+'\n')
+        if args.background_run:
+            bg = ROOT/'.local/codex'/('capacity-'+args.background_run)
+            identities = json.loads((bg/'audit-before.json').read_text())
+            start = int((bg/'control/start_ns').read_text())
+            end = start + int(identities['scenario']['duration'])*1_000_000_000
+            assert start <= time.monotonic_ns() < end and not (bg/'control/release').exists() and not (bg/'control/abort').exists(), 'Background steady workload must be active'
+            (out/'background-window.json').write_text(json.dumps({'run':args.background_run,'users':identities['scenario']['users'],'source_commit':identities['source_commit'],'start_mono_ns':start,'end_mono_ns':end},indent=2)+'\n')
         run.chain()
+        if args.background_run:
+            run.check('every-operation-inside-background-steady-window', all(start <= row['start_mono_ns'] <= row['end_mono_ns'] < end for row in run.operations))
     except BaseException as e:
         failure = {'type': type(e).__name__, 'message': str(e), 'traceback': traceback.format_exc()}
         (out/'failure.json').write_text(json.dumps(failure,indent=2)+'\n')

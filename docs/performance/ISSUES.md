@@ -318,3 +318,8 @@
 - `mixed10kb` 完成32操作；修正后的完整history内容、私聊已读SQL2和会话unread0、群创建幂等、加入/邀请、version更新、两页成员恰好4人、我的群及管理员设置均通过。群禁言的SQL-style输入被真实服务拒绝为invalid_group_request，整轮FAIL保留，文件/后续群操作没有标PASS。
 - GroupApplicationService.NormalizeMuteTimestamp及现有集成测试要求公开UTC格式 `YYYY-MM-DDTHH:MM:SS.000Z`，内部才规范化成SQL datetime。测试脚本现使用明确UTC毫秒格式，另外保留错误SQL-format输入必须拒绝的负向断言。业务服务没有修改。
 - 下一轮必须用fresh四账号519820/822/824/826；之前的好友/群历史保留，不自动清理或重置。链测试的逐操作样本仍不能代表P99容量指标。
+
+### TEST-009：负向断言应检查公开错误码和权威状态
+
+- `mixed10kc` 完成34操作：SQL-format错误时间正确拒绝，RFC3339UTC正向禁言成功，随后真实群发被拒绝。测试误猜测reason/message应含mute，实际Gateway合同为`group_send_permission_denied`，因此整轮仍FAIL保留；不能当业务禁言失败，也不将未执行功能计为通过。
+- 测试改为精确公开reason，同时SQL验证成员仍active且muted_until在未来，拒绝消息没有任何持久化行；unmute后必须真实成功投递并ACK。增加每操作monotonic边界与可选背景run的start/end约束，保证声称在10k稳态内的操作全部落在真实原负载窗口中。
