@@ -1,6 +1,9 @@
 #include "tests/concurrency/TestFramework.h"
 
 #include "gateway/ReceiverDeliveryTracker.h"
+#include <atomic>
+#include <thread>
+#include <vector>
 
 
 namespace tinyimx::test {
@@ -10,6 +13,60 @@ void
 RegisterReceiverDeliveryTrackerTests(
     TestRunner& runner
 ) {
+    runner.Add("ReceiverDeliveryTracker.PrivateIndexEvictionAndGroupNamespace", []() {
+        ReceiverDeliveryTracker tracker(1);
+        const auto group = GroupDeliveryIdentity(4001, 77);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(group, 7), ReceiverDeliveryRegisterStatus::kRegistered);
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(group, 7), ReceiverDeliveryAckStatus::kConfirmed);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(4001, 88, 8), ReceiverDeliveryRegisterStatus::kRegistered);
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(4001, 88, 8), ReceiverDeliveryAckStatus::kConfirmed);
+        ReceiverDeliverySnapshot snapshot;
+        TINYIMX_EXPECT_TRUE(tracker.GetSnapshot(4001, &snapshot));
+        TINYIMX_EXPECT_EQ(snapshot.receiver_user_id, static_cast<std::uint64_t>(88));
+        TINYIMX_EXPECT_TRUE(!tracker.GetSnapshot(group, &snapshot));
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(4002, 99, 9), ReceiverDeliveryRegisterStatus::kRegistered);
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(4002, 99, 9), ReceiverDeliveryAckStatus::kConfirmed);
+        TINYIMX_EXPECT_TRUE(!tracker.GetSnapshot(4001, &snapshot));
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(4001, 88, 8), ReceiverDeliveryAckStatus::kUnknownMessage);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(4001, 100, 10), ReceiverDeliveryRegisterStatus::kRegistered);
+        TINYIMX_EXPECT_TRUE(tracker.GetSnapshot(4001, &snapshot));
+        TINYIMX_EXPECT_EQ(snapshot.receiver_user_id, static_cast<std::uint64_t>(100));
+    });
+    runner.Add("ReceiverDeliveryTracker.GroupEvictionCannotErasePrivateIndex", []() {
+        ReceiverDeliveryTracker tracker(1);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(4101, 88, 8), ReceiverDeliveryRegisterStatus::kRegistered);
+        const auto group = GroupDeliveryIdentity(4101, 77);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(group, 9), ReceiverDeliveryRegisterStatus::kRegistered);
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(group, 9), ReceiverDeliveryAckStatus::kConfirmed);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(GroupDeliveryIdentity(4102, 77), 10), ReceiverDeliveryRegisterStatus::kRegistered);
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(GroupDeliveryIdentity(4102, 77), 10), ReceiverDeliveryAckStatus::kConfirmed);
+        ReceiverDeliverySnapshot snapshot;
+        TINYIMX_EXPECT_TRUE(tracker.GetSnapshot(4101, &snapshot));
+        TINYIMX_EXPECT_TRUE(!snapshot.confirmed);
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(4101, 89, 8), ReceiverDeliveryAckStatus::kReceiverMismatch);
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(4101, 88, 8), ReceiverDeliveryAckStatus::kConfirmed);
+    });
+    runner.Add("ReceiverDeliveryTracker.ConcurrentIndexHasOnePrivateReceiver", []() {
+        ReceiverDeliveryTracker tracker;
+        std::atomic<int> registered{0};
+        std::atomic<int> mismatched{0};
+        std::vector<std::thread> threads;
+        for (std::uint64_t receiver = 1; receiver <= 8; ++receiver) {
+            threads.emplace_back([&, receiver] {
+                const auto status = tracker.RegisterAttempt(4201, receiver, static_cast<std::uint32_t>(receiver));
+                if (status == ReceiverDeliveryRegisterStatus::kRegistered) ++registered;
+                if (status == ReceiverDeliveryRegisterStatus::kReceiverMismatch) ++mismatched;
+            });
+        }
+        for (auto& thread : threads) thread.join();
+        TINYIMX_EXPECT_EQ(registered.load(), 1);
+        TINYIMX_EXPECT_EQ(mismatched.load(), 7);
+        TINYIMX_EXPECT_EQ(tracker.Size(), static_cast<std::size_t>(1));
+        ReceiverDeliverySnapshot snapshot;
+        TINYIMX_EXPECT_TRUE(tracker.GetSnapshot(4201, &snapshot));
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(4201, snapshot.receiver_user_id, snapshot.current_delivery_seq),
+                          ReceiverDeliveryAckStatus::kConfirmed);
+    });
     runner.Add(
         "ReceiverDeliveryTracker."
         "RegistersFirstAttempt",

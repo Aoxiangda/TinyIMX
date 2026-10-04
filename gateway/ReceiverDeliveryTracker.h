@@ -114,6 +114,9 @@ private:
     const std::size_t max_recent_confirmed_;
     mutable std::mutex mutex_;
     std::unordered_map<DeliveryIdentity, Entry, DeliveryIdentityHash> entries_;
+    // Private M identifies exactly one receiver. Group M has many recipients
+    // and must never be entered here. All access uses the same mutex as entries_.
+    std::unordered_map<std::uint64_t, std::uint64_t> private_receivers_;
     std::deque<DeliveryIdentity> confirmed_order_;
 };
 

@@ -17,18 +17,22 @@ ReceiverDeliveryRegisterStatus ReceiverDeliveryTracker::RegisterAttempt(
     auto it = entries_.find(identity);
     if (it == entries_.end()) {
         if (identity.domain == DeliveryDomain::kPrivateMessage) {
-            for (const auto& [existing_identity, _] : entries_) {
-                if (existing_identity.domain == DeliveryDomain::kPrivateMessage &&
-                    existing_identity.message_id == identity.message_id) {
-                    return ReceiverDeliveryRegisterStatus::kReceiverMismatch;
-                }
-            }
+            if (private_receivers_.find(identity.message_id) != private_receivers_.end())
+                return ReceiverDeliveryRegisterStatus::kReceiverMismatch;
         }
         Entry entry;
         entry.current_delivery_seq = delivery_seq;
         entry.attempt_count = 1;
         entry.attempt_seqs.insert(delivery_seq);
         entries_.emplace(identity, std::move(entry));
+        if (identity.domain == DeliveryDomain::kPrivateMessage) {
+            try {
+                private_receivers_.emplace(identity.message_id, identity.recipient_user_id);
+            } catch (...) {
+                entries_.erase(identity);
+                throw;
+            }
+        }
         return ReceiverDeliveryRegisterStatus::kRegistered;
     }
     Entry& entry = it->second;
@@ -52,12 +56,8 @@ ReceiverDeliveryRetryRegisterStatus ReceiverDeliveryTracker::RegisterRetryAttemp
     auto it = entries_.find(identity);
     if (it == entries_.end()) {
         if (identity.domain == DeliveryDomain::kPrivateMessage) {
-            for (const auto& [existing_identity, _] : entries_) {
-                if (existing_identity.domain == DeliveryDomain::kPrivateMessage &&
-                    existing_identity.message_id == identity.message_id) {
-                    return ReceiverDeliveryRetryRegisterStatus::kReceiverMismatch;
-                }
-            }
+            if (private_receivers_.find(identity.message_id) != private_receivers_.end())
+                return ReceiverDeliveryRetryRegisterStatus::kReceiverMismatch;
         }
         return ReceiverDeliveryRetryRegisterStatus::kUnknownMessage;
     }
@@ -83,12 +83,8 @@ ReceiverDeliveryAckStatus ReceiverDeliveryTracker::Acknowledge(
     auto it = entries_.find(identity);
     if (it == entries_.end()) {
         if (identity.domain == DeliveryDomain::kPrivateMessage) {
-            for (const auto& [existing_identity, _] : entries_) {
-                if (existing_identity.domain == DeliveryDomain::kPrivateMessage &&
-                    existing_identity.message_id == identity.message_id) {
-                    return ReceiverDeliveryAckStatus::kReceiverMismatch;
-                }
-            }
+            if (private_receivers_.find(identity.message_id) != private_receivers_.end())
+                return ReceiverDeliveryAckStatus::kReceiverMismatch;
         }
         return ReceiverDeliveryAckStatus::kUnknownMessage;
     }
@@ -156,18 +152,14 @@ bool ReceiverDeliveryTracker::GetSnapshot(
 ) const {
     if (message_id == 0 || snapshot == nullptr) return false;
     std::lock_guard<std::mutex> lock(mutex_);
-    const DeliveryIdentity* match = nullptr;
-    for (const auto& [identity, _] : entries_) {
-        if (identity.domain == DeliveryDomain::kPrivateMessage && identity.message_id == message_id) {
-            if (match != nullptr) return false;
-            match = &identity;
-        }
-    }
-    if (match == nullptr) return false;
-    const auto it = entries_.find(*match);
-    snapshot->domain = match->domain;
-    snapshot->message_id = match->message_id;
-    snapshot->receiver_user_id = match->recipient_user_id;
+    const auto recipient = private_receivers_.find(message_id);
+    if (recipient == private_receivers_.end()) return false;
+    const auto identity = PrivateDeliveryIdentity(message_id, recipient->second);
+    const auto it = entries_.find(identity);
+    if (it == entries_.end()) return false;
+    snapshot->domain = identity.domain;
+    snapshot->message_id = identity.message_id;
+    snapshot->receiver_user_id = identity.recipient_user_id;
     snapshot->current_delivery_seq = it->second.current_delivery_seq;
     snapshot->attempt_count = it->second.attempt_count;
     snapshot->confirmed = it->second.state == State::kConfirmed;
@@ -189,7 +181,11 @@ void ReceiverDeliveryTracker::TrimConfirmedLocked() {
         const DeliveryIdentity oldest = confirmed_order_.front();
         confirmed_order_.pop_front();
         const auto it = entries_.find(oldest);
-        if (it != entries_.end() && it->second.state == State::kConfirmed) entries_.erase(it);
+        if (it != entries_.end() && it->second.state == State::kConfirmed) {
+            if (oldest.domain == DeliveryDomain::kPrivateMessage)
+                private_receivers_.erase(oldest.message_id);
+            entries_.erase(it);
+        }
     }
 }
 
