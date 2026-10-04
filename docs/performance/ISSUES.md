@@ -612,3 +612,16 @@ v16 脱敏归档本机 70 文件逐 SHA 通过，archive SHA 488f8ceb9a79614ac08
 待执行真实验证使用已拥有的 principal519870/peer519872/group26/file16，候选原生进程只监听 127.0.0.1:18322，随机 token/私有配置不出目录。八类真实只读 RPC、消息 1/50/缺省、12 非法 limit、未授权/身份注入与其他三类 page100 均验证。strace 由父进程跟踪自己的子进程，-c 只保存 syscall 聚合，绝不附着正式服务或输出参数/凭据；计时受干扰，不能用于容量接受。15s 启动/5s 请求/150s 整体与自己的看护有界，INT/TERM/HUP finally 仅在 PID/cmdline/starttime 全部吻合时停止自己的候选；正式 19 服务/SQL1/1/1/0/0/所有应用保持，不做新 fixture 写入、模型推理、安装或删除。该真实验证此阶段尚未运行。
 
 主性能排查已核实 Message 通道按 target 缓存复用、ZooKeeper Resolve 读本地快照、TCP_NODELAY 已开、遥测为批处理导出。这些机制不支持重复修复“逐消息建连接/实时 ZK 查询/Nagle/同步逐条遥测”的猜测。尚需更细的实际 CPU/RPC 往返证据后实施主要性能修改；全部功能极致性能仍未达到。
+
+
+### 2026-10-05：MCP 真实边界验证通过；当前主机环境已只读核实
+
+独立回环候选 compiled778/dbfef7 完成 27 请求：八类真实领域 RPC、消息 1/50/缺省六个合法用例、两消息工具 51/100/0/-1/字符串/null 共十二个非法用例、未授权和身份注入检查。好友/群列表/群成员 100 保持有效；已有测试身份519870/peer519872/group26/file16均正确、文件字节校验元数据未变。仅父 strace 跟踪自有子进程，汇总 syscall 数量不含调用参数；futex/epoll 总耗时包含等待且受 ptrace 干扰，不能当独占内核 CPU 或生产 P99。候选按 PID/cmdline/starttime 验证后已停止，全部19/配置/SQL1/1/1/0/0保持，没有模型推理或业务写入。
+
+下一步封存原38dca镜像+仅 MCP 二进制，验证UID1000加载和缺配置预期exit1；之后仅 MCP 更新，环境键值/命令/健康检查/正式 principal/模型/配置原样，其他18保持。无活跃MCP请求和压测时执行，验证现有token的工具声明50/100，不导出token。任何失败精确回滚38dca/8cd229，并验证ENV映射而不是数组排列。当前 image/deployment尚未执行；这项功能修正不表示正式principal1缺失或AI连接已解决，也不表示10k–50k性能已接受。
+
+Windows21:39UTC只读审计：实际运行VMware16.2.4 build20089737、Ubuntu VMX8vCPU/16384MiB，当前vmware.log Monitor Mode=ULM且WHP标记存在，Windows HypervisorPresent=true、VirtualizationBasedSecurityStatus=2。真实VMX SHA726444586dbb79772b4a2127581f11fcd75d9a5087a0c9b033f6a5aed705ad4f。SecurityServicesRunning=[0]，不据此声称HVCI/内存完整性功能正在运行。VMware官方说明ULM使用WHP API： https://blogs.vmware.com/cloud-foundation/2020/05/28/vmware-workstation-now-supports-hyper-v-mode/ ；Microsoft说明状态2表示VBS运行： https://learn.microsoft.com/en-us/windows/security/hardware-security/enable-virtualization-based-protection-of-code-integrity 。此为当前环境因素，没有与CPL0成对比较，不能分配延迟因果百分比或否定软件瓶颈。没有改VBS/启动项/VMX/系统设置、重启或停止任何应用。
+
+虚拟网卡确为e1000，但guest ip route get192.168.220.128 from192.168.220.129结果local/devlo；本地压测及Docker服务链并不以物理虚拟网卡为主要传输路径。因此不盲改网卡。当前有依据的方向是进一步区分原消息组件的SQL同步/网络往返/RPC与线程成本，再选择代码优化；不是把所有高内核时间都归给VMware。主机审计JSON在本机evidence/vmware-host-mode-review-20261005，只有允许的模式/硬件字段，没有完整VMX/log或命令行。
+
+v17将保留MCP原版red、89green/corepass、真实验证/汇总trace、自有进程停止审计、源码/镜像/更新和回滚证据，实际secret扫描且不覆盖v16。所有功能极致性能仍未实现，继续迭代。
