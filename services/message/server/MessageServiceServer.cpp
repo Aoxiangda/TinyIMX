@@ -48,11 +48,6 @@ bool MessageServiceServer::Start(
     }
 
     grpc::ServerBuilder builder;
-    // Retain finished synchronous workers for reuse. With the default two
-    // idle pollers, overlapping storage RPCs repeatedly create/retire workers.
-    // This bounds idle retention, not active RPC concurrency or database leases.
-    // Keep the existing minimum, completion queue count and polling timeout.
-    builder.SetSyncServerOption(grpc::ServerBuilder::MAX_POLLERS, 16);
     int selected_port = 0;
 
     builder.AddListeningPort(

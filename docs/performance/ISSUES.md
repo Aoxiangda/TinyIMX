@@ -540,3 +540,12 @@
 - 原诊断141个persist样本用了141个不同TID，confirm也141个不同TID，跨60秒不断更换；这提示同步RPC线程 churn。实际链接gRPC1.76.0头文件默认MIN1/MAX2/CQ1/timeout10000，MessageServiceServer无覆盖；[官方ThreadManager源码](https://github.com/grpc/grpc/blob/master/src/cpp/thread_manager/thread_manager.cc)明确小maxpollers可能反复建退线程。当前安装版本头文件默认已实证，源码机制为官方上游参考；不把推断当已证实唯一根因。
 - 下一候选只设置MessageServer MAX_POLLERS=16，保留MIN1/CQ1/timeout10000。该值是空闲轮询线程保留上限，并非16活动RPC/池大小限制；最多多保留14个空闲poller，实际资源需测。网关线程/公平实现/SQL/鉴权/事务/期限/持久性保持，先真实gRPC回归，再同150诊断对照证明线程是否复用/成本是否下降；效果不足则回滚，不把少线程ID直接当性能达标。
 - 诊断已精确恢复Messageb24，原环境恢复、两诊断值移除；其他18/全部配置SHA保持。v12归档SHA5979f62a7c0ca9d2826da0c38665ad2074aa98a1f6344f42dac8d10f7045dcb6，本机88文件逐个SHA验证PASS，源代码a315、测试、9000行失败窗口、CPU/数字阶段、镜像/部署/回退均保留。当前线程保留候选尚未构建/部署，所有功能10k-50k极致性能未达标。
+
+### PERF-039：拒绝仅增加同步poller保留数，下一步测提交同步增量
+
+- f7b5a08通过205相关检查（包括75真实gRPC），封装b848ef并仅替换Message、相同两诊断flags。mp150diag10k/150/s9000正ACK/wire/SQL确认，HB82569完整，无negative/skip/late/断连，但P99225.5ms、scheduled226.0ms、max453.332ms，较上一诊断179.0ms没有改善，FAIL保留，不接受、不扩大到其他服务。
+- 141persist样本107不同TID、140confirm样本113不同TID，线程有复用但仍变化；Message cgroupCPU均0.9135核（上一0.9688核），仓储wall均26.2367ms/CPU2.0388ms（上一20.3116/1.8289），Acquire3.5662ms、COMMIT10.4247ms。少量CPU降低不能替代延迟收益证明；共享主机顺序试验也不能证明MAX16必定造成全部恶化。仅6同M网关配对，RPC额外于handler均17.511ms；不同总体不得相减。
+- actual examples/message_service_demo.cpp:230确实构造MessageServiceServer，候选修改在实际路径，而非只影响测试。私聊replay admission MarkStarted删除入口，正常空页不无限重复同session；全局durable discovery每Gateway100ms一次、至多一条活动query/page256，仍需窗口SQL计数才能归因，不删除重放/修复责任。
+- 已精确回滚Message到b24及原环境，其他18/config/pool16/013保持；同时恢复源码MAX默认2，f7失败代码保留于Git。v13归档SHAb1bb6473e8f0a7c00c0c41ef4a6f90a22f5500d39b4432c2043788922a288b21，本机74文件SHA验证。21历史/后续诊断辅助脚本保存到evidence_tools，旧脚本有不可覆盖阶段/身份守卫，不代表可直接重放历史部署。
+- 只读确认MySQL8.0.40保持innodb_flush_log_at_trx_commit=1/sync_binlog=1/log_bin=1、groupdelay0/count0、fsync。累计fileMISC等待不能代替本次同步成本，MISC不全是fsync。下一步先固定原运行b24/1d8做150/s窗口，只在窗口起止读取file/status/digest与guestCPU/procstat/pressure增量，不reset/启用instrument或改设置。若实际同步成本支持，再独立审计1000微秒groupcommit等待候选；保留双1持久性、不SET PERSIST，并逐值精确恢复。官方说明合并可能减少同步次数，也可能增加延迟/竞争，必须由实测决定，不预宣称提升。
+- 当前I/O增量基线及groupcommit候选尚未运行；所有功能10k-50k极致性能仍未实现。schedstats0时runqueue聚合无效，候选分析已以null明确表示；v12原始无效聚合保留并在文档标注，绝不据此证明调度等待。

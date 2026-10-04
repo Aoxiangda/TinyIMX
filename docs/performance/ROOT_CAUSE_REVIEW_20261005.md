@@ -1,6 +1,6 @@
 # 先分析、再修正、最后验证：性能根因复盘（2026-10-05）
 
-最新迭代更新：a315默认OFF诊断完成278检查，固定10k/150/s9000完整正ACK、wire/SQL确认、HB83254，但P99179.0ms仍FAIL。141同M/TID持久化仓储均20.312ms/CPU1.829ms，handler20.614ms/CPU1.998ms；468池样本mutex0.132ms、slot0.095ms、Ping2.020ms，不支持继续盲目扩大连接池。141 persist/confirm样本各141不同TID，实际gRPC1.76默认空闲poller最大2，下一候选仅验证MessageService MAX_POLLERS16线程复用，尚未构建/部署/接受。原诊断已回退b24且移除两flags，原18/config/pool16/013保持；v12本机88文件SHA已验证。schedstats0的runqueue聚合无效；wall减CPU不能独自判定IO。下文及此前更新为历史分析阶段，所有功能10k-50k极致性能仍未实现。
+最新迭代更新：f7 MAX_POLLERS16通过205检查但同诊断150/sP99225.5ms，线程仍107/113不同TID，未证实性能收益；已回退原Messageb24/environment并恢复默认2源码，失败Git和v13的74文件保留。前轮a315诊断278检查及P99179.0FAIL的v12共88文件也保留。池mutex/slot低耗时不支持盲目扩池；仓储CPU远短于wall不能独自判IO或调度。下一阶段先采集原版本同窗口提交/日志同步/file/status/digest和guestCPU增量，再决定是否测保持双1持久性的groupcommit合并。当前这一步尚未运行，所有功能10k-50k极致性能仍未实现；以下为历史阶段分析。
 
 ## 当前结论与操作边界
 
