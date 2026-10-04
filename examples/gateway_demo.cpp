@@ -33,6 +33,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <charconv>
 #include <thread>
 
 namespace {
@@ -50,6 +51,20 @@ void HandleSignal(int signal_number) {
 }  // namespace
 
 int main(int argc, char* argv[]) {
+    // Optional I/O concurrency setting. Validate before any runtime resources
+    // are created; keep the original bounded default when it is absent.
+    std::size_t requested_message_workers = 0;
+    if (const char* raw = std::getenv("TINYIMX_MESSAGE_WORKER_THREADS")) {
+        const std::string value(raw);
+        const auto parsed = std::from_chars(
+            value.data(), value.data() + value.size(), requested_message_workers);
+        if (value.empty() || parsed.ec != std::errc{} ||
+            parsed.ptr != value.data() + value.size() ||
+            requested_message_workers < 4 || requested_message_workers > 64) {
+            std::cerr << "invalid TINYIMX_MESSAGE_WORKER_THREADS; expected integer 4..64\n";
+            return 2;
+        }
+    }
     std::string config_path = "config/gateway.json";
 
     if (argc >= 2) {
@@ -1068,7 +1083,7 @@ if (redis_pool) {
         tinyimx::BusinessExecutorOptions message_options;
         message_options.name = "gateway-message-runtime";
         message_options.worker_threads =
-            std::max<std::size_t>(
+            requested_message_workers != 0 ? requested_message_workers : std::max<std::size_t>(
                 4,
                 std::min<std::size_t>(
                     8,

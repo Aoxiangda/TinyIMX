@@ -23,7 +23,9 @@ def save(path, obj):
 def container_identity():
     names = cmd(['docker', 'ps', '--format', '{{.Names}}']).splitlines()
     return [{'name': c['Name'], 'id': c['Id'], 'image': c['Image'],
-             'started': c['State']['StartedAt'], 'health': c['State'].get('Health', {}).get('Status')}
+             'started': c['State']['StartedAt'], 'health': c['State'].get('Health', {}).get('Status'),
+             'nonsecret_runtime_flags': {k:v for k,v in (x.split('=',1) for x in c['Config']['Env'] if '=' in x)
+                 if k in ('TINYIMX_DURABLE_PRIVATE_RECOVERY_ENABLE','TINYIMX_MESSAGE_WORKER_THREADS')}}
             for c in json.loads(cmd(['docker', 'inspect', *names]))]
 
 def percentile(hist, fraction=.99):
@@ -44,6 +46,7 @@ def run(a):
     os.umask(0o077)
     assert re.fullmatch(r'[a-zA-Z0-9-]{1,20}', a.run)
     assert 1 <= a.users <= 50000 and 0 < a.rate <= 10000 and 1 <= a.duration <= 7200
+    assert re.fullmatch(r'sha256:[0-9a-f]{64}', a.gateway_image)
     stage = ROOT / '.local/codex' / ('capacity-' + a.run)
     assert not stage.exists(), 'Keep all prior runs immutable'
     stage.mkdir()
@@ -52,7 +55,8 @@ def run(a):
     identity = container_identity()
     for s in ['gateway-a', 'gateway-b', 'message-service']:
         c = next(c for c in identity if c['name'] == '/tinyimx-m21-' + s + '-1')
-        assert c['image'] == IMAGE and c['health'] == 'healthy', 'Candidate runtime identity'
+        expected = IMAGE if s=='message-service' else a.gateway_image
+        assert c['image'] == expected and c['health'] == 'healthy', 'Candidate runtime identity'
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     resource.setrlimit(resource.RLIMIT_NOFILE, (min(hard, max(soft, 20000)), hard))
     total = int(sql(f"SELECT COUNT(*) FROM im_users WHERE user_id BETWEEN 500001 AND {500000+a.users} AND username=CONCAT('m21b500000_',LPAD(user_id-500000,6,'0')) AND status=1;"))
@@ -192,4 +196,5 @@ def run(a):
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--run',required=True);p.add_argument('--users',type=int,required=True)
     p.add_argument('--rate',type=float,default=100);p.add_argument('--duration',type=int,default=300)
-    p.add_argument('--mode',choices=['private','hold'],default='private');raise SystemExit(run(p.parse_args()))
+    p.add_argument('--mode',choices=['private','hold'],default='private')
+    p.add_argument('--gateway-image',default=IMAGE);raise SystemExit(run(p.parse_args()))
