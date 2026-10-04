@@ -933,6 +933,64 @@ PendingRecipientsResult MessageRepositoryAdapter::ListPendingRecipientsAfter(
 }
 
 MessageRepositoryMutationResult
+MessageRepositoryAdapter::ConfirmReceiverForRecipient(
+    std::uint64_t message_id,
+    std::uint64_t receiver_user_id
+) {
+    MessageRepositoryMutationResult output;
+    if (message_id == 0 || receiver_user_id == 0) {
+        output.status = MessageApplicationStatus::kInvalidArgument;
+        output.message = "invalid ConfirmReceiver application request";
+        return output;
+    }
+    if (repository_ == nullptr || pool_ == nullptr) {
+        output.message = "message repository is unavailable";
+        return output;
+    }
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        output.message = "receiver confirmation could not acquire connection";
+        return output;
+    }
+
+    // Keep the original full-record parsing and status validation. Reuse the
+    // same lease for the conditional update; no nested pool admission/Ping.
+    auto result = repository_->FindPrivateMessageByIdOnConnection(
+        &*connection, message_id);
+    MessageRepositoryGetResult lookup;
+    lookup.status = MapStatus(result.status);
+    lookup.found = result.found;
+    lookup.message = std::move(result.message);
+    if (result.Succeeded() && result.found) {
+        if (!ValidDeliveryStatus(result.record.delivery_status)) {
+            lookup.status = MessageApplicationStatus::kInvalidRecord;
+            lookup.found = false;
+            lookup.message = "message repository returned invalid delivery status";
+        } else {
+            lookup.record = ToView(std::move(result.record));
+        }
+    }
+    auto terminal = ReceiverConfirmationTerminalResult(
+        std::move(lookup), receiver_user_id);
+    if (terminal) return std::move(*terminal);
+
+    const std::string sql =
+        "UPDATE im_private_messages SET delivery_status = 1, delivered_at = NOW() "
+        "WHERE message_id = " + std::to_string(message_id) +
+        " AND to_user_id = " + std::to_string(receiver_user_id) +
+        " AND delivery_status = 0";
+    if (!connection->Execute(sql)) {
+        output.message = connection->LastError();
+        if (output.message.empty()) output.message = "receiver confirmation update failed";
+        return output;
+    }
+    output.status = MessageApplicationStatus::kSucceeded;
+    output.affected_rows = connection->AffectedRows();
+    output.message = "private messages marked receiver confirmed";
+    return output;
+}
+
+MessageRepositoryMutationResult
 MessageRepositoryAdapter::ConfirmReceiver(
     std::uint64_t message_id
 ) {

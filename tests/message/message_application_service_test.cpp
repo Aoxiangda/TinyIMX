@@ -483,6 +483,25 @@ void TestConfirmReceiverBatch() {
            "ConfirmReceiverBatch");
 }
 
+void TestConfirmReceiverRejectionsDoNotMutate() {
+    using namespace tinyimx::message;
+    FakeRepository repository;
+    repository.messages.emplace(21, FakeRepository::MakeMessage(
+        21, 10001, 10002, MessageDeliveryState::kFailed));
+    repository.messages.emplace(22, FakeRepository::MakeMessage(
+        22, 10001, 10002, static_cast<MessageDeliveryState>(99)));
+    MessageApplicationService app(&repository);
+    Expect(app.ConfirmReceiver(999, 10002).status == MessageApplicationStatus::kNotFound &&
+               repository.confirm_calls == 0, "ReceiverConfirm.NotFoundDoesNotMutate");
+    Expect(app.ConfirmReceiver(21, 10002).status == MessageApplicationStatus::kFailedPrecondition &&
+               repository.confirm_calls == 0, "ReceiverConfirm.FailedDoesNotMutate");
+    Expect(app.ConfirmReceiver(22, 10002).status == MessageApplicationStatus::kInvalidRecord &&
+               repository.confirm_calls == 0, "ReceiverConfirm.InvalidStateFailsClosed");
+    repository.get_status = MessageApplicationStatus::kStorageError;
+    Expect(app.ConfirmReceiver(21, 10002).status == MessageApplicationStatus::kStorageError &&
+               repository.confirm_calls == 0, "ReceiverConfirm.LookupFailureDoesNotMutate");
+}
+
 void TestResolvePrivateMessage() {
     using namespace tinyimx::message;
     FakeRepository repository;
@@ -615,6 +634,7 @@ int main() {
     TestPendingReadFoundation();
     TestPendingPageByteBudget();
     TestConfirmReceiverMonotonicOwnership();
+    TestConfirmReceiverRejectionsDoNotMutate();
     TestConfirmReceiverBatch();
     TestMarkDialogRead();
     std::cout << "=============================================================\n";

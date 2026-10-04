@@ -3,6 +3,7 @@
 #include "common/logging/Logger.h"
 #include "services/eventing/EventCodec.h"
 #include "services/message/application/MessageEventFactory.h"
+#include "services/message/application/MessageApplicationService.h"
 #include "services/message/repository/MessageRepositoryAdapter.h"
 #include "services/outbox/OutboxRepository.h"
 #include "services/repository/MessageRepository.h"
@@ -129,6 +130,86 @@ bool OutboxTableExists(tinyimx::MySqlConnectionPool* pool) {
         "WHERE table_schema = DATABASE() AND table_name = 'im_event_outbox'",
         &value
     ) && value == "1";
+}
+
+void TestRecipientConfirmation(
+    tinyimx::MySqlConnectionPool* pool,
+    tinyimx::MessageRepository* repository,
+    tinyimx::message::MessageRepositoryAdapter* adapter
+) {
+    using namespace tinyimx::message;
+    MessageApplicationService app(adapter);
+    auto fresh = [&](const char* prefix) {
+        return adapter->PersistPrivateMessage(kUserA, kUserB, UniqueId(prefix), 1, "owned confirmation fixture");
+    };
+    auto state = [&](std::uint64_t mid, tinyimx::DeliveryStatus expected) {
+        const auto row = repository->FindPrivateMessageById(mid);
+        return row.Found() && row.record.delivery_status == static_cast<std::uint32_t>(expected);
+    };
+    auto update_owned = [&](std::uint64_t mid, unsigned status) {
+        auto lease = pool->Acquire();
+        return lease && lease->Execute("UPDATE im_private_messages SET delivery_status = " +
+            std::to_string(status) + " WHERE message_id = " + std::to_string(mid));
+    };
+    const auto pending = fresh("confirm-single-");
+    Expect(pending.Accepted(), "ReceiverConfirm owned pending fixture");
+    Expect(app.ConfirmReceiver(pending.message_id, kUserA).status == MessageApplicationStatus::kPermissionDenied &&
+               state(pending.message_id, tinyimx::DeliveryStatus::kPending),
+           "ReceiverConfirm wrong recipient leaves Pending unchanged");
+    const auto first = app.ConfirmReceiver(pending.message_id, kUserB);
+    Expect(first.Succeeded() && first.affected_rows == 1 &&
+               state(pending.message_id, tinyimx::DeliveryStatus::kReceiverConfirmed),
+           "ReceiverConfirm correct recipient commits once");
+    Expect(pool->AvailableCount() == pool->Size(), "ReceiverConfirm returns its one lease");
+    const auto duplicate = app.ConfirmReceiver(pending.message_id, kUserB);
+    Expect(duplicate.Succeeded() && duplicate.affected_rows == 0, "ReceiverConfirm duplicate is idempotent");
+    const auto read = app.MarkDialogRead(kUserB, kUserA);
+    const auto read_ack = app.ConfirmReceiver(pending.message_id, kUserB);
+    Expect(read.Succeeded() && read_ack.Succeeded() && read_ack.affected_rows == 0 &&
+               state(pending.message_id, tinyimx::DeliveryStatus::kRead),
+           "ReceiverConfirm cannot downgrade Read");
+
+    const auto failed = fresh("confirm-failed-");
+    Expect(failed.Accepted() && update_owned(failed.message_id, 3) &&
+               app.ConfirmReceiver(failed.message_id, kUserB).status == MessageApplicationStatus::kFailedPrecondition &&
+               state(failed.message_id, tinyimx::DeliveryStatus::kFailed),
+           "ReceiverConfirm rejects owned Failed record without mutation");
+    const auto corrupt = fresh("confirm-invalid-");
+    Expect(corrupt.Accepted() && update_owned(corrupt.message_id, 9) &&
+               app.ConfirmReceiver(corrupt.message_id, kUserB).status == MessageApplicationStatus::kInvalidRecord,
+           "ReceiverConfirm retains full-record invalid status rejection");
+    Expect(app.ConfirmReceiver(0, kUserB).status == MessageApplicationStatus::kInvalidArgument &&
+               app.ConfirmReceiver(pending.message_id, 0).status == MessageApplicationStatus::kInvalidArgument,
+           "ReceiverConfirm invalid identity fast-fails");
+    Expect(app.ConfirmReceiver(UINT64_MAX, kUserB).status == MessageApplicationStatus::kNotFound,
+           "ReceiverConfirm missing message does not update other records");
+    Expect(pool->AvailableCount() == pool->Size(), "ReceiverConfirm terminal paths return every lease");
+
+    const auto concurrent = fresh("confirm-concurrent-");
+    constexpr std::size_t count = 4;
+    std::barrier start(static_cast<std::ptrdiff_t>(count));
+    std::vector<MessageMutationApplicationResult> results(count);
+    std::vector<std::thread> threads;
+    for (std::size_t i = 0; i < count; ++i) threads.emplace_back([&, i] {
+        start.arrive_and_wait(); results[i] = app.ConfirmReceiver(concurrent.message_id, kUserB);
+    });
+    for (auto& thread : threads) thread.join();
+    std::uint64_t affected = 0; bool all_ok = concurrent.Accepted();
+    for (const auto& result : results) { all_ok = all_ok && result.Succeeded(); affected += result.affected_rows; }
+    Expect(all_ok && affected == 1 && state(concurrent.message_id, tinyimx::DeliveryStatus::kReceiverConfirmed),
+           "ReceiverConfirm concurrent retries commit exactly one transition");
+    Expect(pool->AvailableCount() == pool->Size(), "ReceiverConfirm concurrent retries release all slots");
+
+    const auto racing = fresh("confirm-read-race-");
+    std::barrier race_start(2);
+    MessageMutationApplicationResult confirm_result, read_result;
+    std::thread confirmer([&] { race_start.arrive_and_wait(); confirm_result = app.ConfirmReceiver(racing.message_id, kUserB); });
+    std::thread reader([&] { race_start.arrive_and_wait(); read_result = app.MarkDialogRead(kUserB, kUserA); });
+    confirmer.join(); reader.join();
+    Expect(racing.Accepted() && confirm_result.Succeeded() && read_result.Succeeded() &&
+               state(racing.message_id, tinyimx::DeliveryStatus::kRead),
+           "ReceiverConfirm concurrent Read remains monotonic");
+    Expect(pool->AvailableCount() == pool->Size(), "ReceiverConfirm concurrent Read returns all slots");
 }
 
 }  // namespace
@@ -344,6 +425,8 @@ int main(int argc, char* argv[]) {
            "MarkDialogRead retry is idempotent");
     Expect(DialogReadEventCount(&pool, kUserB, kUserA) == read_events_before + 1,
            "MarkDialogRead retry creates no duplicate event");
+
+    TestRecipientConfirmation(&pool, &repository, &adapter);
 
     pool.Shutdown();
     tinyimx::Logger::Instance().Shutdown();

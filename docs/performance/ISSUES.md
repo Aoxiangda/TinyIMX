@@ -510,3 +510,9 @@
 - 当前真实挂载配置确认每GW16消息线程/512pending/64stripes/每stripe64/3s。确认回执与发送共用MessageExecutor，单条确认查记录再更新分别Acquire/Ping；原池Ping前已解锁。单lease确认、受控确认容量隔离为具体候选，尚未实现或证明收益；Acquire槽位等待/Ping和RPC入口排队仍未拆分，不断言池16唯一根因。
 - base1k300a跳过1245/18000计划，实际发送16755，负ACK4664，不能当完整300/s开环对照。原500/s后来确认归零不覆盖原FAIL。
 - v9新增155文件SHA全部核对，SHA4affee9157479fc7e71328237ddc283b5b68f001d3547656865913d11c80d798。只读诊断INFO不足/目录挂载假设两次预检失败也保留；第三次按真实Cmd映射完成，未影响服务。MySQL分段计时仅本地未应用草稿，本次文档提交会使旧草稿文档基线过时；未来必须重新审计，不能使用旧包覆盖。
+
+### PERF-035：单租约收件人确认候选
+
+- 按先分析后修正的顺序处理已确认冗余：原单条ConfirmReceiver先查完整消息并释放lease，再借/Ping第二个连接更新。新增recipient-aware port，兼容实现保留原校验，实际SQL adapter在同一lease内调用原完整OnConnection解析再条件更新，消除正常Pending路径一次Acquire/Ping。
+- 错误收件人、NotFound、Failed及非法状态拒绝；重复/Read返回零行成功。UPDATE额外绑定recipient且只允许status0，保留确认/Read竞争时状态不降级。没有新增长事务、改变持久性、跳过鉴权、提前ACK、改Gateway线程/队列或重写batch确认。底层StorageError仍经原RPC/ACK不确定写入语义处理。
+- 八文件白名单审计已保存，MySQL trace草稿排除。新增应用拒绝路径测试和真实独立MySQL pool1/pool4的错误收件人、确认/重复/Read/Failed/非法记录、并发确认及确认与Read竞争、所有租约归还检查。构建/隔离回归/业务性能此时NOT_RUN；当前Messageb24/Gateway1d8/16/pool16/013保持，不能宣称性能改善。
