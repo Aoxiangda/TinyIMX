@@ -130,14 +130,18 @@ def run(a):
         for p,d in workers:
             for line in (d/'ledger.tsv').read_text().splitlines():
                 kind,u,v,mid,seq,cid,t=line.split('\t')
+                # Delivery identifies the stable M/from/to tuple. C is optional
+                # on the public wire; retain deliveries even when it is absent.
+                if kind=='delivery':
+                    delivered[(int(mid),int(u),int(v))]+=1
+                    continue
                 if not cid.startswith(prefix):continue
                 if kind=='send':
                     assert cid not in sent;sent[cid]=(int(u),int(v))
                 elif kind=='ack':
                     assert cid not in acked;acked[cid]=(int(mid),int(u),int(v))
-                elif kind=='delivery':delivered[(cid,int(mid),int(u),int(v))]+=1
                 elif kind=='fail':negative.append(cid)
-        mismatches=[cid for cid,x in acked.items() if cid not in db or db[cid][:3]!=x or db[cid][3]!=1 or delivered[(cid,*x)]<1]
+        mismatches=[cid for cid,x in acked.items() if cid not in db or db[cid][:3]!=x or db[cid][3]!=1 or delivered[x]<1]
         save(stage/'reconciliation.json',{'sent':len(sent),'positive_ack':len(acked),'negative_ack':len(negative),'db_rows':len(db),
             'confirmed':sum(x[3]==1 for x in db.values()),'pending':sum(x[3]==0 for x in db.values()),
             'positive_ack_identity_or_confirmation_or_wire_mismatches':mismatches,
