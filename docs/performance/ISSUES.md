@@ -531,3 +531,12 @@
 - 核心7容器未配置独立Docker CPU/memory限额；GWa/b、Message、Social日志warn/同步console+文件、不每条刷文件，User为info。关键服务没有TINYIMX_FAULT_*环境值。配置不证明实际CPU/IO等待或日志阻塞，不能据此宣称唯一原因。
 - 下一诊断候选恢复recipient-aware adapter到原完整查询+条件更新双租约兼容路径，避免带入未接受的优化。默认OFF的pool mutex/slot/Ping/reconnect/wall/CPU数字计时，以及RPC handler/仓储阶段CPU；成功稳定M%64样本关联，日志限速8/bucket/process。只看实际handler内部不能测到gRPC入口前排队或返回后transport；CPU短于wall也不能独自区分IO与可运行调度等待。
 - 原652本地pool计时草稿先审计保存为held-draft，再恢复精确原CPP并以b7c969b重新审计九路径，禁止应用过时文档包。诊断构建/真实回归/部署/测量此时NOT_RUN；当前运行仍b24。
+
+### PERF-038：分解存储等待后验证同步 RPC 线程复用
+
+- a315d5d 默认 OFF 诊断通过 130 单元/契约、112 真实隔离 MySQL、36 连接恢复检查，共 278 PASS。单独 7bbefc 诊断 Message 镜像仅开启两个诊断值，其他 18 容器、配置/pool16/013 保持。sw150a 10k认证/9000计划、发送、正ACK、wire、SQL已确认全部一致；HB83254/83254，无负ACK/skip/late/断连；P99179.0ms、scheduled179.8ms，原严格门槛 FAIL，不是性能接受。
+- 60秒有效窗口141同M/TID/时间匹配：仓储wall均20.3116ms、threadCPU1.8289ms；handlerwall20.6138ms/CPU1.99845ms，handler额外均0.3022ms。COMMIT均9.9239ms/CPU0.2270ms，最大94.503ms；wall与CPU差包含IO/锁/可运行调度，不单独证明fsync唯一原因。7个网关同M慢样本RPC均90.6324ms、RPC额外于handler均13.5946ms；样本偏向慢请求，不能用全体141均值相减或当populationP99。实际Gateway persist计时仅包MessageRpcClient调用，端点/stub缓存复用且不持网络锁。
+- 468池样本mutex均0.1324ms、slot0.0952ms、Ping2.0198ms、总2.3066ms、CPU0.3365ms，无重连。没有仓储区间内同TID池样本配对，不能虚构0样本的细分结果。此150负载不支持盲目扩池。12个低频CPU快照最多耗104.953ms；schedstats开关0，原始runqueue数字保留但无效，不用其聚合定量证明调度等待。7容器cgroup usage计数可用，未观测自身quota throttle；仍不排除VM/主机资源竞争。
+- 原诊断141个persist样本用了141个不同TID，confirm也141个不同TID，跨60秒不断更换；这提示同步RPC线程 churn。实际链接gRPC1.76.0头文件默认MIN1/MAX2/CQ1/timeout10000，MessageServiceServer无覆盖；[官方ThreadManager源码](https://github.com/grpc/grpc/blob/master/src/cpp/thread_manager/thread_manager.cc)明确小maxpollers可能反复建退线程。当前安装版本头文件默认已实证，源码机制为官方上游参考；不把推断当已证实唯一根因。
+- 下一候选只设置MessageServer MAX_POLLERS=16，保留MIN1/CQ1/timeout10000。该值是空闲轮询线程保留上限，并非16活动RPC/池大小限制；最多多保留14个空闲poller，实际资源需测。网关线程/公平实现/SQL/鉴权/事务/期限/持久性保持，先真实gRPC回归，再同150诊断对照证明线程是否复用/成本是否下降；效果不足则回滚，不把少线程ID直接当性能达标。
+- 诊断已精确恢复Messageb24，原环境恢复、两诊断值移除；其他18/全部配置SHA保持。v12归档SHA5979f62a7c0ca9d2826da0c38665ad2074aa98a1f6344f42dac8d10f7045dcb6，本机88文件逐个SHA验证PASS，源代码a315、测试、9000行失败窗口、CPU/数字阶段、镜像/部署/回退均保留。当前线程保留候选尚未构建/部署，所有功能10k-50k极致性能未达标。
