@@ -153,7 +153,8 @@ def run(a):
             'durable_without_positive_ack':[cid for cid in db if cid not in acked],
             'db_without_send':[cid for cid in db if cid not in sent],
             'note':'Snapshot absence is not a proof of permanent loss; late commits must be investigated.'})
-        time.sleep(1)
+        (control/'quiesce_heartbeats').write_text('Active window and SQL audit complete; drain every sent ping\n')
+        wait_for('heartbeat-drained.json', 35)
         (control/'release').write_text('SQL_RECONCILED\n')
         for p,d in workers:assert p.wait(timeout=15)==0,'Worker final status'
         results=[json.loads((d/'final.json').read_text()) for p,d in workers]

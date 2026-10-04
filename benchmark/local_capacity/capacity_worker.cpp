@@ -101,6 +101,7 @@ class Worker {
     std::uint64_t next_index=0,planned=0,online=0;std::size_t rr=0;
     TP began{},next_open{},last_control{},last_progress{},start{},end{},audit_at{};
     bool ready=false,started=false,audit_ready=false,normal_release=false,end_accounted=false;
+    bool stop_heartbeats=false,heartbeat_drained=false;
     TP setup_deadline{};std::string terminal="RUNNING";
     std::uint64_t uid(std::size_t i)const{return c.base+c.offset+i+1;}
     std::uint64_t peer(std::size_t i)const{return c.base+(c.offset+i+1)%c.total+1;}
@@ -146,7 +147,7 @@ class Worker {
         if(x.state==1&&(ev&(EPOLLOUT|EPOLLERR|EPOLLHUP))){int e=0;socklen_t l=sizeof(e);if(::getsockopt(x.fd,SOL_SOCKET,SO_ERROR,&e,&l)<0||e)throw std::runtime_error("CONNECT_COMPLETION");connected(i);}
         if(ev&EPOLLIN)read(i);if(ev&EPOLLOUT)flush(i);if(ev&(EPOLLERR|EPOLLHUP|EPOLLRDHUP)){close(i);throw std::runtime_error("SOCKET_CLOSED");}}
     }
-    void heartbeat(TP now){while(!heartbeats.empty()&&heartbeats.top().first<=now){auto [_,i]=heartbeats.top();heartbeats.pop();auto&x=conns[i];if(x.state!=3)continue;if(x.hb_seq){if(ms(x.hb_sent,now)>2.0*c.hb*1000)throw std::runtime_error("HEARTBEAT_UNRESOLVED");heartbeats.push({now+std::chrono::seconds(1),i});continue;}x.hb_seq=seq(x);x.hb_sent=now;queue(i,MessageType::kHeartbeat,x.hb_seq,"{}");++m["heartbeat_sent"];heartbeats.push({now+std::chrono::seconds(c.hb),i});}}
+    void heartbeat(TP now){if(stop_heartbeats)return;while(!heartbeats.empty()&&heartbeats.top().first<=now){auto [_,i]=heartbeats.top();heartbeats.pop();auto&x=conns[i];if(x.state!=3)continue;if(x.hb_seq){if(ms(x.hb_sent,now)>2.0*c.hb*1000)throw std::runtime_error("HEARTBEAT_UNRESOLVED");heartbeats.push({now+std::chrono::seconds(1),i});continue;}x.hb_seq=seq(x);x.hb_sent=now;queue(i,MessageType::kHeartbeat,x.hb_seq,"{}");++m["heartbeat_sent"];heartbeats.push({now+std::chrono::seconds(c.hb),i});}}
     void send_due(TP now){if(c.mode!="private")return;std::size_t burst=0;while(burst++<256){TP due=start+std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(planned/c.rate));if(due>=end||due>now)break;++planned;++m["planned_requests"];ready_lag.add(ms(due,now));std::size_t i=rr++%conns.size();auto&x=conns[i];if(x.state!=3||x.chat_seq){++m["skipped_scheduled_requests"];continue;}x.chat_seq=seq(x);x.scheduled=due;x.enqueued=Clock::now();x.cid="l"+c.run+"-w"+std::to_string(c.worker)+"-u"+std::to_string(x.uid)+"-n"+std::to_string(++x.serial);if(x.cid.size()>64)throw std::runtime_error("CID_LENGTH");
         queue(i,MessageType::kChatMessage,x.chat_seq,"{\"client_message_id\":"+quote(x.cid)+",\"to\":"+std::to_string(x.to)+",\"text\":"+quote(std::string(128,'x'))+"}");++m["send_attempts"];event("send",x,0,x.chat_seq);}}
     std::string result()const{std::ostringstream o;o<<"{\"schema\":\"tinyimx-capacity-worker-v1\",\"run_id\":"<<quote(c.run)<<",\"worker_id\":"<<c.worker<<",\"offset\":"<<c.offset<<",\"connections\":"<<c.count<<",\"total_users\":"<<c.total<<",\"mode\":"<<quote(c.mode)<<",\"status\":"<<quote(terminal)<<",\"online_now\":"<<online<<",\"duration_seconds\":"<<c.duration<<",\"rate\":"<<c.rate<<",\"source_ip\":"<<quote(c.source)<<",\"start_steady_ns\":"<<(started?ns(start):0)<<",\"snapshot_steady_ns\":"<<ns(Clock::now())<<",\"inflight\":";std::size_t inflight=0;for(auto&x:conns)inflight+=(x.chat_seq!=0);o<<inflight<<",\"metrics\":{";bool first=true;for(auto&[k,v]:m){if(!first)o<<',';first=false;o<<quote(k)<<':'<<v;}o<<"},\"ack_histogram\":"<<ack_latency.json()<<",\"scheduled_to_ack_histogram\":"<<schedule_latency.json()<<",\"schedule_lag_histogram\":"<<ready_lag.json()<<",\"login_histogram\":"<<login_latency.json()<<'}';return o.str();}
@@ -160,7 +161,12 @@ public:
          if(ms(last_control,now)>=100){last_control=now;if(fs::exists(c.control/"abort"))throw std::runtime_error("COORDINATOR_ABORT");if(ready&&!started&&fs::exists(c.control/"start_ns")){std::ifstream f(c.control/"start_ns");std::string s;f>>s;auto target_ns=number(s);start=TP(std::chrono::nanoseconds(target_ns));if(start<now)throw std::runtime_error("START_BARRIER_LATE");if(ms(now,start)>10000)throw std::runtime_error("START_BARRIER_TOO_FAR");end=start+std::chrono::seconds(c.duration);started=true;}
             if(ready&&!started&&now>setup_deadline+std::chrono::seconds(90))throw std::runtime_error("BARRIER_TIMEOUT");}
          if(started&&now>=start&&!audit_ready){if(now<end){send_due(now);}else if(!end_accounted){end_accounted=true;const auto expected=static_cast<std::uint64_t>(std::ceil(c.rate*c.duration-1e-8));if(c.mode=="private"&&expected>planned){m["planned_requests"]+=expected-planned;m["skipped_scheduled_requests"]+=expected-planned;planned=expected;}}if(now>=end+std::chrono::seconds(c.drain)){audit_ready=true;audit_at=now;ledger.flush();terminal="AUDIT_READY";atomic(c.out/"audit-ready.json",result());}}
-         if(audit_ready){if(fs::exists(c.control/"release")){normal_release=true;break;}if(now>audit_at+std::chrono::seconds(c.verify))throw std::runtime_error("AUDIT_TIMEOUT");}
+         if(audit_ready){
+           if(fs::exists(c.control/"quiesce_heartbeats"))stop_heartbeats=true;
+           if(stop_heartbeats&&!heartbeat_drained&&m["heartbeat_sent"]==m["heartbeat_ack"]){heartbeat_drained=true;atomic(c.out/"heartbeat-drained.json",result());}
+           if(fs::exists(c.control/"release")){normal_release=true;break;}
+           if(now>audit_at+std::chrono::seconds(c.verify))throw std::runtime_error("AUDIT_TIMEOUT");
+         }
          if(ms(last_progress,now)>1000){last_progress=now;ledger.flush();atomic(c.out/"live.json",result());}
          pump(10);
        }
