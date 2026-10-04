@@ -577,3 +577,18 @@
 - 下一单变量候选暂时SET GLOBAL binlog_group_commit_sync_delay=1000微秒，保持innodb_flush_log_at_trx_commit=1、sync_binlog=1、log_bin=1/no_delay_count0。根据[官方8.0说明](https://dev.mysql.com/doc/mysql-replication-excerpt/8.0/en/replication-options-binary-log.html)，合并可能减少fsync，也会加等待或竞争，需实测而非承诺。严格10k、150条消息/s、60s窗口、100用户/s爬坡、3s原期限和所有SQL/wire/HB门槛不变。只改变精确本项目MySQL容器内动态值，其他配置文件、容器、索引、C++均不改。
 - finally恢复0并验证五值/持久化变量/19IDs/config；客户端清理异常也不会跳过恢复。INT/TERM/HUP处理、360s自有协调器上限、独立450s恢复看护；看护仅同CID/精确本候选值时改回0，拒绝未知参数，不覆盖外部新变更。看护仅在主路径已核验恢复后取消；全部raw/参数/源码/异常/回滚记录保留。没有SET PERSIST、清理业务数据、关闭用户应用、VM设置或数据库重启。
 - 11路径白名单before/风险/恢复已审计，Python/看护AST及bash/PS语法检查；先将已执行窗口工具与待执行候选保存Git。此时参数变更/候选负载NOT_RUN，v15只归档已完成原窗口和源码记录；所有功能10k-50k极致性能尚未接受。
+
+
+### 2026-10-05：提交合并候选否决，转向消息增量成本分析
+
+实际执行的 gc150u1000 保留完整 10k 认证、9000 计划/发送/正 ACK/wire/SQL 接收确认；心跳 82382/82382，零负 ACK、skip、late、断连。P99 227.5ms、计划到 ACK 230.0ms、最大 511.192ms，仍然 FAIL；原版 io150base2 为 188.0/190.7ms。主 finally 已恢复 delay=0，独立看护在验证后正常取消；19 个容器的 ID/镜像/启动时间、全部私有配置 SHA、持久参数均未变化，SQL 保持 1/1/1/0/0。没有保留 1000us 参数，也不继续尝试盲目延时矩阵。
+
+有效计数窗口 58.3976s：binlog file MISC 6069/103.925 次每秒（原版 12317/210.908），但精确 redo fsync 12844/219.941 次每秒（原版 13018/222.912）基本没有减少。COMMIT 均值 11.3823ms（原版 7.5416），确认 UPDATE 13.6419ms（原版 9.3398）。guest 忙碌 85.570%，system+softirq 39.833%，CPU PSI stall 64.362%，全 guest fork/thread 320.030 次每秒；提交和消息延迟都没有显示收益。MISC 不是纯 fsync，SQL 均值不是总体 P99，顺序运行且保留其他应用，不能把所有差异因果归给该参数。
+
+两轮各 12 个 Docker CPU 帧均显示 MySQL（约 1.46/1.48 核）、Message（0.89/0.93）、两 Gateway（各约 0.75）、Redis（0.61/0.62）是当前主要服务成本；outbox/unread 投影器各不足 0.01 核。Docker 帧是滚动样本，不能与 /proc 连续积分相减后把差额归给独占内核成本。
+
+冻结 auth10kdiag 的纯在线窗口，排除前 5s，仅纳入完整包围的四段共 20.0467s：guest 忙碌 31.404%，system+softirq 13.743%，CPU PSI 11.668%，context switch 19707.79/s、全 guest fork/thread 51.180/s。Gateway 精确 cgroup CPU 各 0.259/0.260 核，User 0.032；相比消息窗口 85% 忙碌和 315–320/s 创建量，消息链路增加了大量工作。此对照跨时间且 User 诊断镜像不同（选中阶段无登录），不能报告严格因果百分比或把所有新线程归给 Message。
+
+另对已有 sw150a/mp150diag 的七服务 cgroup CPU 做有效分项：Message 原版 0.969 核中用户态 0.463、内核态 0.506；被拒绝 poller16 为 0.913 中 0.454/0.460。MySQL 原版 1.403 中 0.861/0.542；Gateway 各约 0.71 中内核态各约 0.33。没有观测这些 cgroup 自身限流，cpu.max 均 max；这不排除 VMware 或共享主机等待。init PID 的线程数不能当业务线程数，cgroup 包含所有子进程故 CPU 分项仍有效。大比例内核时间支持继续定位 RPC/网络往返/调度，但尚没有 syscall/flamegraph 级的唯一根因证明。
+
+所有候选失败、参数、SQL 计数、分析、看护、精确回滚和源码工具保存；v15 本机已验证 57 文件，SHA ece33159841d81f10a1cf9060cda9d4cf0c99e86e4bfe134bc8bb5727e34f372。v16 将保存完成的失败候选及这次只读复核，不覆盖 v14/v15。后续应测量实际消息成本再改代码，避免重复扩池/扩线程/改提交延时。当前全部功能 10k–50k 的极致性能目标尚未实现。

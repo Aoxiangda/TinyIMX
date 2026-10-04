@@ -1,5 +1,22 @@
 # 先分析、再修正、最后验证：性能根因复盘（2026-10-05）
 
+最新完成结论如下，之后的“待执行”文字为保留的历史阶段记录。
+
+### 2026-10-05：提交合并候选否决，转向消息增量成本分析
+
+实际执行的 gc150u1000 保留完整 10k 认证、9000 计划/发送/正 ACK/wire/SQL 接收确认；心跳 82382/82382，零负 ACK、skip、late、断连。P99 227.5ms、计划到 ACK 230.0ms、最大 511.192ms，仍然 FAIL；原版 io150base2 为 188.0/190.7ms。主 finally 已恢复 delay=0，独立看护在验证后正常取消；19 个容器的 ID/镜像/启动时间、全部私有配置 SHA、持久参数均未变化，SQL 保持 1/1/1/0/0。没有保留 1000us 参数，也不继续尝试盲目延时矩阵。
+
+有效计数窗口 58.3976s：binlog file MISC 6069/103.925 次每秒（原版 12317/210.908），但精确 redo fsync 12844/219.941 次每秒（原版 13018/222.912）基本没有减少。COMMIT 均值 11.3823ms（原版 7.5416），确认 UPDATE 13.6419ms（原版 9.3398）。guest 忙碌 85.570%，system+softirq 39.833%，CPU PSI stall 64.362%，全 guest fork/thread 320.030 次每秒；提交和消息延迟都没有显示收益。MISC 不是纯 fsync，SQL 均值不是总体 P99，顺序运行且保留其他应用，不能把所有差异因果归给该参数。
+
+两轮各 12 个 Docker CPU 帧均显示 MySQL（约 1.46/1.48 核）、Message（0.89/0.93）、两 Gateway（各约 0.75）、Redis（0.61/0.62）是当前主要服务成本；outbox/unread 投影器各不足 0.01 核。Docker 帧是滚动样本，不能与 /proc 连续积分相减后把差额归给独占内核成本。
+
+冻结 auth10kdiag 的纯在线窗口，排除前 5s，仅纳入完整包围的四段共 20.0467s：guest 忙碌 31.404%，system+softirq 13.743%，CPU PSI 11.668%，context switch 19707.79/s、全 guest fork/thread 51.180/s。Gateway 精确 cgroup CPU 各 0.259/0.260 核，User 0.032；相比消息窗口 85% 忙碌和 315–320/s 创建量，消息链路增加了大量工作。此对照跨时间且 User 诊断镜像不同（选中阶段无登录），不能报告严格因果百分比或把所有新线程归给 Message。
+
+另对已有 sw150a/mp150diag 的七服务 cgroup CPU 做有效分项：Message 原版 0.969 核中用户态 0.463、内核态 0.506；被拒绝 poller16 为 0.913 中 0.454/0.460。MySQL 原版 1.403 中 0.861/0.542；Gateway 各约 0.71 中内核态各约 0.33。没有观测这些 cgroup 自身限流，cpu.max 均 max；这不排除 VMware 或共享主机等待。init PID 的线程数不能当业务线程数，cgroup 包含所有子进程故 CPU 分项仍有效。大比例内核时间支持继续定位 RPC/网络往返/调度，但尚没有 syscall/flamegraph 级的唯一根因证明。
+
+所有候选失败、参数、SQL 计数、分析、看护、精确回滚和源码工具保存；v15 本机已验证 57 文件，SHA ece33159841d81f10a1cf9060cda9d4cf0c99e86e4bfe134bc8bb5727e34f372。v16 将保存完成的失败候选及这次只读复核，不覆盖 v14/v15。后续应测量实际消息成本再改代码，避免重复扩池/扩线程/改提交延时。当前全部功能 10k–50k 的极致性能目标尚未实现。
+
+
 最新存储窗口补充：原User恢复后，io150base2完整10k认证、9000计划/发送/正ACK/wire/SQL确认全部一致，HB82296完整、无skip/late/断连，P99188.0ms、scheduled190.7ms/max438.252ms，严格延迟FAIL保留。成功取得58.3998s有效窗口file/status/digest/procstat/pressure增量；两次快照耗865.949/1138.598ms，数字有观察开销和非同步读取边界，不是未干扰的性能接受。确认UPDATE8827次均9.3398ms、COMMIT9401次均7.5416ms，精确redo fsync13018/约222.912每秒，binlogfileMISC12317/约210.908每秒、均1.8746ms（MISC不是纯fsync，累计MAX不是窗口P99）。guest CPU busy85.297%，其中system30.290%、softirq9.700%，context-switch约38061/s、全guestfork/thread约315.241/s；CPU PSI增量63.328%，IOsome2.084%、memorysome0.0041%。提交同步成本与调度压力都存在，不能称fsync或RPC线程为唯一根因。源码/运行参数未改变。
 
 v14归档SHAefe242c22d61b3dc90f333444a114bbf7047afa26a5d4f3bfe016d63ae00f4b1，本机109文件逐个SHA验证；认证主机窗口另存27点CPU均50.56%/max71%、vmware单核100口径均591.30%，CIMmax704.851ms。原PowerShell JSON日期自动转型后再次字符串解析导致0匹配，原无效review保留，Python按原始有时区ISO字符串纠正，不能把这些成功窗口数据归给较早的登录abort。
