@@ -420,3 +420,39 @@
 - 30k三worker各100/3消息/s、60s；ordinal2000的理论时间恰是终点，浮点除法再转换整纳秒后落到终点前，send_due额外发送一条。旧排空计数的nearinteger ceil只补漏，不拦截已多发；三个worker总6003而目标6000，原FAIL不改写。
 - 新生产OfferedRequestCount统一发送上限和缺失尾部计数；正整数附近1e-8绝对误差才吸附，tiny正速率保留slot0，真正fractional count仍ceil。所有skip/late仍记录，catchup256和固定drain不变。计划上限拦截终点多发，不减少合法计划量。8项边界测试包含真实100/3浮点截断案例及原1/2/5worker基线。
 - 此轮仅测试工具/docs，不改应用。Gateway镜像7f7143仍compiledc7，Message55d仍compiled667；测试Git HEAD和workerSHA单独记录。保留原worker d667及完整原始6003计数。
+
+### TEST-023：ACK 真实边界验证及原连接池对照
+
+- 第一次真实 ACK 工具等待了错误帧类型2003，登录、心跳和发送正ACK通过后超时，原轮FAIL保留；未发送非法ACK。协议实际投递是2019、接收确认是2020。第二轮通过正常幂等重发复用同一自有消息，没有删除或重置数据，10项检查全部PASS：错误D和外来账号不能推进SQL状态，有效ACK将Pending0推进ReceiverConfirmed1，重复有效ACK保持确认。不同Gateway的外来ACK可能正确返回UnknownMessage，不能强制解释为ReceiverMismatch。
+- worker生产计划边界8项回归PASS，新workerSHA=5d6bd183ef7119783497f60cda99566ad3d7f7bfcb96192fbdc4b46b8c1f40d3，编译commit2bb6b32；尚需真实30k恰好6000计划请求的验证。Gateway仍编译c7ffd3a，MessageService仍编译6674787。
+- pool8下`acks1k1`：6000计划/发送/正ACK/wire/SQL确认，负ACK/skip/late/断连0，HB5259/5259，P99=739.0ms、scheduled743.6ms、活跃99.8667/s，FAIL。`acks10k1`：10000认证、6000正ACK/SQL确认、6033份wire含重试，HB82182/82182，P99=1625.7ms、scheduled1627.8ms、活跃98.15/s，FAIL；49操作链在同一10k窗口内PASS。不能将较少RPC或低样本功能链正确性当作性能改善证明。
+
+### PERF-024：MessageService 连接池16单变量候选
+
+- 只读预检：原pool8，配置SHA=8ff1e9c368fd6c15e2996800db133a60b29efae05cf8b48fab931da462721263，MySQL max_connections151、Threads_connected49、Max_used_connections65，guest可用约8972MiB。持久化precheck阶段含pool租借与Ping，阶段时间高于SQL均值提示共享池等待的可能性；这不是唯一根因证明。SUM_LOCK_TIME是statement/table-lock时间，不能冒充InnoDB行锁证据。
+- `.local/codex/message-pool16-deployment-20261004`在无自有负载/业务连接时保存私有配置原字节、容器原inspect和完整原日志，再只改message.json的mysql.pool_size=16，所有其他JSON语义、文件inode/owner/mode保留。仅MessageService force-recreate；同一55d镜像、环境、命令不变，其他18容器ID/image/start及其他配置字节不变。候选配置SHA=2ead45f4c44348c6fad9a5526f3a7e816d4c3db43f21bcf8a8276aab1e324736。未改全局max_connections、隔离级别、持久化设置、VM或其他用户应用。
+- 两轮控制的父审计在运行前后严格核对pool16配置SHA、container ID、image；coordinator仍核对7f Gateway/55d Message镜像，速率100消息/s、原60s窗口、100用户/s认证、原期限和两个100ms门槛。每轮有20份在线实际data_lock_waits及规范化阻塞语句样本，不记录原SQL值/凭据，不重置计数器。
+
+| run | 认证用户 | 正/负ACK | HB ack/sent | ACK P99 ms | scheduled P99 ms | 活跃正ACK/s | 结果 |
+|---|---:|---:|---:|---:|---:|---:|---|
+| p161k1 | 1000 | 6000/0 | 5433/5433 | 86.5 | 91.6 | 99.95 | 当前私聊门槛PASS |
+| p1610k1 | 10000 | 6000/0 | 82818/82818 | 140.0 | 143.0 | 99.9333 | 延迟FAIL |
+
+- 两轮6000全部durable/ReceiverConfirmed/真实wire，skip/late/断连0；10k同原窗口49操作链PASS。40份锁样本均未捕获等待，实际Threads_connected57；不能排除采样之间的短暂等待。单次前后对照在共享主机环境中不充分证明因果或长期稳定收益；更高规模、重复对照、各功能P99、TLS/MCP/AI/故障/离线/长稳态仍各自验收。
+- 安全回滚须另审计：严格核对当前pool16 SHA和镜像/环境，保存候选配置与日志，恢复本阶段runtime-private/message.json.before的精确字节，再用persist-phase-message-deployment的candidate.override.json只重建message-service。恢复pool8无需换镜像、删除行、回滚Git或停止其他应用。
+- 原AI可达性探针在MCP容器解析host.docker.internal，得到198.18.0.199并RemoteDisconnected；该容器没有AI profile配置的host-gateway别名。这一结果不能证明实际AI网络上下文的provider不可用，需要匹配AI extra_hosts/backend网络的独立只读探针。当前AI未实际推理，MCP static_user_id1不存在的业务失败仍保留，不计为全功能PASS。
+- 已完成证据v5在本机逐文件459个SHA核对PASS，归档SHA=a8ea74fbbc354602abcfa5e52d422c94bd3c1133783a56db97fe3329883bb498；私有配置/环境/原始私有日志及ELF排除，原件留在guest。后续pool16矩阵单独保存在v6，201文件SHA全部PASS，归档SHA=66440687b1c543e86eeee973e82f5bf793694580ce62e430762d60b1b76f4e9f。
+- `p1620k1`认证20000，6000计划/发送/正ACK/wire/SQL确认、负ACK/skip/late/断连0，HB230348/230348，P99=151.6ms、scheduled156.0ms、活跃99.9167/s，延迟FAIL。`p1630k1`认证30000，恰好6000计划/发送/正ACK/wire/SQL确认，负ACK/skip/late/断连0，HB454521/454521，P99=311.8ms、scheduled313.9ms、活跃99.9333/s，延迟FAIL；实际三worker终点多发已消除。
+- `p1650k1`在36353认证/36599连接后中止，没有all-online/业务发送/P99；五条失败为auth_timeout3及business_deadline_exceeded2。UserService fault-auth delay UNSET。20s部分认证观察从30661到32592认证，8vCPU近饱和；UserService1.594cores、MySQL0.783、GWa0.717/GWb0.732、Redis0.691、nginx0.506、MessageService0.484。这是计数差，不能替代因果profile。实际50k前后19个生产容器ID/image/start完全一致；有非零历史累计RestartCount，不得声称生命周期从未重启，也不能把旧计数当本轮重启。
+
+### TEST-025：功能链actor范围编排错误与同窗口补跑
+
+- 20k候选actor519950/952/954/956超出工具519800..519950硬边界，初始断言即拒绝，没有功能操作或业务变更；未产生actor summary，错误日志在父矩阵保留。后续30k原actor519960家族也同样预检拒绝，原父矩阵FAIL不改写。属于编排错误，不是生产业务失败。
+- 不修改正在运行的源码/矩阵或放宽范围保护。独立伴随审计用从未运行的519870/872/874/876在原`p1630k1`窗口补跑`p1630chainfix1`，49操作PASS、所有操作严格落在原60s窗口，非零真实心跳、实际私聊/群确认和逐字节文件验证均通过。原20k窗口已结束，不能事后补称same-window成功，功能链仍NOT_RUN待复测。
+- 50k没有原始全在线稳态，伴随`p1650chainfix1`明确NOT_RUN，也没有改用较小背景人数或延长窗口。预检错误及补跑报告全部另存。后续账号选择必须先读真实guard并查canonical身份/关系为空，不根据未使用的数值猜测合法范围。
+
+### DIAG-026：本地AI网络缺口与剩余全功能容量
+
+- 匹配AI profile的backend network及extra_hosts host-gateway，在现有55d镜像中创建自有UID1000只读/cap-drop/no-new-privileges探针；不挂载配置或凭据、关闭代理、只GET本地/api/tags，不调用模型。实际映射172.17.0.1，HTTP状态0、curl退出7，provider无法连接；主机Windows也没有11434监听。探针自然退出保留，19个生产容器身份未变。
+- 正式MCP static_user_id1不存在，AI endpoint/model实际应接哪一个服务仍缺用户配置信息；两项已请求澄清，后端工作继续。MCP真实正向业务、AI推理及各自P99不计PASS。TLS、离线/故障恢复及长稳态、所有功能的高样本混合负载仍有未覆盖项。
+- 当前读到558380已确认、46211Pending、10Read私聊行，没有清理历史pending来让测试变快。全局发现EXPLAIN使用原to/status/M覆盖索引及loose group-by scan，估计10270行/扫描；不能因看到600k总行数就伪称每次全表扫描。孤立status-leading索引、连接复用及其他优化须另作单变量审计/真实对照，拒绝直接重用已失败的两索引组合。
