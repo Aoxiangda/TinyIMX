@@ -97,6 +97,20 @@ class Worker {
     Config c;std::vector<Conn> conns;int ep=-1; sockaddr_in target{},src{};tinyimx::ProtocolCodec codec{1024*1024};
     std::priority_queue<std::pair<TP,std::size_t>,std::vector<std::pair<TP,std::size_t>>,std::greater<std::pair<TP,std::size_t>>> heartbeats;
     std::ofstream ledger;std::map<std::string,std::uint64_t> m;
+    void failure_detail(const Conn& x,const Packet& p,const Tree& t,const char* kind) {
+        // Allowlist only response diagnostics; never write a raw body or credentials.
+        auto safe=[&](const char* key){auto v=t.get<std::string>(key,"");
+            if(!c.password.empty()){std::size_t at=0;while((at=v.find(c.password,at))!=std::string::npos){v.replace(at,c.password.size(),"[redacted]");at+=10;}}
+            if(v.size()>512)v.resize(512);return quote(v);};
+        std::ofstream o(c.out/"failure-responses.jsonl",std::ios::app);
+        o<<"{\"kind\":"<<quote(kind)<<",\"monotonic_ns\":"<<ns(Clock::now())
+         <<",\"expected_user_id\":"<<x.uid<<",\"expected_sequence\":"<<(x.state==2?x.login_seq:x.chat_seq)
+         <<",\"response_sequence\":"<<p.seq<<",\"response_type\":"<<static_cast<unsigned>(p.type)
+         <<",\"client_message_id\":"<<quote(x.cid)<<",\"success\":"<<safe("success")
+         <<",\"observed_user_id\":"<<safe("user_id")<<",\"reason\":"<<safe("reason")
+         <<",\"message\":"<<safe("message")<<",\"stored_persistent\":"<<safe("stored_persistent")<<"}\n";
+        o.flush();if(!o)throw std::runtime_error("FAILURE_EVIDENCE_WRITE_FAILED");
+    }
     Histogram login_latency,ack_latency,schedule_latency,ready_lag;
     std::uint64_t next_index=0,planned=0,online=0;std::size_t rr=0;
     TP began{},next_open{},last_control{},last_progress{},start{},end{},audit_at{};
@@ -125,11 +139,11 @@ class Worker {
         epoll_event e{};e.data.u32=i;e.events=EPOLLIN|EPOLLOUT|EPOLLRDHUP|EPOLLERR|EPOLLHUP;if(::epoll_ctl(ep,EPOLL_CTL_ADD,x.fd,&e)<0)throw std::runtime_error("EPOLL_ADD");if(rc==0)connected(i);
     }
     void packet(std::size_t i,const Packet&p){auto&x=conns[i];auto t=parse(p.body);auto now=Clock::now();
-      if(p.type==MessageType::kLoginResponse){if(x.state!=2||p.seq!=x.login_seq||field(t,"success")!="true"||uintfield(t,"user_id")!=x.uid)throw std::runtime_error("LOGIN_IDENTITY_OR_FAILURE");x.state=3;++online;++m["login_ok"];login_latency.add(ms(x.login_start,now));heartbeats.push({now+std::chrono::seconds(c.hb),i});return;}
+      if(p.type==MessageType::kLoginResponse){if(x.state!=2||p.seq!=x.login_seq||t.get<std::string>("success","")!="true"||t.get<std::uint64_t>("user_id",0)!=x.uid){failure_detail(x,p,t,"login");throw std::runtime_error("LOGIN_IDENTITY_OR_FAILURE");}x.state=3;++online;++m["login_ok"];login_latency.add(ms(x.login_start,now));heartbeats.push({now+std::chrono::seconds(c.hb),i});return;}
       if(p.type==MessageType::kHeartbeat){if(x.state!=3||p.seq!=x.hb_seq||x.hb_seq==0||field(t,"pong")!="true")throw std::runtime_error("HEARTBEAT_IDENTITY");x.hb_seq=0;++m["heartbeat_ack"];return;}
       if(x.state!=3)throw std::runtime_error("BUSINESS_BEFORE_LOGIN");
       if(p.type==MessageType::kChatAck){if(x.chat_seq==0||p.seq!=x.chat_seq)throw std::runtime_error("UNKNOWN_CHAT_ACK");
-        if(field(t,"success")!="true"){++m["chat_ack_fail"];event("fail",x,0,p.seq);x.chat_seq=0;return;}
+        if(field(t,"success")!="true"){failure_detail(x,p,t,"private_ack");++m["chat_ack_fail"];event("fail",x,0,p.seq);x.chat_seq=0;return;}
         auto mid=uintfield(t,"message_id");if(mid==0||field(t,"client_message_id")!=x.cid||uintfield(t,"from")!=x.uid||uintfield(t,"to")!=x.to||field(t,"stored_persistent")!="true")throw std::runtime_error("ACK_IDENTITY");
         ++m["chat_ack_ok"];if(now<end)++m["ack_in_active_window"];double latency=ms(x.enqueued,now);ack_latency.add(latency);schedule_latency.add(ms(x.scheduled,now));if(latency<=100)++m["ack_within_100ms"];event("ack",x,mid,p.seq);x.chat_seq=0;return;
       }

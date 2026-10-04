@@ -199,6 +199,23 @@ def run(a):
                 except subprocess.TimeoutExpired:
                     p.terminate();p.wait(timeout=10)
         for f in logs:f.close()
+        if failure and not (stage/'summary.json').exists():
+            partial=[];totals=collections.Counter();reasons=collections.Counter()
+            for p,d in workers:
+                last=next((d/n for n in ('final.json','live.json') if (d/n).exists()),None)
+                x=json.loads(last.read_text()) if last else {}
+                totals.update(x.get('metrics',{}))
+                partial.append({'directory':d.name,'exit_code':p.poll(),'snapshot':last.name if last else None,
+                                'status':x.get('status','NO_SNAPSHOT'),'online_now':x.get('online_now',0),
+                                'started_steady_window':bool(x.get('start_steady_ns',0))})
+                diagnostic=d/'failure-responses.jsonl'
+                if diagnostic.exists():
+                    for line in diagnostic.read_text().splitlines():
+                        r=json.loads(line);reasons[r['kind']+':'+(r.get('reason') or 'NO_REASON')]+=1
+            save(stage/'summary.json',{'status':'FAIL','phase':'worker_or_coordinator_abort','scenario':vars(a),
+                 'error':failure,'all_online_reached':(stage/'all-online.json').exists(),'metrics':dict(totals),
+                 'workers':partial,'failure_reason_counts':dict(reasons),'wall_seconds':time.monotonic()-start,
+                 'coverage':'Aborted run; partial metrics are not capacity acceptance. Original window and failed responses retained.'})
         save(stage/'container-identity-after.json',container_identity())
         (stage/'guest-memory-after.txt').write_text(cmd(['free','-m'])+pathlib.Path('/proc/pressure/memory').read_text())
     return 2 if failure or not all(gates.values()) else 0

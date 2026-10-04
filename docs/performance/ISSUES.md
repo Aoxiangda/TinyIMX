@@ -342,3 +342,17 @@
 - dry-run `fresh50kplan`确认目标ID/名称及17个用户外键引用范围全空，无活动ownedworker。只读`collisionguard`对旧范围按预期FAIL且completed_batches0，证明不会覆盖既有账号。
 - `fresh50kactual` 150批INSERT全部提交，50k新用户/100k关系精确计数通过；所有旧28939用户ID/昵称/avatar/status/密码salt+hash及115561旧关系的前后SHA均完全一致。最后ring验证表达式`uid-base-2+N`在最小unsigned UID先减2导致真实ERROR1690；原seed及联合保护报告均FAIL保留，没有再插入、重置或删行。
 - 只读诊断将计算改为`uid-base+N-2`，相同真实表返回100000。新`--verify-run`只读模式绑定原seed审计参数、每批私有SQL SHA及完整完成列表，再核对PBKDF2合同、全部canonical账号和exact ring。旧FAIL不改写；新证据另存。实际认证/性能仍待测。
+
+### CAP-013：新50k数据核验与规模实测失败
+
+- 后续 `fresh50kverify` SELECT-only核验PASS：50000用户、100000互为好友ring；旧数据字段哈希未变。早期AUTO_INCREMENT读取命中了information_schema缓存；仅当前SQL会话关闭统计过期缓存后，真实AUTO_INCREMENT=750001、MAX(user_id)=750000。未重置计数器，旧缓存值不能作为实际插入后的计数。
+- `nf10k16a`：10000全部登录，60s/100消息每秒，6000计划/发送/正ACK/wire/SQL确认，负ACK/skip/late/断连0，HB82785/82785。P99=395.0ms，scheduled399.0ms，活跃99.5833/s；延迟FAIL。49操作链在同一原始10k稳态窗口内PASS，每人HB2/2；低样本功能正确性不能代表各功能P99达标。
+- `nf20k16a`：20000全部登录，6000发送，4866正ACK、1134负ACK，HB230854/230854，活跃79.9333/s，P99=2967.4ms、scheduled2968.3ms，FAIL。交叉功能链第15操作真实失败，relation_service_deadline_expired，权限RPC预算耗尽，stored_persistent=false；后续群与文件NOT_RUN。
+- `nf30k16a` 登录中止，10352/30000已认证；`nf50k16a` 登录中止，8662/50000已认证。未进入全在线稳态，业务发送0；不能声称已完成30k/50k性能测量。所有19容器仍运行，无OOM/重启，其他应用保留。
+- 601条限速采样的10k慢请求中persist阶段中位85.096ms，dispatch1.475ms、permission12.839ms；样本含ramp/drain，不代表全体P99。MySQL20k窗口outbox发布UPDATE平均29.001ms、累计锁等待51.022s；仍需分离连接池等待、RPC排队与数据库耗时，不能据此认定唯一原因。
+
+### TEST-014：失败响应与中止摘要观测缺口
+
+- 旧worker登录失败只抛LOGIN_IDENTITY_OR_FAILURE，负ACK只计数，丢失reason/message；旧coordinator中途异常没有summary。原失败证据保留，补充工具不改变速率、截止时间或验收门槛。
+- 新worker仅在失败时追加allowlist响应字段至failure-responses.jsonl，最大512字节/字符串、合成密码脱敏，不保存原始body。新coordinator在owned workers退出后汇总部分认证数、全在线标记、原窗口与原因计数，明确中止不是容量通过。
+- 验证要求：真实合成错误密码必须产生失败原因；随后相同100用户/s条件重现30k登录问题。单独归档旧binary，单线程编译新测试binary；没有应用服务部署。结果另存，不修改旧FAIL。
