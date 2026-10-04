@@ -191,7 +191,11 @@ class Run:
         self.check('private-repeat-same-M', duplicate['message_id'] == mid)
         self.authoritative('private-receiver-confirmed', f'SELECT delivery_status FROM im_private_messages WHERE message_id={mid} AND from_user_id={a.uid} AND to_user_id={b.uid}', '1')
         history = self.request(b, 'private-history', 2005, {'peer_user_id': a.uid, 'limit': 20})
-        self.check('history-real-message-content', any(x['message_id'] == mid and x['content'] == text for x in history['messages']))
+        historical = [x for x in history['messages'] if x['message_id'] == mid]
+        self.check('history-real-message-content', len(historical) == 1 and
+                   historical[0]['from'] == a.uid and historical[0]['to'] == b.uid and
+                   historical[0]['message_type'] == 1 and historical[0]['delivery_status'] == 1 and
+                   json.loads(historical[0]['content']) == {'from': a.uid, 'to': b.uid, 'text': text})
         conversations = self.request(b, 'conversations-before-read', 2007, {'limit': 100})
         self.check('unread-dialog-visible', any(x['peer_user_id'] == a.uid and x['unread_count'] >= 1 for x in conversations['conversations']))
         self.request(b, 'private-mark-read', 2003, {'peer_user_id': a.uid})
