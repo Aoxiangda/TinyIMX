@@ -479,3 +479,18 @@
 - 运行私聊EnsureUnreadProjection依次Acquire/PING/EVAL、Acquire/PING/GET private、Acquire/PING/GET total，共三个lease和六次Redis往返。候选Gateway请求原子Lua同时返回原投影status和两个计数快照，仅一次lease/PING/EVAL；原四参数消费者保持integer返回。
 - 稳定M marker身份、Applied/AlreadyApplied/Read语义、溢出/非法计数判定、原子增量全部保留。计数由GET原十进制字符串返回并from_chars解析int64，不转换Lua number，防止2^53精度丢失；零值optional也有效。成功且对应计数有效才用快照；投影失败或某一计数非法时保留原逐项读取回退，不提前ACK。
 - 新真实Redis目标硬性要求--owned-isolated-redis及127.0.0.1:16390/db0/pool1；验证精度、最大int64、溢出不安装marker、身份冲突、wrongtype、旧scalar兼容、关闭连接恢复以及四线程64同M重试只增一次。运行需要新独立Redis容器/配置审计，不能指向正式Redis。当前仅本地候选，50k矩阵期间不应用源码/构建/部署，不宣称性能提升。
+### PERF-031：高业务速率的消息执行器排队与确认拥塞
+
+- 同Gateway1d8/Messageb24/pool16/index013/16线程，10k100/s6000正ACK、P9975.8ms；300/s18000发送、10408正ACK、7592负ACK、窗口167.967/s、P993006.7ms；500/s30000发送、11332正ACK、18668负ACK、窗口184.2/s、P993024.7ms。门槛未放宽，原始FAIL保存。
+- 300/s负ACK为overloaded4312、relation期限3043、持久化期限52、持久化不确定185；164已落库无正ACK。500/s确认快照Pending545、正ACK身份/确认/wire异常529，仍需区分延迟确认、真实状态和wire情况，不能认定永久丢失或PASS。
+- 网关慢样本排队中位1644.245ms/最大4515.440ms，RPC持久化中位69.057ms。权限期限可能是排队耗尽预算后本地拒绝，不等于关系SQL慢。私聊发送和receiver ACK共用消息执行器；32线程同镜像单变量候选只改一个环境值，其他17容器/配置保持，精确16线程回滚留档；性能未验收。
+
+### TEST-032：追加中ledger的读取竞争
+
+- acrate1000a在原SQL/wire对账时遇expected7/got4，协调器中止；原60000发送及失败响应保留，不把其局部计数当完整有效容量结果。
+- 新协调器只对不以换行结束的尾部做最多2秒重读，每条完整行必须7字段；保存完整ledger-snapshot.tsv、SHA/字节数/尝试次数。永久不完整尾部或非法完整行仍FAIL，绝不丢弃行来制造PASS。真实并发追加与两个失败边界、空hold ledger共4项验证；Windows因Linux resource模块不可导入，改在guest执行，保留本机环境失败记录。
+
+### PERF-030验证更新（原候选历史描述保留）
+
+- 编译Gateway33fc，195项回归PASS；真实Redis高精度/溢出/并发/故障检查PASS，独立实例只停止自有ID并保留。只替换Gateway1d8，Messageb24和单索引013不变。acount1k53.6/55.8ms、acount10k75.8/77.7ms，全部6000正ACK和真实心跳，10k49项低样本链PASS。相对旧索引Gateway10k77.4ms改善不足证明显著，P99.9反增加到112.4ms。
+- pending20k135.5/138.1ms、30k180.4/183.6ms依然延迟FAIL；pending50k仅44420认证，无all-online，两条真实auth_timeout。用户应用保留，稳态约8GiB可用/低内存PSI，CPU等待明显；认证分段还需实测，不能降低密码成本或放宽期限。

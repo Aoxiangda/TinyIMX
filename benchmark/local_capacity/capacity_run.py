@@ -20,6 +20,22 @@ def save(path, obj):
     tmp.write_text(json.dumps(obj, indent=2) + '\n')
     tmp.replace(path)
 
+def complete_ledger_snapshot(path, timeout=2.0):
+    """Retry an append-in-progress tail; never discard malformed evidence."""
+    deadline = time.monotonic() + timeout
+    attempts = 0
+    while True:
+        attempts += 1
+        raw = path.read_bytes()
+        if not raw or raw.endswith(b'\n'):
+            text = raw.decode('utf-8')
+            if any(len(line.split('\t')) != 7 for line in text.splitlines()):
+                raise ValueError('Malformed complete ledger record: ' + path.name)
+            return raw, attempts
+        if time.monotonic() >= deadline:
+            raise TimeoutError('Ledger tail remained incomplete: ' + path.name)
+        time.sleep(0.01)
+
 def container_identity():
     names = cmd(['docker', 'ps', '--format', '{{.Names}}']).splitlines()
     return [{'name': c['Name'], 'id': c['Id'], 'image': c['Image'],
@@ -158,7 +174,13 @@ def run(a):
             db[cid]=(int(mid),int(u),int(v),int(state))
         sent={};acked={}; delivered=collections.Counter(); negative=[]
         for p,d in workers:
-            for line in (d/'ledger.tsv').read_text().splitlines():
+            ledger, attempts = complete_ledger_snapshot(d/'ledger.tsv')
+            (d/'ledger-snapshot.tsv').write_bytes(ledger)
+            save(d/'ledger-snapshot.json', {'attempts': attempts,
+                 'sha256': hashlib.sha256(ledger).hexdigest(), 'bytes': len(ledger),
+                 'method': 'Complete newline-terminated snapshot; every seven-field row retained',
+                 'limits': 'Captured after SQL snapshot; ongoing later deliveries remain in original ledger'})
+            for line in ledger.decode('utf-8').splitlines():
                 kind,u,v,mid,seq,cid,t=line.split('\t')
                 # Delivery identifies the stable M/from/to tuple. C is optional
                 # on the public wire; retain deliveries even when it is absent.
