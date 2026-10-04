@@ -375,3 +375,11 @@
 - 绑定loopback源访问192.168.220.128:9000超时，原FAIL保留。随后只使用已存在的192.168.220.128、192.168.220.129、192.168.58.129、172.18.0.1、172.17.0.1，每个都成功登录真实nginx containerIP以及实际发布的guest-address:9000。没有增加地址或改变routes/firewall/sysctl。
 - coordinator新增显式host/source-ips，override必须是本机现有IPv4，来源唯一且足够每worker一个；记录原CLI和worker源地址。默认旧路径不变，负载速率100用户/s、deadline和门槛不变。先2用户正常hold验证，再30k/50k同条件login-only测量；不把hold成功等同全功能容量。
 - 实际MCP鉴权负向401及授权discover/list9工具通过，但static_user_id=1在真实库不存在，profile业务返回HTTP200/isError=true/not_found。AIagent未运行；实际配置qwen3:8b/host.docker.internal，仅检查配置未调用provider。MCP业务和AI容量不能计为PASS；生产身份修正需要明确合法principal，先用独立合成账号验证完整工具链。
+
+### CAP-017：单个nginx worker连接预算不足
+
+- published2用户hold PASS，HB4/4；pub30khold1在26428认证后reset，pub50khold1在27605认证后新登录连接断开，都没有all-online或业务稳态。原失败和两种客户端入口对照保留。实测nginx peer已经分成四个地址，不能把原loopback聚合当作唯一根因。
+- 后续有界Docker日志读取捕获两次明确alert：10:57:07及11:01:48，worker29的`32768 worker_connections are not enough`。worker配额包括客户端与上游连接，accept分配并不均匀；nofile262144不能代替worker配额。官方说明：https://nginx.org/en/docs/ngx_core_module.html#worker_connections。
+- 候选只将worker_connections提高到131072，其他nginx参数不改。为一个worker承接全部50k客户端及50k上游预留空间，同时小于nofile262144；保守要求额外1GiB可用内存预算，实测RSS/guest资源另存，不能以配置值推断实际内存占用。
+- 首先将候选复制到自有容器/tmp路径并nginx-t；确认无ownedworker/business连接后，原config保持inode写入以让readonly bind看到内容，白名单源码提交，随后单独审计graceful reload。所有19容器身份/镜像/start必须保持，无重建或删除。原config精确备份；失败时同inode恢复、nginx-t/reload并另记失败。
+- 一个诊断tail误读error.log的/dev/stderr symlink而阻塞；只核对并停止本任务exact tail reader，容器无pgrep/外部kill导致的两次工具失败也保留。后续所有读都有超时，拒绝设备/流。该诊断失败不能当成nginx错误计数0的证据。
