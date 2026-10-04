@@ -217,3 +217,16 @@ v18_attempt2归档100文件 SHAece928ff8e5251c4fd6cdb8b3d5533bd9c1e912e0dca8a708
 首轮独立MySQL红对照正确返回1，54条独立功能断言PASS，只有“Pending normal path avoids SELECT before update”新行为失败；末尾另外打印“[FAIL] M16-A Transactional Outbox integration tests, failed=1”总汇。工具把两行FAIL当两个实际断言，导致停止在红对照，绿候选没有运行。原failed SHA bb82f8aa89bed78669c8ba8edb3633dd9831e966b9dc83524cd78d478118c0c9、原log SHA d379d78888f1440fa515bcd826ff10546da41f97b712fffcad9ccae15f585265保持。只读复核核对真实创建的schema只有codex_receiver_guard_20261005_red1；旧failed字段列的是3个计划名，不能说尚未创建的green1/4已保存。此错误是测试汇总分类，不能声称业务候选失败或已通过绿验证。
 
 只修复helper，产品和testC++保持84逐diff不变；新版将实际断言和准确总汇分开，要求红对照恰好1个预期失败且总汇failed=1/exit1，绿对照必须完全无FAIL输出和exit0，未放宽任何业务断言。新attempt2目录和3个全新schema red1a2/p1a2/p4a2，保留首轮全部数据不删除/复用。现有生产created_at实际TIMESTAMP NOT NULL，独立DDL前检查已按实际typed TIMESTAMP/DATETIME处理，并非臆测字符串列。helper/docs新Git与编译84区分，使用二进制前只允许docs/evidence_tools差异，若业务/test/CMake变化则拒绝。v20将在真正新红绿完成后冻结全部源码/构建/首轮失败/复核/第二轮结果和会话计数失败/复核；当前新绿结果仍NOT_RUN，整体性能目标未达。
+
+
+### 2026-10-05：原子收件人更新真实数据库绿验证完成；准备匹配性能对照
+
+163f4df 的新工具完成红绿对照，实际编译代码仍为84cb214e17bdd4590eb5763483e448d4f78b0d0b。原版红对照54条独立PASS，恰好1条避免SELECT的新行为FAIL，准确总汇failed=1/exit1；候选池1 outbox55条PASS、unread snapshot14条PASS，候选池4 outbox54条PASS，共123条绿PASS且无FAIL/exit0。与此前156条单元/真实RPC PASS分开记录，不把红对照或零输出测试伪算进绿数量。三套独立red1a2/p1a2/p4a2 schema和首轮red1都保留；生产SQL配置1/1/1/0/0、全部19服务与配置不变，尚未部署或证明性能改善。v20归档77文件SHA d531f77096f86137af9fc42e8b1da0989e8b0ccdf8f24f09e3a3b4281d0f1589，Windows新目录逐SHA全部验证。
+
+方向依据是正常Pending确认去掉一个健康lease/Ping及完整行GET，不缓存/跳过现有健康检查，不降低持久化或期限。首次成功原子UPDATE由PK、收件人、Pending、非零发送者、有效消息类型和日期绑定；重复、已读、错误身份和异常数据仍完整解析分类。终态/重复路径现在UPDATE零行再GET，可能比原版GET更贵，需要后续重复确认及混合交互负载验证。发送者positive ACK边界不直接包含收件人确认，此修改可能通过降低共享CPU/SQL竞争改善端到端，不能把确认路径省时直接当ACK省时。
+
+本次源代码仅新增封装/部署/同负载运行/分析/精确回滚/安全导出helper，C++与测试仍84未改。镜像只替换Message二进制5d24b144577e01a5bfc7049b93ebcd65f61e1008da7e8513546ad0e041c55202；运行Gateway仍33fc原版1d8/16线程，User仍原38，已修复MCPbc85保留；不能部署当前Gateway拒绝过的fair源码。原版先测guard150A1，10k登录100人/秒、150私信/秒、60秒/9000计划、3秒原期限/15秒心跳；只换Message后guard150B1同参数。全部登录、计划/尝试/positive/wire/SQL确认、无skip/negative/late/disconnect、心跳完全相等，以及原100ms两项P99门槛不改。只读两帧SQLdigest/19cgroup/guest压力计数限定在活动窗口，保存观察开销；后台与时序共享主机限制明确，部分/失败人口不得全负载归因。全部结果包括FAIL保留，不在构建时测试、不因减少线程/查询就接受优化。当前控制尚NOT_RUN；即便私信改善，群组/离线/文件/搜索/MCP/AI/20k至50k/故障及长稳仍未完成。
+
+部署前保存真实inspect私有备份、原image/tag与rollback override，仅Message可重建；环境键值、命令、healthcheck、配置SHA、其他18 ID/image/start以及实际容器内二进制校验。失败或回归按证据恢复原b24并核验健康/二进制c119，保留候选镜像、所有自己的停止探针和数据库行。不删除文件/容器/数据，不清全局缓存，不停任何其他应用，不改VM/主机安全/网络；运行前内存门槛只用于避免失真的负载，保留用户游戏/Python。
+
+本地准备也记入失败链：red-review生成器第一次未闭合三引号导致Python解析失败，在任何写入之前停止；随后的package因新源文件不存在而拒绝，未上传/改业务。修正时一次自动权限审查超时，只读确认没有修改后一次重试完成；这是超时，不是拒绝安全请求，不代表业务故障。原本地失败审计保持。Git提交、编译版本、运行镜像以及功能通过/性能待测分别记录，继续按实测结果迭代。
