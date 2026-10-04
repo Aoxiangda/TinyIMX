@@ -323,3 +323,9 @@
 
 - `mixed10kc` 完成34操作：SQL-format错误时间正确拒绝，RFC3339UTC正向禁言成功，随后真实群发被拒绝。测试误猜测reason/message应含mute，实际Gateway合同为`group_send_permission_denied`，因此整轮仍FAIL保留；不能当业务禁言失败，也不将未执行功能计为通过。
 - 测试改为精确公开reason，同时SQL验证成员仍active且muted_until在未来，拒绝消息没有任何持久化行；unmute后必须真实成功投递并ACK。增加每操作monotonic边界与可选背景run的start/end约束，保证声称在10k稳态内的操作全部落在真实原负载窗口中。
+
+### TEST-010：文件会话按所有者隔离并隐藏存在性
+
+- `contracts4` 在10k背景测试已经结束后的独立四用户链完成47操作。全部群管理操作、UTC禁言与负向无持久化、解禁后的3份真实wire及SQL delivery_status=3、消息幂等、成员离开/重邀/踢出、群主转移和解散均通过；文件创建/幂等/本人的会话读取通过。
+- 他人查询真实上传ID返回file_upload_not_found，首版断言误期望file_permission_denied，整轮FAIL保留。源码owner-scoped查询隐藏其他所有者的会话；修正精确notfound，并检查不泄漏file/session字段，随后本人仍可取消及复用取消结果。不能因为否定响应而掩盖timeout/unavailable错误。
+- `uq10k16a`完整300s基线：30000计划/发送/正ACK/wire/SQL已确认，负ACK/skip/late/断连均0；心跳243988/243988，活跃99.9567/s，ACK P99=292.0ms，scheduled-to-ACK294.6ms，两个延迟门槛FAIL。最初17操作链FAIL与后续链各自保存；原联合报告不修改为PASS。
