@@ -1,5 +1,7 @@
 # 先分析、再修正、最后验证：性能根因复盘（2026-10-05）
 
+当前运行：MCP修正已部署bc85/编译778，其他18保持；主性能目标未达，隔离RPC诊断待测。以下历史阶段原文保留。
+
 最新完成结论如下，之后的“待执行”文字为保留的历史阶段记录。
 
 ### 2026-10-05：提交合并候选否决，转向消息增量成本分析
@@ -157,3 +159,12 @@ Windows21:39UTC只读审计：实际运行VMware16.2.4 build20089737、Ubuntu VM
 虚拟网卡确为e1000，但guest ip route get192.168.220.128 from192.168.220.129结果local/devlo；本地压测及Docker服务链并不以物理虚拟网卡为主要传输路径。因此不盲改网卡。当前有依据的方向是进一步区分原消息组件的SQL同步/网络往返/RPC与线程成本，再选择代码优化；不是把所有高内核时间都归给VMware。主机审计JSON在本机evidence/vmware-host-mode-review-20261005，只有允许的模式/硬件字段，没有完整VMX/log或命令行。
 
 v17将保留MCP原版red、89green/corepass、真实验证/汇总trace、自有进程停止审计、源码/镜像/更新和回滚证据，实际secret扫描且不覆盖v16。所有功能极致性能仍未实现，继续迭代。
+
+
+### 2026-10-05：MCP已落地；隔离RPC增量成本测量待执行
+
+MCP image bc85c186271873610ff759c008d5f36d49d1a9c331e064eb7fa1121d822485a3，编译778ad55708b1806d09c7691b245f870b17861983，二进制dbfef7cc761bc3253d4269038c63e1c347974c73574b5df1e07055fed201d926，实例bd8182dcd4be5ee219b58b4711fd5e4512a38b19c712ce5b7d0358b2bd36cef7。健康检查、现有token的schema50/100、完整ENV键值/命令/健康配置均通过；仅MCP更新，其他18/全部配置保持。原38dca/8cd229及精确rollback保留；正式principal1与AI问题仍未解决。v17本机65文件SHA通过，archive68a0b3dbbc8efaacfa0b69543778ede430646f658ba9c46dd278e722b4bfce57。
+
+新组件诊断比较相同20ms受控等待/128B synthetic echo的direct6000次与真实gRPC6000次，各300/s20s；再仅父strace -c跟踪自己子进程1500次5s。CQ1/MIN1/MAX2匹配原默认，16驱动线程、3s每次RPC、35s各进程上限，所有计划请求不跳过。记录严格响应身份/内容/数量、迟发、各index对应的caller/handler wall及handler threadCPU/TID、rusage合计CPU与context-switch。只编译自己的文件和缓存proto/gRPC，排除全部其他TinyIMX实现archive和缓存MAX16 MessageServer；不构建正式目标或安装依赖。
+
+不访问SQL/Redis/鉴权/真实用户/AI，不包含receiver/wire/10k在线背景。synthetic成功不是durable ACK或容量接受。rusage包括caller和server，strace计数包括启动关闭、等待时间并受ptrace干扰；不能用模拟结果直接替代真实Message CPU或归因全部延迟。用未跟踪成对计时和CPU测增量，以跟踪计数检验创建机制，保留共享主机顺序对比限制。源码/审计先Git，当前未测量，所有19/config保持；只在cmdline/starttime/PGID匹配时清理自己的新进程组。旧完整19身份压测工具因MCP更新不能直接重放。准备阶段自动审查超时未创建生成器/包/候选源，核验后单次重试；不是安全拒绝，无生产动作。目标未达，继续测量再选择优化。
