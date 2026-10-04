@@ -36,10 +36,12 @@ def main():
     p.add_argument('--username-prefix',default='codex50k_20261004_')
     p.add_argument('--users',type=int,default=50000)
     p.add_argument('--apply',action='store_true')
+    p.add_argument('--verify-run',help='SELECT-only verification of an already completed, preserved seed plan')
     a=p.parse_args()
     assert re.fullmatch('[a-zA-Z0-9-]{1,20}',a.run)
     assert 100000<=a.user_id_base<=1000000000000 and 2<=a.users<=50000
     assert re.fullmatch('[a-zA-Z0-9_-]{1,40}',a.username_prefix)
+    assert a.verify_run is None or (not a.apply and re.fullmatch('[a-zA-Z0-9-]{1,20}',a.verify_run))
     os.chdir(ROOT);os.umask(0o077)
     d=ROOT/'.local/codex'/('owned-fixture-'+a.run)
     assert not d.exists(),'Never overwrite prior seed evidence'
@@ -68,6 +70,30 @@ def main():
                     active.append({'pid':row['pid'],'run':path.parent.name})
         save(d/'owned-active-workers.json',active)
         assert not active,'Never seed during active owned capacity measurement'
+        if a.verify_run:
+            prior=ROOT/'.local/codex'/('owned-fixture-'+a.verify_run)
+            old=json.loads((prior/'audit-before.json').read_text())['args']
+            assert old['apply'] and all(old[k]==getattr(a,k) for k in ('users','user_id_base','username_prefix')),'Bind the exact previous seed scope'
+            plan=json.loads((prior/'batch-plan-before.json').read_text())
+            done=[json.loads(line) for line in (prior/'completed-batches.jsonl').read_text().splitlines()]
+            assert [x['batch'] for x in done]==list(range(len(plan))) and all(x['committed'] for x in done),'Incomplete seed requires a new explicit partial-batch audit; never implicitly retry inserts'
+            for entry in plan:
+                path=(prior/entry['private_file']).resolve()
+                assert path.is_relative_to(prior/'runtime-private') and hashlib.sha256(path.read_bytes()).hexdigest()==entry['sql_sha256'],'Exact prior private batch identity'
+            first=(prior/plan[0]['private_file']).read_text()
+            match=re.search(r"'([0-9a-f]{32})','([0-9a-f]{64})'",first)
+            assert match,'Original credential plan missing'
+            salt,hashed=match.groups()
+            assert hashlib.pbkdf2_hmac('sha256',b'123456',bytes.fromhex(salt),100000,dklen=32).hex()==hashed,'Original PBKDF2 credential contract'
+            inserted_users=int(database(f"SELECT COUNT(*) FROM im_users WHERE user_id BETWEEN {b+1} AND {hi} AND username=CONCAT('{prefix}',LPAD(user_id-{b},6,'0')) AND status=1 AND password_salt='{salt}' AND password_hash='{hashed}'"))
+            inserted_relations=int(database(f'SELECT COUNT(*) FROM im_user_relations WHERE user_id BETWEEN {b+1} AND {hi} AND peer_user_id BETWEEN {b+1} AND {hi} AND relation_status=1'))
+            exact_ring=int(database(f'SELECT COUNT(*) FROM im_user_relations WHERE user_id BETWEEN {b+1} AND {hi} AND relation_status=1 AND (peer_user_id={b+1}+MOD(user_id-{b},{n}) OR peer_user_id={b+1}+MOD(user_id-{b}+{n}-2,{n}))'))
+            total=int(database(f'SELECT COUNT(*) FROM im_users WHERE user_id BETWEEN {b+1} AND {hi}'))
+            edges=2*n if n>2 else 2
+            save(d/'prior-plan-readonly-verification.json',{'prior_run':a.verify_run,'private_plan_SHA_verified':True,'completed_prior_batches':len(done),'canonical_users':inserted_users,'total_users':total,'mutual_relations':inserted_relations,'exact_ring_edges':exact_ring,'auto_increment_after':database("SELECT AUTO_INCREMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='im_users'"),'SQL_writes':False})
+            assert total==inserted_users==n and inserted_relations==exact_ring==edges,'Existing plannedfixture verification mismatch'
+            summary={'status':'VERIFIED_PASS','phase':'READONLY_EXISTING_PLAN_VERIFY','prior_run':a.verify_run,'users_verified':inserted_users,'relations_verified':inserted_relations,'SQL_writes':False,'real_authentication':'NOT_RUN','capacity_acceptance':False}
+            save(d/'summary.json',summary);print(json.dumps(summary,indent=2));return 0
         existing=int(database(f'SELECT COUNT(*) FROM im_users WHERE user_id BETWEEN {b+1} AND {hi}'))
         collision=int(database(f"SELECT COUNT(*) FROM im_users WHERE LEFT(username,{len(prefix)})='{prefix}'"))
         auto=database("SELECT AUTO_INCREMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='im_users'")
@@ -111,7 +137,7 @@ def main():
                 with (d/'completed-batches.jsonl').open('a') as f:f.write(json.dumps({'batch':i,'kind':kind,'committed':True})+'\n')
             inserted_users=int(database(f"SELECT COUNT(*) FROM im_users WHERE user_id BETWEEN {b+1} AND {hi} AND username=CONCAT('{prefix}',LPAD(user_id-{b},6,'0')) AND status=1 AND password_salt='{salt.hex()}' AND password_hash='{hashed}'"))
             inserted_relations=int(database(f'SELECT COUNT(*) FROM im_user_relations WHERE user_id BETWEEN {b+1} AND {hi} AND peer_user_id BETWEEN {b+1} AND {hi} AND relation_status=1'))
-            exact_ring=int(database(f'SELECT COUNT(*) FROM im_user_relations WHERE user_id BETWEEN {b+1} AND {hi} AND relation_status=1 AND (peer_user_id={b+1}+MOD(user_id-{b},{n}) OR peer_user_id={b+1}+MOD(user_id-{b}-2+{n},{n}))'))
+            exact_ring=int(database(f'SELECT COUNT(*) FROM im_user_relations WHERE user_id BETWEEN {b+1} AND {hi} AND relation_status=1 AND (peer_user_id={b+1}+MOD(user_id-{b},{n}) OR peer_user_id={b+1}+MOD(user_id-{b}+{n}-2,{n}))'))
             save(d/'postinsert-verification.json',{'canonical_users':inserted_users,'mutual_ring_relations':inserted_relations,'exact_ring_edges':exact_ring,'expected_users':n,'expected_edges':len(edges),'auto_increment_after':database("SELECT AUTO_INCREMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='im_users'")})
             assert inserted_users==n and inserted_relations==len(edges) and exact_ring==len(edges),'Fresh fixture verification mismatch; retain all partial rows'
     except BaseException as e:

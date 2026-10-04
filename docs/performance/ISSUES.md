@@ -336,3 +336,9 @@
 - 本次链短于首个5s心跳周期，原报告0/0的心跳比较是空断言；不改写原报告。后续actor强制每人发送一个真实ping，并要求nonzero+全部返回，还补记实际容器镜像/启动身份。10k基线的243988真实心跳不受这一测试缺陷影响。
 - 旧coordinator硬编码500000/m21b500000_而旧fixture只有20k；unused的capacity-owned-range初稿审计没有应用，后续版本重新绑定当前HEAD。新增显式base/prefix并统一SQL/worker；预检失败有独立FAIL记录，重复run不覆盖原结果。
 - 新seed工具默认SELECT-only，准备验证700001..750000及codex50k_20261004_名称范围为空，再strictINSERT50k新合成账号/100k互为好友ring，<=1000行/事务；绝不重置旧账号密码/status/关系，私有batch完整保留，部分失败不自动删数据。自动递增可能升高而被审计保留，不能调低。状态：fixture仍未创建，真实50k认证/性能待测。
+
+### TEST-012：合成数据最终核对的无符号边界
+
+- dry-run `fresh50kplan`确认目标ID/名称及17个用户外键引用范围全空，无活动ownedworker。只读`collisionguard`对旧范围按预期FAIL且completed_batches0，证明不会覆盖既有账号。
+- `fresh50kactual` 150批INSERT全部提交，50k新用户/100k关系精确计数通过；所有旧28939用户ID/昵称/avatar/status/密码salt+hash及115561旧关系的前后SHA均完全一致。最后ring验证表达式`uid-base-2+N`在最小unsigned UID先减2导致真实ERROR1690；原seed及联合保护报告均FAIL保留，没有再插入、重置或删行。
+- 只读诊断将计算改为`uid-base+N-2`，相同真实表返回100000。新`--verify-run`只读模式绑定原seed审计参数、每批私有SQL SHA及完整完成列表，再核对PBKDF2合同、全部canonical账号和exact ring。旧FAIL不改写；新证据另存。实际认证/性能仍待测。
