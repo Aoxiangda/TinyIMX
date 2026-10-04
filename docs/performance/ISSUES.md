@@ -292,3 +292,17 @@
 - 候选：单 SELECT `COALESCE(SUM(from_user_id=peer),0),COUNT(*)`，按receiver及0/1状态过滤；同一个InnoDB读视图返回两个计数，校验private≤total。用户grouped SELECT原语义不变，包含历史zero-unread peer并在C++求同视图total。移除两处多余BEGIN/COMMIT，不更改isolation/autocommit、表行、索引、RPC或Redis幂等规则。
 - 官方一致读说明：https://docs.oracle.com/cd/E17952_01/mysql-8.0-en/innodb-consistent-read.html 。池lease没有外部未结束事务，原池Release仍负责异常事务回滚。
 - 验证计划：MySQL连接局部 TEMPORARY shadow，覆盖多个peer、全部0/1/2/3状态、其他receiver隔离、空计数、zero-unread历史peer、非法身份及无连接错误；临时表仅在本测试唯一连接可见，关闭连接自动退役。再运行原只读真实SQL回归、Release服务构建和实际容量复测。状态：源码候选，不是性能PASS。
+
+### PERF-009（真实回归、部署和容量结果）
+
+- `76396e4` 保存一条SQL快照候选。14项临时表断言、2项原真实只读SQL断言、27项crash-window合同断言通过。初次新Make目标未知的构建FAIL保留；单独审计CMake重新配置后第二次构建通过，没有下载依赖。
+- 链接依赖核对后缩小实际部署范围：只有UnreadProjector使用该读取器，因此仅更换UnreadProjector镜像；Gateway没有重建或更新。其他18个容器身份及私有配置SHA保持不变，旧镜像及精确回滚override保留。
+- `uq1k16a`，1k用户100msg/s60s，6000计划/发送/正ACK/真实wire/SQL确认，skip0、late0、负ACK0，心跳5122/5122、断连0、活跃99.9/s。正ACK P99=113.3ms、scheduled-to-ACK P99=116.6ms、最大211.797ms；两个P99门槛仍FAIL，不重标达标。
+- `unreadsingle-1k-projection-parity-20261004`：对所有1000用户的2000个私聊/总未读Redis键只读核对SQL，首次检查全部一致、缺键0、差异0；没有人工修复缓存。投影正确性PASS与容量P99 FAIL分开保存。
+
+### TEST-007：从私聊基线扩展到真实跨功能链
+
+- 新增显式persistent-TCP actor，限定四个经SELECT验证的既有合成账号。非相邻好友测试对必须没有任何既有关系/请求；通过正常公开协议创建/接受/拒绝请求，随后衔接私聊投递、幂等、历史、已读、会话列表、全部群管理及群消息真实ACK、文件会话与实际RPC上传/分段下载。
+- 新建测试群的解散和自己新上传会话的取消是明确审计的正常功能操作；不执行SQL写入、既有账号重置、任意文件/表行删除、缓存修复、服务重启或用户进程终止。文件流阶段只复用实际客户端prepare/resume，无服务重启，不冒充故障恢复测试。
+- 每次新目录记录审计、请求/响应序号、业务成功/明确负向权限检查、SQL权威状态、实际wire身份/内容、每操作样本延迟、未完成失败。单链每操作样本数有限，不作各功能容量P99达标结论。TLS/MCP/离线/故障/长稳态仍需要单独补齐。
+- 用户最新指示保留其他应用，在当前资源下测试；未暂停/结束Python或游戏。原一小时只读主机监控正常结束后，新审计监控于09:08UTC启动，PID24464，Hidden窗口，仅CIM读数。
