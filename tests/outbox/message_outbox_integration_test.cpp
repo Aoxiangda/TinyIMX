@@ -205,6 +205,8 @@ int main(int argc, char* argv[]) {
         "message.created.v1:" + std::to_string(created.message_id);
     Expect(EventCount(&pool, created_event_id) == 1,
            "Created commits exactly one message.created outbox row");
+    Expect(pool.AvailableCount() == pool.Size(),
+           "Created returns its single persistence lease");
     const std::string created_payload = EventPayload(&pool, created_event_id);
     Expect(!created_payload.empty(), "Created outbox payload readable");
     Expect(created_payload.find(created_content) == std::string::npos,
@@ -221,6 +223,8 @@ int main(int argc, char* argv[]) {
            "Same C reuses same M");
     Expect(EventCount(&pool, created_event_id) == 1,
            "Reused does not duplicate outbox event");
+    Expect(pool.AvailableCount() == pool.Size(),
+           "Precheck reuse returns its lease without opening a transaction");
 
     const auto conflict = adapter.PersistPrivateMessage(
         kUserA, kUserB, created_c, 1, created_content + "-conflict"
@@ -231,6 +235,8 @@ int main(int argc, char* argv[]) {
            "Same C with different identity conflicts");
     Expect(EventCount(&pool, created_event_id) == 1,
            "Conflict does not duplicate outbox event");
+    Expect(pool.AvailableCount() == pool.Size(),
+           "Precheck identity conflict returns its lease");
 
     // Deterministic UNIQUE-key race: all callers must miss precheck before any
     // caller is allowed to insert.
@@ -280,6 +286,8 @@ int main(int argc, char* argv[]) {
     Expect(created_count == 1, "Concurrent same C has exactly one Created");
     Expect(reused_count == kThreads - 1, "Concurrent same C reuses all other requests");
     Expect(common_id && common_message_id != 0, "Concurrent same C converges to one M");
+    Expect(pool.AvailableCount() == pool.Size(),
+           "Concurrent UNIQUE race releases every persistence and recovery lease");
     Expect(EventCount(
                &pool,
                "message.created.v1:" + std::to_string(common_message_id)

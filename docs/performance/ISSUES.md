@@ -456,3 +456,9 @@
 - 匹配AI profile的backend network及extra_hosts host-gateway，在现有55d镜像中创建自有UID1000只读/cap-drop/no-new-privileges探针；不挂载配置或凭据、关闭代理、只GET本地/api/tags，不调用模型。实际映射172.17.0.1，HTTP状态0、curl退出7，provider无法连接；主机Windows也没有11434监听。探针自然退出保留，19个生产容器身份未变。
 - 正式MCP static_user_id1不存在，AI endpoint/model实际应接哪一个服务仍缺用户配置信息；两项已请求澄清，后端工作继续。MCP真实正向业务、AI推理及各自P99不计PASS。TLS、离线/故障恢复及长稳态、所有功能的高样本混合负载仍有未覆盖项。
 - 当前读到558380已确认、46211Pending、10Read私聊行，没有清理历史pending来让测试变快。全局发现EXPLAIN使用原to/status/M覆盖索引及loose group-by scan，估计10270行/扫描；不能因看到600k总行数就伪称每次全表扫描。孤立status-leading索引、连接复用及其他优化须另作单变量审计/真实对照，拒绝直接重用已失败的两索引组合。
+
+### PERF-027：私聊正常持久化重复租借与Ping
+
+- 幂等precheck的public repository API租借/Ping/查询后释放；新消息随后重新租借/Ping，再执行原原子事务。现有FindPrivateMessageByClientMessageIdOnConnection使用相同10字段、LIMIT2和完整record校验，可在首次健康lease上查询并继续事务，消除正常Created路径一次重复pool准入/Ping。
+- 所有幂等查询、UNIQUE最终并发仲裁、INSERT后的身份核验、message/outbox原子COMMIT、强制失败ROLLBACK及不确定COMMIT恢复保留。已有显式Reset仍在恢复read前，避免pool1自锁。只在test hook存在时先释放、执行确定性race barrier、再租借，保持4并发/pool1测试语义；生产hook为空。
+- Trace字段名/采样限速不变，但Acquire现在先于Precheck并含首次lease/Ping，Precheck仅查询；不能将新旧Precheck数字直接当纯SQL优化比例。新增槽位归还断言；计划在自有全新隔离schema分别用pool1/pool4运行完整outbox原子性/并发/幂等/确认/已读测试，保留表/结果而非清理生产数据。构建、真实回归和性能尚NOT_RUN，当前运行仍55d/pool16。

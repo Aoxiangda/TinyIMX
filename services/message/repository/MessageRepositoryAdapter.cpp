@@ -245,10 +245,21 @@ MessageRepositoryAdapter::PersistPrivateMessage(
         }
     };
 
+    // Keep the healthy lease from precheck through the atomic write. A second
+    // acquisition/Ping adds a round trip and another pool admission without
+    // providing a stronger identity or durability check.
+    auto connection = trace.Measure(Phase::Acquire,[&]{return pool_->Acquire();});
+    if (!connection) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "transactional private message acquire failed";
+        return output;
+    }
+
     // Fast-path only. The UNIQUE(from_user_id, client_message_id) constraint
     // remains the final concurrent arbiter after a precheck miss.
     const auto existing = trace.Measure(Phase::Precheck,[&]{
-        return repository_->FindPrivateMessageByClientMessageId(from_user_id,client_message_id);
+        return repository_->FindPrivateMessageByClientMessageIdOnConnection(
+            connection.operator->(),from_user_id,client_message_id);
     });
 
     if (!existing.Succeeded()) {
@@ -262,14 +273,17 @@ MessageRepositoryAdapter::PersistPrivateMessage(
     }
 
     if (pre_insert_hook_for_test_) {
+        // The deterministic race hook may wait for more callers than pool
+        // slots. Preserve its original lease-free barrier behavior, including
+        // pool_size=1. Production has no hook and reuses the original lease.
+        connection.Reset();
         pre_insert_hook_for_test_();
-    }
-
-    auto connection = trace.Measure(Phase::Acquire,[&]{return pool_->Acquire();});
-    if (!connection) {
-        output.status = MessageApplicationStatus::kStorageError;
-        output.message = "transactional private message acquire failed";
-        return output;
+        connection = trace.Measure(Phase::Acquire,[&]{return pool_->Acquire();});
+        if (!connection) {
+            output.status = MessageApplicationStatus::kStorageError;
+            output.message = "transactional private message acquire failed after test hook";
+            return output;
+        }
     }
 
     if (!trace.Measure(Phase::Begin,[&]{return connection->BeginTransaction();})) {
