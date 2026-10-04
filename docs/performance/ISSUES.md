@@ -255,3 +255,10 @@
 - `hold10k16a` 10,000 用户全部实际登录 nginx TCP，统一在线屏障后保持 60s，总运行 180.85s（包含 100 用户/秒登录 ramp 和 drain）。心跳 81365/81365、断连 0，连接保持场景 PASS。
 - 本轮主动新消息发送数为 0，因此正 ACK P99 为 null。恢复期间观察到 204 条既有测试消息投递并发出真实接收 ACK；这不是专门故障恢复或消息吞吐验收。不能将 hold PASS 解释为 10k 私聊或群聊/文件/MCP/交叉流程 PASS，更不能外推到 50k。
 - 两个 Gateway 镜像 `43a68f…`、MessageService `05380ac…`，16 消息线程、恢复开启、原索引及临时 1GiB 缓存。19 个容器没有在本轮重建；原始账本、在线屏障、资源、结束心跳屏障与结果均保存。
+
+### PERF-007：同步日志与重量健康探针的资源开销对照
+
+- `runtime-warn-candidate-20261004/` 在零业务连接时保存四个配置的逐项审计、SHA 和私有原文备份，仅 logger.level INFO→WARN，重启原 ID 的 MessageService、SocialService 和两个 Gateway；镜像、环境和其他容器启动时间不变。WARN/error 和慢请求 phase 仍保留，未跳过业务操作。
+- `warn1k16a` 1k100msg/s60s，6000/6000 正 ACK、wire、SQL 已确认，负 ACK0，心跳5000/5000、断连0；P99 349.5ms、最大638.074ms、活跃99.9167/s，仍 FAIL。CPU20s聚合观察不是调用栈或可确定因果的 profile，不能据此宣称日志为唯一根因或永久降低日志级别。
+- ZooKeeper 现探针每5s执行 zkServer.sh status；该 Java CLI 与采样中的新 Java 进程一致性仍需隔离验证。只读验证 bash直接 srvr 返回 Mode: standalone，耗时约12ms，保持旧探针的 standalone/leader/follower 判据。新 override 为候选，不直接改全局默认、不关闭健康检查。
+- 计划：正/负健康查询、精确 healthcheck-only 漂移检查、零业务连接保护，保留 ZK image/env/volume、仅重建 ZK；验证所有原服务健康及注册恢复，再同1k负载复测。原 healthcheck 详细定义及 rollback override 在变更前保存；失败回滚，不删除卷或强杀。状态：轻量健康探针候选，未容量验收。
