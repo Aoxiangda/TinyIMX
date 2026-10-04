@@ -4,6 +4,7 @@
 #include <atomic>
 #include <thread>
 #include <vector>
+#include <type_traits>
 
 
 namespace tinyimx::test {
@@ -13,6 +14,36 @@ void
 RegisterReceiverDeliveryTrackerTests(
     TestRunner& runner
 ) {
+    runner.Add("ReceiverDeliveryTracker.RecoveryClockHasSeparateDeadlineDomain", []() {
+        static_assert(!std::is_same_v<ReceiverDeliveryTracker::Clock::time_point,
+                                     std::chrono::steady_clock::time_point>);
+        TINYIMX_EXPECT_TRUE(ReceiverDeliveryTracker::Clock::is_steady);
+        TINYIMX_EXPECT_TRUE(ReceiverDeliveryTracker::Clock::Uncertainty() <= std::chrono::milliseconds{10});
+    });
+    runner.Add("ReceiverDeliveryTracker.RecoveryClockSamplesDoNotGoBackwards", []() {
+        auto previous = ReceiverDeliveryTracker::Clock::now();
+        for (int i = 0; i < 10000; ++i) {
+            const auto current = ReceiverDeliveryTracker::Clock::now();
+            TINYIMX_EXPECT_TRUE(current >= previous);
+            previous = current;
+        }
+    });
+    runner.Add("ReceiverDeliveryTracker.RecoveryCooldownIncludesClockResolution", []() {
+        ReceiverDeliveryTracker::WindowOptions limits;
+        limits.recovery_resend_cooldown = std::chrono::milliseconds{1};
+        ReceiverDeliveryTracker tracker(10, limits);
+        const auto id = PrivateDeliveryIdentity(1, 10);
+        const auto now = ReceiverDeliveryTracker::Clock::time_point{};
+        TINYIMX_EXPECT_EQ(tracker.RegisterReplayAttempt(id, 1, 20, now).status,
+                          ReceiverDeliveryRegisterStatus::kRegistered);
+        const auto deadline = now + limits.recovery_resend_cooldown +
+                              ReceiverDeliveryTracker::Clock::Uncertainty();
+        TINYIMX_EXPECT_EQ(tracker.RegisterReplayAttempt(id, 2, 20, deadline - std::chrono::nanoseconds{1}).status,
+                          ReceiverDeliveryRegisterStatus::kWaitingAck);
+        TINYIMX_EXPECT_EQ(tracker.RegisterReplayAttempt(id, 2, 20, deadline).status,
+                          ReceiverDeliveryRegisterStatus::kRetryRegistered);
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(id, 1), ReceiverDeliveryAckStatus::kConfirmed);
+    });
     runner.Add("ReceiverDeliveryTracker.WindowCountBytesAndAckRelease", []() {
         ReceiverDeliveryTracker::WindowOptions limits;
         limits.max_waiting_entries = 3;

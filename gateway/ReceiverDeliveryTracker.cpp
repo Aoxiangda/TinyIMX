@@ -104,7 +104,9 @@ ReceiverDeliveryTracker::ReplayRegistration ReceiverDeliveryTracker::RegisterRep
     const auto it = entries_.find(identity);
     if (it != entries_.end() && it->second.state != State::kConfirmed) {
         auto& entry = it->second;
-        if (now < entry.last_attempt_at + window_options_.recovery_resend_cooldown) {
+        // Add one reported clock-resolution interval so a coarse timestamp
+        // cannot shorten the requested cooldown at a tick boundary.
+        if (now < entry.last_attempt_at + window_options_.recovery_resend_cooldown + Clock::Uncertainty()) {
             out.status = ReceiverDeliveryRegisterStatus::kWaitingAck;
             return out;
         }

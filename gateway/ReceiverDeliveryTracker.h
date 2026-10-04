@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gateway/DeliveryIdentity.h"
+#include "gateway/DeliveryRecoveryClock.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -54,7 +55,7 @@ struct ReceiverDeliverySnapshot {
 
 class ReceiverDeliveryTracker {
 public:
-    using Clock = std::chrono::steady_clock;
+    using Clock = DeliveryRecoveryClock;
     struct WindowOptions {
         std::size_t max_waiting_entries{200000};
         std::size_t max_waiting_per_recipient{64};
