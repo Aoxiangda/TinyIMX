@@ -929,6 +929,30 @@ void BusinessExecutor::DrainStripe(
          * Submit同Stripe也会被慢SQL阻塞。
          */
         ExecuteTask(task);
+
+        // A busy stripe must not keep its worker while other stripe drainers
+        // are already waiting in the pool. The completed task owns no more
+        // business work before handing this stripe's continuation to the tail.
+        {
+            std::lock_guard<std::mutex> lock(stripe.mutex);
+            if (stripe.queue.empty()) {
+                stripe.running = false;
+                return;
+            }
+        }
+
+        // Keep running=true throughout handoff: Submit must not create a
+        // second drainer. If the pool is closing/full or allocation fails,
+        // retain ownership and drain inline; accepted kMustRun work survives.
+        try {
+            if (pool_->TrySubmit([this, stripe_index]() {
+                    DrainStripe(stripe_index);
+                }) == TaskPushResult::kOk) {
+                return;
+            }
+        } catch (...) {
+            // Continue with the original drainer rather than lose its queue.
+        }
     }
 }
 

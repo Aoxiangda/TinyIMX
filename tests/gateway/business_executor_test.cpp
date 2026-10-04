@@ -939,6 +939,65 @@ bool TestDrainRejectsNewAdmission() {
     return true;
 }
 
+bool TestStripeContinuationDoesNotStarveQueuedStripe() {
+    BusinessExecutorOptions options;
+    options.worker_threads = 1;
+    options.max_pending_tasks = 16;
+    options.stripe_count = 2;
+    options.per_stripe_queue_capacity = 8;
+    options.default_deadline = 3s;
+    options.shutdown_timeout = 3s;
+    BusinessExecutor executor(options);
+    if (!executor.Start()) return false;
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool first_entered = false, release = false, cold_completed = false;
+    std::vector<int> order;
+    auto submit = [&](int value, tinyimx::BusinessOrderingKey key) {
+        BusinessExecutor::TaskSpec task;
+        task.request.operation = "test.stripe_fair_handoff";
+        task.request.ordering_key = key;
+        task.cancellation_policy = BusinessCancellationPolicy::kMustRun;
+        task.work = [&, value](const BusinessExecutor::ExecutionContext&) {
+            std::unique_lock<std::mutex> lock(mutex);
+            order.push_back(value);
+            if (value == 1) {
+                first_entered = true;
+                cv.notify_all();
+                cv.wait_for(lock, 2s, [&] { return release; });
+            }
+            if (value == 0) {
+                cold_completed = true;
+                cv.notify_all();
+            }
+            return BusinessExecutor::Completion{};
+        };
+        return executor.Submit(std::move(task)) == BusinessSubmitStatus::kAccepted;
+    };
+    bool accepted = submit(1, 1);
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        accepted = cv.wait_for(lock, 2s, [&] { return first_entered; }) && accepted;
+    }
+    for (int value = 2; value <= 5; ++value) accepted = submit(value, 1) && accepted;
+    accepted = submit(0, 2) && accepted;
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        release = true;
+        cv.notify_all();
+        accepted = cv.wait_for(lock, 2s, [&] { return cold_completed; }) && accepted;
+    }
+    // Wait for the queued cold stripe while the pool is running, then also
+    // verify graceful close drains any remaining hot work exactly once.
+    const bool drained = executor.ShutdownGraceful();
+    const auto stats = executor.GetStats();
+    const bool passed = accepted && drained && order == std::vector<int>({1, 0, 2, 3, 4, 5}) &&
+        stats.accepted_total == 6 && stats.completed_total == 6 && stats.current_pending_tasks == 0;
+    if (!passed) std::cerr << "[FAIL] stripe continuation monopolized worker or lost FIFO work\n";
+    return passed;
+}
+
 bool TestSameKeyOrdered() {
     BusinessExecutorOptions options;
 
@@ -1806,6 +1865,10 @@ int main() {
         {
             "BusinessExecutor.SameKeyOrdered",
             &TestSameKeyOrdered
+        },
+        {
+            "BusinessExecutor.StripeContinuationDoesNotStarveQueuedStripe",
+            &TestStripeContinuationDoesNotStarveQueuedStripe
         },
         {
             "BusinessExecutor.DifferentKeysParallel",
