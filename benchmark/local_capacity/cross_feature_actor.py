@@ -18,6 +18,7 @@ import struct
 import subprocess
 import time
 import traceback
+from capacity_run import container_identity
 
 ROOT = pathlib.Path('/home/jackson7/projects/TinyIMX_publish')
 HEADER = struct.Struct('!IHHHHII')
@@ -48,6 +49,7 @@ class Actor:
                             {'username': f'm21b500000_{uid-500000:06d}',
                              'password': os.environ.get('TINYIMX_BENCH_PASSWORD', '123456')})
         assert reply.get('user_id') == uid, 'Login identity mismatch'
+        self.hb_sent.add(self.send(9001, {}))
 
     def send(self, kind, body, seq=None):
         self.seq += 1
@@ -291,7 +293,7 @@ class Run:
         while any(x.hb_sent != x.hb_ack for x in self.clients):
             assert time.monotonic()<deadline, 'Heartbeat drain timeout'
             self.pump(.02, heartbeats=False)
-        self.check('all-actor-heartbeats-acknowledged', all(x.hb_sent == x.hb_ack for x in self.clients))
+        self.check('all-actor-heartbeats-acknowledged', all(x.hb_sent and x.hb_sent == x.hb_ack for x in self.clients))
 
 
 def main():
@@ -325,6 +327,7 @@ def main():
         (out/'fixture-before.tsv').write_text(rows)
         audit = {'utc': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'source_commit': command(['git','rev-parse','HEAD']).strip(),
                  'script_sha256': hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(), 'args': vars(args),
+                 'runtime':container_identity(),
                  'scope': 'Four verified synthetic actors only, distinct from background load range',
                  'writes': ['New evidence files', 'Normal public friend/private/read/group/file operations', 'Owned group disband and own upload cancellation as explicit normal feature tests', 'Existing real file RPC test uploads new owned object and downloads it'],
                  'system_changes': [], 'SQL_writes': False, 'existing_credential_or_relation_resets': False,

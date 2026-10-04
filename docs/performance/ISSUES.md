@@ -329,3 +329,10 @@
 - `contracts4` 在10k背景测试已经结束后的独立四用户链完成47操作。全部群管理操作、UTC禁言与负向无持久化、解禁后的3份真实wire及SQL delivery_status=3、消息幂等、成员离开/重邀/踢出、群主转移和解散均通过；文件创建/幂等/本人的会话读取通过。
 - 他人查询真实上传ID返回file_upload_not_found，首版断言误期望file_permission_denied，整轮FAIL保留。源码owner-scoped查询隐藏其他所有者的会话；修正精确notfound，并检查不泄漏file/session字段，随后本人仍可取消及复用取消结果。不能因为否定响应而掩盖timeout/unavailable错误。
 - `uq10k16a`完整300s基线：30000计划/发送/正ACK/wire/SQL已确认，负ACK/skip/late/断连均0；心跳243988/243988，活跃99.9567/s，ACK P99=292.0ms，scheduled-to-ACK294.6ms，两个延迟门槛FAIL。最初17操作链FAIL与后续链各自保存；原联合报告不修改为PASS。
+
+### TEST-011：真实完整功能链通过与容量账户边界
+
+- `contracts5` 独立四用户链49次公开操作PASS；好友到私聊/历史/已读/会话、全部群管理与三接收者SQL3/真实wire/ACK、文件开始/会话/他人隐藏/取消及幂等、真实RPC上传/Finalize/分段下载续传和逐字节一致均通过。28类request外还有私聊/群deliveryACK；TLS/MCP/离线/故障/长稳态及各功能P99容量仍NOT_RUN，不能把独立链称为10k全功能达标。
+- 本次链短于首个5s心跳周期，原报告0/0的心跳比较是空断言；不改写原报告。后续actor强制每人发送一个真实ping，并要求nonzero+全部返回，还补记实际容器镜像/启动身份。10k基线的243988真实心跳不受这一测试缺陷影响。
+- 旧coordinator硬编码500000/m21b500000_而旧fixture只有20k；unused的capacity-owned-range初稿审计没有应用，后续版本重新绑定当前HEAD。新增显式base/prefix并统一SQL/worker；预检失败有独立FAIL记录，重复run不覆盖原结果。
+- 新seed工具默认SELECT-only，准备验证700001..750000及codex50k_20261004_名称范围为空，再strictINSERT50k新合成账号/100k互为好友ring，<=1000行/事务；绝不重置旧账号密码/status/关系，私有batch完整保留，部分失败不自动删数据。自动递增可能升高而被审计保留，不能调低。状态：fixture仍未创建，真实50k认证/性能待测。

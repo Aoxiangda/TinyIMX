@@ -45,11 +45,17 @@ def run(a):
     os.chdir(ROOT)
     os.umask(0o077)
     assert re.fullmatch(r'[a-zA-Z0-9-]{1,20}', a.run)
-    assert 1 <= a.users <= 50000 and 0 < a.rate <= 10000 and 1 <= a.duration <= 7200
+    assert 2 <= a.users <= 50000 and 0 < a.rate <= 10000 and 1 <= a.duration <= 7200
+    assert 100000 <= a.user_id_base <= 1000000000000
+    assert re.fullmatch(r'[a-zA-Z0-9_-]{1,40}', a.username_prefix)
     assert re.fullmatch(r'sha256:[0-9a-f]{64}', a.gateway_image)
     stage = ROOT / '.local/codex' / ('capacity-' + a.run)
     assert not stage.exists(), 'Keep all prior runs immutable'
     stage.mkdir()
+    save(stage/'preflight-audit-before.json', {'utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+         'operation':'Readonly owned identity/runtime preflight and task-process-only descriptor limit',
+         'scenario':vars(a), 'writes':'Fresh evidence directory only before detailed fixture audit',
+         'rollback':'No system or business mutation during preflight; retain failure evidence'})
     control = stage / 'control'; control.mkdir()
     binary = ROOT / 'build/linux-release/tinyimx_capacity_worker'
     identity = container_identity()
@@ -59,10 +65,11 @@ def run(a):
         assert c['image'] == expected and c['health'] == 'healthy', 'Candidate runtime identity'
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     resource.setrlimit(resource.RLIMIT_NOFILE, (min(hard, max(soft, 20000)), hard))
-    total = int(sql(f"SELECT COUNT(*) FROM im_users WHERE user_id BETWEEN 500001 AND {500000+a.users} AND username=CONCAT('m21b500000_',LPAD(user_id-500000,6,'0')) AND status=1;"))
+    base=a.user_id_base
+    total = int(sql(f"SELECT COUNT(*) FROM im_users WHERE user_id BETWEEN {base+1} AND {base+a.users} AND username=CONCAT('{a.username_prefix}',LPAD(user_id-{base},6,'0')) AND status=1;"))
     assert total == a.users, 'Existing owned fixture range incomplete; do not reset credentials'
     # Only missing ring edges between known synthetic users may be inserted.
-    rows = sql(f"SELECT u.user_id, 500001+MOD(u.user_id-500000,{a.users}), IFNULL(r.relation_status,0) FROM im_users u LEFT JOIN im_user_relations r ON r.user_id=u.user_id AND r.peer_user_id=500001+MOD(u.user_id-500000,{a.users}) WHERE u.user_id BETWEEN 500001 AND {500000+a.users};")
+    rows = sql(f"SELECT u.user_id, {base+1}+MOD(u.user_id-{base},{a.users}), IFNULL(r.relation_status,0) FROM im_users u LEFT JOIN im_user_relations r ON r.user_id=u.user_id AND r.peer_user_id={base+1}+MOD(u.user_id-{base},{a.users}) WHERE u.user_id BETWEEN {base+1} AND {base+a.users};")
     relations = [tuple(map(int, x.split('\t'))) for x in rows.splitlines()]
     assert len(relations) == a.users and all(s in (0,1) for u,v,s in relations), 'Refuse override blocked/unknown relations'
     missing = [(u,v) for u,v,s in relations if s == 0 and u != v]
@@ -110,6 +117,7 @@ def run(a):
             log=(d/'worker.log').open('w');logs.append(log)
             argv=[str(binary),'--out',str(d),'--control',str(control),'--run-id',a.run,
                   '--connections',str(n),'--total-users',str(a.users),'--offset',str(i*10000),
+                  '--user-id-base',str(base),'--username-prefix',a.username_prefix,
                   '--worker-id',str(i),'--source-ip','127.0.0.'+str(i+2),'--host','127.0.0.1','--port','9000',
                   '--rate',str(a.rate*n/a.users),'--ramp-per-sec',str(100/count),
                   '--duration',str(a.duration),'--drain-seconds','15','--verify-timeout','120',
@@ -199,4 +207,19 @@ if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--run',required=True);p.add_argument('--users',type=int,required=True)
     p.add_argument('--rate',type=float,default=100);p.add_argument('--duration',type=int,default=300)
     p.add_argument('--mode',choices=['private','hold'],default='private')
-    p.add_argument('--gateway-image',default=IMAGE);raise SystemExit(run(p.parse_args()))
+    p.add_argument('--user-id-base',type=int,default=500000)
+    p.add_argument('--username-prefix',default='m21b500000_')
+    p.add_argument('--gateway-image',default=IMAGE)
+    a=p.parse_args()
+    # A duplicate run is rejected before error handling can touch its evidence.
+    assert re.fullmatch(r'[a-zA-Z0-9-]{1,20}',a.run)
+    stage=ROOT/'.local/codex'/('capacity-'+a.run)
+    assert not stage.exists(),'Keep every prior run immutable'
+    try:
+        raise SystemExit(run(a))
+    except Exception as e:
+        if stage.exists() and not (stage/'failure.json').exists():
+            save(stage/'failure.json',{'status':'FAIL','phase':'preflight','type':type(e).__name__,'error':str(e)})
+            if not (stage/'summary.json').exists():
+                save(stage/'summary.json',{'status':'FAIL','phase':'preflight','scenario':vars(a),'error':str(e),'coverage':'No capacity acceptance; preflight failed before worker measurement'})
+        raise
