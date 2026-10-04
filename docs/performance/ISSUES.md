@@ -567,3 +567,13 @@
 - 已恢复原User38dca/ae1b6f、原环境键值/command/health，移除诊断flag；其他18及全部配置SHA保持。首次回滚验证使用ENV数组顺序，实际值全相同但排列不同，产生AssertionError；失败stage/log原样保留，新只读review按无重复key的映射逐值核验PASS，无再次重建。未来环境核验比较键值，不以列表顺序作为语义。
 - 旧loginreview又给已ceil100us桶加一次step，P50/P95/P99偏高0.1ms；原raw/旧review保留，新分析准确上界sw92.1/mp89.7/io失败子集2627.5/auth86.5。镜像辅助脚本生成时相关旧MySQL gate替换失败，守卫阻止写脚本/构建/部署，另存本地failure审计后以User36实际回归门禁创建正确helper。自动权限审核曾超时未执行归档准备；一次重试成功，没有安全拒绝或项目修改。
 - 15路径文档及实际历史helper保存Git；v14将同时保留原26308源码记录、登录abort、36回归、诊断/完整hold/成对样本、回滚失败及独立复核，不覆盖v1-v13。当前所有功能10k-50k极致性能尚未实现，SQLgroupcommit仍0；下一步只采集原版尚未取得的有效存储窗口计数。
+
+### PERF-042：提交同步与 CPU 压力的实际窗口证据
+
+- io150base2完整10k/150每秒60s，9000计划/发送/正ACK/wire/SQL确认，HB82296/82296，无负ACK/skip/late/断连；ACK P99为188.0ms、scheduled190.7ms、max438.252ms，仍FAIL。相比较早168.2ms基线，单次共享主机变化不解释为代码回归；本轮只读计数，原19服务/配置/参数/索引保持。
+- 两次真实计数快照相隔58.3998s，耗865.949/1138.598ms。确认UPDATE8827次均9.3398ms；COMMIT9401次均7.5416ms。redo fsync精确13018、约222.912/s；binlogfileMISC12317、约210.908/s、均1.8746ms；redofileMISC均1.8955ms。MISC不全是fsync，累计MAX不是本窗口分位，重叠SUM等待不能相加当单请求延迟。
+- guest busy85.297%，system30.290%/softirq9.700%，上下文切换约38061/s，整个guestfork/thread约315.241/s；CPU PSI增量stall63.328%，IOsome2.084%/full1.023%、memorysome0.0041%。CPU PSI不是利用率，steal0不排除VM/主机调度；全guestfork不能直接归给MessageService。提交/确认同步与CPU/调度均值得验证，数据不支持单因果结论。pendingrecipientdiscovery153次均11.416ms/检查228586行，属于恢复成本，仍保留责任；不擅自删查询或清历史。
+- v14SHAefe242c22d61b3dc90f333444a114bbf7047afa26a5d4f3bfe016d63ae00f4b1，109文件本机SHA全PASS。认证窗口主机27点均CPU50.56%/max71%，vmware单核100口径均591.30%；CIMmax704.851ms，观察成本明确。初次Windows汇总0匹配是ConvertFromJson日期转型后重复解析丢时区导致的工具错误，原review保留，新Python读取原始带时区ISO字符串PASS，不伪造或用窗口后快照解释旧FAIL。
+- 下一单变量候选暂时SET GLOBAL binlog_group_commit_sync_delay=1000微秒，保持innodb_flush_log_at_trx_commit=1、sync_binlog=1、log_bin=1/no_delay_count0。根据[官方8.0说明](https://dev.mysql.com/doc/mysql-replication-excerpt/8.0/en/replication-options-binary-log.html)，合并可能减少fsync，也会加等待或竞争，需实测而非承诺。严格10k、150条消息/s、60s窗口、100用户/s爬坡、3s原期限和所有SQL/wire/HB门槛不变。只改变精确本项目MySQL容器内动态值，其他配置文件、容器、索引、C++均不改。
+- finally恢复0并验证五值/持久化变量/19IDs/config；客户端清理异常也不会跳过恢复。INT/TERM/HUP处理、360s自有协调器上限、独立450s恢复看护；看护仅同CID/精确本候选值时改回0，拒绝未知参数，不覆盖外部新变更。看护仅在主路径已核验恢复后取消；全部raw/参数/源码/异常/回滚记录保留。没有SET PERSIST、清理业务数据、关闭用户应用、VM设置或数据库重启。
+- 11路径白名单before/风险/恢复已审计，Python/看护AST及bash/PS语法检查；先将已执行窗口工具与待执行候选保存Git。此时参数变更/候选负载NOT_RUN，v15只归档已完成原窗口和源码记录；所有功能10k-50k极致性能尚未接受。

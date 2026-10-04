@@ -1,5 +1,11 @@
 # 先分析、再修正、最后验证：性能根因复盘（2026-10-05）
 
+最新存储窗口补充：原User恢复后，io150base2完整10k认证、9000计划/发送/正ACK/wire/SQL确认全部一致，HB82296完整、无skip/late/断连，P99188.0ms、scheduled190.7ms/max438.252ms，严格延迟FAIL保留。成功取得58.3998s有效窗口file/status/digest/procstat/pressure增量；两次快照耗865.949/1138.598ms，数字有观察开销和非同步读取边界，不是未干扰的性能接受。确认UPDATE8827次均9.3398ms、COMMIT9401次均7.5416ms，精确redo fsync13018/约222.912每秒，binlogfileMISC12317/约210.908每秒、均1.8746ms（MISC不是纯fsync，累计MAX不是窗口P99）。guest CPU busy85.297%，其中system30.290%、softirq9.700%，context-switch约38061/s、全guestfork/thread约315.241/s；CPU PSI增量63.328%，IOsome2.084%、memorysome0.0041%。提交同步成本与调度压力都存在，不能称fsync或RPC线程为唯一根因。源码/运行参数未改变。
+
+v14归档SHAefe242c22d61b3dc90f333444a114bbf7047afa26a5d4f3bfe016d63ae00f4b1，本机109文件逐个SHA验证；认证主机窗口另存27点CPU均50.56%/max71%、vmware单核100口径均591.30%，CIMmax704.851ms。原PowerShell JSON日期自动转型后再次字符串解析导致0匹配，原无效review保留，Python按原始有时区ISO字符串纠正，不能把这些成功窗口数据归给较早的登录abort。
+
+下一候选先保存Git/审计，只暂时SET GLOBAL binlog_group_commit_sync_delay=1000微秒，保持flush=1/sync_binlog=1/binlogON/no_delay_count0。MySQL官方8.0说明该设置可能减少同步调用，也可能增加延迟/竞争；因此需要同一原版10k150/s窗口验证文件/提交/确认成本与真实ACK分布，而不是假定改善。候选finally精确恢复0，清理异常仍恢复；处理INT/TERM/HUP，仅停止本任务创建的客户端组，独立450s看护只在同MySQLID且状态仍为本候选时恢复，拒绝未知外部更改。无SET PERSIST/config/重启/主机或VM变更；全19容器和配置/索引保持。此阶段候选尚未执行，v15保存完整原版I/O及待执行源码工具；所有功能10k-50k极致性能未实现。
+
 最新完成补充：374f280认证诊断通过36检查（计时16、User应用6、真实gRPC关7/开7），User-only1ff078镜像仅增加一个诊断开关，其他18/config保持。auth10kdiag在原100用户/s爬坡和3s期限下10000全部登录，hold30s/61440心跳全部响应，登录完整总体P9986.5ms、均35.3858ms，无断连。402同uid/TID/时间包含的成对样本：仓储wall20.3534ms/CPU13.7974ms，查库2.1142/0.4974ms，密码18.0865/13.2046ms；handlerwall20.6654/CPU13.9881，额外wall0.312/CPU0.191ms。采样为uid%16且日志限速，以上不能当总体P99或与全客户端均值相减测transport。本轮没有复现原秒级认证失败，也没有证实诊断代码改善性能；原失败保持未解释的瞬时排队问题，未删改或放宽门槛。
 
 诊断User已恢复原38dca镜像和ae1b6f二进制，原环境键和值完全一致、诊断开关移除，其他18/所有配置保持。回滚脚本按ENV数组顺序比较而误报AssertionError，独立只读post-review确认仅排列不同，没有再次重启。资源31点cgroupCPU有效，20个完整爬坡间隔User均1.5932核、GWs各0.4902/0.4899核，guest平均busy82.5%、memory最低8494776KiB，未观测服务自身throttle；maxcapture17.431ms。原线程计数来自Docker initPID，仅适用于init，不能作为业务线程数；另存复核确认当前实际child31/57/57线程（这是回滚后快照，不代表此前诊断窗口）。实际认证SYS_gettid402样本326不同TID可用，但不据此盲目再次加poller。完整直方图桶已向上取整，旧复核多加0.1ms；保留旧复核并另存准确值：sw92.1、mp89.7、io失败子集2627.5ms。v14待导出，以上所有阶段/失败/工具源版本均保存。下一步恢复原运行版本后采集尚未成功取得的存储窗口增量，groupcommit保持0。
