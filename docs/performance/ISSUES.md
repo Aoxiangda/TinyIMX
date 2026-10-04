@@ -462,3 +462,15 @@
 - 幂等precheck的public repository API租借/Ping/查询后释放；新消息随后重新租借/Ping，再执行原原子事务。现有FindPrivateMessageByClientMessageIdOnConnection使用相同10字段、LIMIT2和完整record校验，可在首次健康lease上查询并继续事务，消除正常Created路径一次重复pool准入/Ping。
 - 所有幂等查询、UNIQUE最终并发仲裁、INSERT后的身份核验、message/outbox原子COMMIT、强制失败ROLLBACK及不确定COMMIT恢复保留。已有显式Reset仍在恢复read前，避免pool1自锁。只在test hook存在时先释放、执行确定性race barrier、再租借，保持4并发/pool1测试语义；生产hook为空。
 - Trace字段名/采样限速不变，但Acquire现在先于Precheck并含首次lease/Ping，Precheck仅查询；不能将新旧Precheck数字直接当纯SQL优化比例。新增槽位归还断言；计划在自有全新隔离schema分别用pool1/pool4运行完整outbox原子性/并发/幂等/确认/已读测试，保留表/结果而非清理生产数据。构建、真实回归和性能尚NOT_RUN，当前运行仍55d/pool16。
+
+### PERF-028：连接复用实测与独立待投递索引实验
+
+- ddc7e8e连接复用候选169检查PASS，真实独立MySQL pool1/pool4保持唯一消息、outbox原子性、幂等及槽位归还。封装b24镜像，仅MessageService部署，pool16及其他18实例/配置保留。slease1k1：6000正ACK/SQL/wire、HB5208/5208、P9968.0/scheduled73.8ms，PASS；slease10k1：6000正ACK、HB82143/82143、P99142.5/scheduled145.1ms，FAIL，同窗口49功能操作PASS。旧55d/pool1610k140.0/143.0ms没有可归因改善证明。
+- 新013实验仅增加idx_im_private_messages_pending_recipient(delivery_status,to_user_id)，不能重新部署被拒绝的012两索引组合。原五个索引保持，所有历史Pending和业务数据保持；DDL前检查精确索引定义、资源和无自有负载，在线INPLACE/NONE、session metadata lock5s。五cursor快照强制old/new结果一致、查询计划和随机old/new SQL时间后，再运行固定b24/pool16/GW7f对照。此时capacity仍NOT_RUN，不把查询变快当业务PASS。
+- 详细分析见BOTTLENECK_ANALYSIS_20261004.md：CPU爬坡、RPC/内部持久化差距、ACK前串行权限和幂等未读投影、COMMIT/共享池、历史待投递发现及心跳流量；慢样本和不同总体不能拼接成P99，必须同消息关联和逐级吞吐曲线。
+
+### FUNC-029：实际Ollama位置与MCP分页声明不一致
+
+- 真实guest Ollama服务active，127.0.0.1:11434监听，仅qwen2.5:7b。原AI host.docker.internal/qwen3:8b不匹配；未改变绑定或下载模型，实际推理尚未运行。正式MCP principal1不存在的问题仍待身份配置处理。
+- 隔离MCP测试保留全部失败：首次只读脚本模块命名冲突；第二次logger.file为空被项目配置拒绝，已通过正常API创建群26并保留；第三次工具假定User/Social端口颠倒；第四次使用运行命令提取真实端口后profile/friends通过，但page100会话返回HTTP200/isError=true/invalid_argument。源码MCP schema最大100，而MessageRpcClient history/conversations最大50，这是真实产品契约缺陷，尚未修复。
+- 第五次page50正向对照八业务工具及两个鉴权/schema负例PASS，主体519870、peer519872、group26、AVAILABLEfile16的1835041字节/已校验SHA身份一致。原19实例和配置保持。不能把page50PASS掩盖page100FAIL，也不能称AI或MCP性能达标；测试完成后只停止exact own MCP容器，证据/配置/群/文件和其他应用保留。
