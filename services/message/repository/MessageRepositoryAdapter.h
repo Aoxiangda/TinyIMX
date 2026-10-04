@@ -101,6 +101,11 @@ public:
         std::uint64_t message_id,
         std::uint64_t recipient_user_id
     ) override;
+    [[nodiscard]] MessageRepositoryGetResult FindPrivateMessageByClientMessageId(
+        std::uint64_t from_user_id,
+        const std::string& client_message_id
+    ) override;
+
     [[nodiscard]] MessageRepositoryGetResult GetPrivateMessage(
         std::uint64_t message_id
     ) override;

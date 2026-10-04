@@ -261,6 +261,20 @@ struct GetPrivateMessageRpcRequest {
     std::uint64_t message_id{0};
 };
 
+enum class ResolvePrivateMessageRpcOutcome {
+    kNotObserved = 0,
+    kMatchedDurable,
+    kIdempotencyConflict,
+};
+
+using ResolvePrivateMessageRpcRequest = PersistPrivateMessageRpcRequest;
+
+struct ResolvePrivateMessageRpcResponse {
+    ResolvePrivateMessageRpcOutcome outcome{ResolvePrivateMessageRpcOutcome::kNotObserved};
+    std::optional<MessageRpcRecord> record;
+    std::string message;
+};
+
 struct GetPrivateMessageRpcResponse {
     MessageRpcRecord record;
 };

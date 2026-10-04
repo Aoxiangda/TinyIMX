@@ -642,6 +642,96 @@ MessageMutationRpcCallResult MessageRpcClient::ConfirmGroupMessageDelivery(
     tinyimx::message::v1::MessageMutationResponse out; grpc::ClientContext context; context.set_deadline(std::chrono::system_clock::now()+options.remaining_timeout); const auto status=stub->ConfirmGroupMessageDelivery(&context,in,&out); if(!status.ok()){const auto mapped=MapGrpcStatus(status); return MessageMutationRpcCallResult::Failure(mapped.code,mapped.message,true);} MessageMutationRpcResponse response; response.affected_rows=out.affected_rows(); return MessageMutationRpcCallResult::Success(std::move(response));
 }
 
+RpcResult<ResolvePrivateMessageRpcResponse>
+MessageRpcClient::ResolvePrivateMessage(
+    const ResolvePrivateMessageRpcRequest& request,
+    const RpcCallOptions& options
+) const {
+    using Result = RpcResult<ResolvePrivateMessageRpcResponse>;
+    if (request.from_user_id == 0 || request.to_user_id == 0 ||
+        request.from_user_id == request.to_user_id || request.client_message_id.empty() ||
+        request.client_message_id.size() > 64 || request.message_type < 1 ||
+        request.message_type > 3 || request.content.empty()) {
+        return Result::Failure(RpcErrorCode::kInvalidArgument,
+                               "invalid ResolvePrivateMessage request");
+    }
+    if (options.remaining_timeout <= std::chrono::milliseconds::zero()) {
+        return Result::Failure(RpcErrorCode::kDeadlineExceeded,
+                               "ResolvePrivateMessage remaining budget is exhausted");
+    }
+    // Capture the deadline before discovery/encoding rather than resetting
+    // the remaining request budget immediately before the network call.
+    const auto deadline = std::chrono::system_clock::now() + options.remaining_timeout;
+    const auto steady_deadline = std::chrono::steady_clock::now() + options.remaining_timeout;
+    if (!endpoint_provider_) {
+        return Result::Failure(RpcErrorCode::kUnavailable,
+                               "MessageService endpoint provider is not configured");
+    }
+    const auto endpoint = endpoint_provider_->Resolve(ServiceKind::kMessage);
+    if (!endpoint || endpoint->target.empty()) {
+        return Result::Failure(RpcErrorCode::kUnavailable,
+                               "MessageService endpoint is unavailable");
+    }
+    auto stub = GetOrCreateStub(*endpoint);
+    if (!stub) {
+        return Result::Failure(RpcErrorCode::kUnavailable,
+                               "MessageService gRPC stub could not be created");
+    }
+    tinyimx::message::v1::ResolvePrivateMessageRequest proto_request;
+    FillMeta(options, proto_request.mutable_meta());
+    proto_request.set_from_user_id(request.from_user_id);
+    proto_request.set_to_user_id(request.to_user_id);
+    proto_request.set_client_message_id(request.client_message_id);
+    proto_request.set_message_type(request.message_type);
+    proto_request.set_content(request.content);
+    if (std::chrono::steady_clock::now() >= steady_deadline) {
+        return Result::Failure(RpcErrorCode::kDeadlineExceeded,
+                               "ResolvePrivateMessage budget exhausted before RPC");
+    }
+    tinyimx::message::v1::ResolvePrivateMessageResponse proto_response;
+    grpc::ClientContext context;
+    context.set_deadline(deadline);
+    const auto status = stub->ResolvePrivateMessage(&context, proto_request, &proto_response);
+    if (!status.ok()) {
+        const auto mapped = MapGrpcStatus(status);
+        return Result::Failure(mapped.code, mapped.message);
+    }
+    ResolvePrivateMessageRpcResponse output;
+    output.message = proto_response.message();
+    using namespace tinyimx::message::v1;
+    switch (proto_response.result()) {
+        case RESOLVE_PRIVATE_MESSAGE_RESULT_NOT_OBSERVED:
+            output.outcome = ResolvePrivateMessageRpcOutcome::kNotObserved;
+            break;
+        case RESOLVE_PRIVATE_MESSAGE_RESULT_IDEMPOTENCY_CONFLICT:
+            output.outcome = ResolvePrivateMessageRpcOutcome::kIdempotencyConflict;
+            break;
+        case RESOLVE_PRIVATE_MESSAGE_RESULT_MATCHED_DURABLE: {
+            const auto record = ToRpcRecord(proto_response.record());
+            if (!proto_response.has_record() || !record || record->message_id == 0 ||
+                record->from_user_id != request.from_user_id ||
+                record->to_user_id != request.to_user_id ||
+                record->client_message_id != request.client_message_id ||
+                record->message_type != request.message_type || record->content != request.content) {
+                return Result::Failure(RpcErrorCode::kDataLoss,
+                                       "invalid resolved private message identity");
+            }
+            output.outcome = ResolvePrivateMessageRpcOutcome::kMatchedDurable;
+            output.record = std::move(*record);
+            return Result::Success(std::move(output));
+        }
+        case RESOLVE_PRIVATE_MESSAGE_RESULT_UNSPECIFIED:
+        default:
+            return Result::Failure(RpcErrorCode::kDataLoss,
+                                   "invalid private message resolution outcome");
+    }
+    if (proto_response.has_record()) {
+        return Result::Failure(RpcErrorCode::kDataLoss,
+                               "unexpected private message resolution record");
+    }
+    return Result::Success(std::move(output));
+}
+
 RpcResult<GetPrivateMessageRpcResponse>
 MessageRpcClient::GetPrivateMessage(
     const GetPrivateMessageRpcRequest& request,

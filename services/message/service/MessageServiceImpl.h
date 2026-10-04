@@ -58,6 +58,12 @@ public:
         tinyimx::message::v1::MessageMutationResponse*
     ) override;
 
+    grpc::Status ResolvePrivateMessage(
+        grpc::ServerContext* context,
+        const tinyimx::message::v1::ResolvePrivateMessageRequest* request,
+        tinyimx::message::v1::ResolvePrivateMessageResponse* response
+    ) override;
+
     grpc::Status GetPrivateMessage(
         grpc::ServerContext* context,
         const tinyimx::message::v1::GetPrivateMessageRequest* request,

@@ -10,6 +10,7 @@
 #include "services/rpc/StaticServiceEndpointProvider.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -25,6 +26,27 @@ namespace {
 class FakeMessageRepositoryPort final
     : public tinyimx::message::MessageRepositoryPort {
 public:
+    tinyimx::message::MessageRepositoryGetResult FindPrivateMessageByClientMessageId(
+        std::uint64_t sender, const std::string& cid
+    ) override {
+        ++resolve_calls;
+        tinyimx::message::MessageRepositoryGetResult result;
+        result.status = resolve_status;
+        if (!result.Succeeded()) return result;
+        for (const auto& [id, row] : messages) {
+            (void)id;
+            if (row.from_user_id == sender && row.client_message_id == cid) {
+                result.found = true;
+                result.record = row;
+                break;
+            }
+        }
+        return result;
+    }
+
+    std::size_t resolve_calls{0};
+    tinyimx::message::MessageApplicationStatus resolve_status{
+        tinyimx::message::MessageApplicationStatus::kSucceeded};
     tinyimx::message::MessageRepositoryPersistResult PersistPrivateMessage(
         std::uint64_t from_user_id,
         std::uint64_t to_user_id,
@@ -463,9 +485,89 @@ void Expect(bool condition, const char* name) {
     std::cerr << "[FAIL] " << name << '\n';
 }
 
+class ResolveResponseFixture final : public tinyimx::message::v1::MessageService::Service {
+public:
+    std::atomic<int> mode{0};
+    grpc::Status ResolvePrivateMessage(
+        grpc::ServerContext*,
+        const tinyimx::message::v1::ResolvePrivateMessageRequest* request,
+        tinyimx::message::v1::ResolvePrivateMessageResponse* response
+    ) override {
+        using namespace tinyimx::message::v1;
+        const int behavior = mode.load();
+        if (behavior == 13) return {grpc::StatusCode::UNIMPLEMENTED, "legacy service"};
+        response->set_result(RESOLVE_PRIVATE_MESSAGE_RESULT_MATCHED_DURABLE);
+        auto* record = response->mutable_record();
+        record->set_message_id(77);
+        record->set_from_user_id(request->from_user_id());
+        record->set_to_user_id(request->to_user_id());
+        record->set_client_message_id(request->client_message_id());
+        record->set_message_type(request->message_type());
+        record->set_content(request->content());
+        record->set_delivery_state(MESSAGE_DELIVERY_STATE_PENDING);
+        if (behavior == 1) response->set_result(RESOLVE_PRIVATE_MESSAGE_RESULT_UNSPECIFIED);
+        if (behavior == 2) response->clear_record();
+        if (behavior == 3) record->set_message_id(0);
+        if (behavior == 4) record->set_from_user_id(10009);
+        if (behavior == 5) record->set_to_user_id(10009);
+        if (behavior == 6) record->set_client_message_id("other");
+        if (behavior == 7) record->set_message_type(2);
+        if (behavior == 8) record->set_content("other");
+        if (behavior == 9) record->set_delivery_state(static_cast<MessageDeliveryState>(99));
+        if (behavior == 10) response->set_result(RESOLVE_PRIVATE_MESSAGE_RESULT_NOT_OBSERVED);
+        if (behavior == 11) response->set_result(RESOLVE_PRIVATE_MESSAGE_RESULT_IDEMPOTENCY_CONFLICT);
+        if (behavior == 12) record->set_delivery_state(MESSAGE_DELIVERY_STATE_FAILED);
+        return grpc::Status::OK;
+    }
+};
+
+void TestResolveResponseValidation() {
+    ResolveResponseFixture service;
+    grpc::ServerBuilder builder;
+    int port = 0;
+    builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &port);
+    builder.RegisterService(&service);
+    auto server = builder.BuildAndStart();
+    if (!server || port <= 0) {
+        Expect(false, "Resolve.ResponseFixtureStart");
+        return;
+    }
+    const auto provider = std::make_shared<tinyimx::rpc::StaticServiceEndpointProvider>(
+        "", "", "127.0.0.1:" + std::to_string(port));
+    tinyimx::rpc::MessageRpcClient client(provider);
+    tinyimx::rpc::ResolvePrivateMessageRpcRequest request;
+    request.from_user_id = 10001;
+    request.to_user_id = 10002;
+    request.client_message_id = "resolve-response-validation";
+    request.message_type = 1;
+    request.content = "body";
+    tinyimx::rpc::RpcCallOptions options;
+    options.remaining_timeout = std::chrono::seconds(1);
+    const auto valid = client.ResolvePrivateMessage(request, options);
+    Expect(valid.ok() && valid.value->record && valid.value->record->message_id == 77,
+           "Resolve.ClientAcceptsVerifiedIdentity");
+    for (int behavior = 1; behavior <= 11; ++behavior) {
+        service.mode.store(behavior);
+        const auto invalid = client.ResolvePrivateMessage(request, options);
+        Expect(!invalid.ok() && invalid.status.code == tinyimx::rpc::RpcErrorCode::kDataLoss,
+               "Resolve.ClientRejectsMalformedOutcomeOrIdentity");
+    }
+    service.mode.store(12);
+    const auto failed = client.ResolvePrivateMessage(request, options);
+    Expect(failed.ok() && failed.value->record && failed.value->record->delivery_state ==
+               tinyimx::rpc::MessageDeliveryState::kFailed, "Resolve.ClientPreservesFailedDurableState");
+    service.mode.store(13);
+    const auto legacy = client.ResolvePrivateMessage(request, options);
+    Expect(!legacy.ok() && legacy.status.code == tinyimx::rpc::RpcErrorCode::kUnimplemented,
+           "Resolve.LegacyServiceIsErrorNotNotObserved");
+    server->Shutdown();
+    server->Wait();
+}
+
 }  // namespace
 
 int main() {
+    TestResolveResponseValidation();
     std::cout
         << "========== TinyIMX M14-C3 MessageService Integration Tests ==========\n";
 
@@ -688,6 +790,52 @@ int main() {
     const auto get_missing = client.GetPrivateMessage(get_request, options);
     Expect(!get_missing.ok() && get_missing.status.code == tinyimx::rpc::RpcErrorCode::kNotFound,
            "MessageService.RealGrpcGetPrivateMessageNotFound");
+
+    tinyimx::rpc::ResolvePrivateMessageRpcRequest resolve_request;
+    const auto& original = repository.messages.at(7001);
+    resolve_request.from_user_id = original.from_user_id;
+    resolve_request.to_user_id = original.to_user_id;
+    resolve_request.client_message_id = original.client_message_id;
+    resolve_request.message_type = original.message_type;
+    resolve_request.content = original.content;
+    const auto writes_before_resolve = repository.persist_calls;
+    const auto matched = client.ResolvePrivateMessage(resolve_request, options);
+    Expect(matched.ok() && matched.value->record && matched.value->record->message_id == 7001 &&
+               matched.value->record->delivery_state == tinyimx::rpc::MessageDeliveryState::kPending,
+           "Resolve.RealGrpcMatchedPending");
+    auto missing_request = resolve_request;
+    missing_request.client_message_id = "r2b1-late-commit";
+    const auto not_observed = client.ResolvePrivateMessage(missing_request, options);
+    Expect(not_observed.ok() && not_observed.value->outcome ==
+               tinyimx::rpc::ResolvePrivateMessageRpcOutcome::kNotObserved && !not_observed.value->record,
+           "Resolve.RealGrpcNotObserved");
+    auto late = original;
+    late.message_id = 7990;
+    late.client_message_id = missing_request.client_message_id;
+    repository.messages.emplace(late.message_id, late);
+    const auto late_result = client.ResolvePrivateMessage(missing_request, options);
+    Expect(late_result.ok() && late_result.value->record && late_result.value->record->message_id == 7990,
+           "Resolve.RealGrpcLateCommitVisibleOnNextRead");
+    repository.messages.erase(7990);
+    auto resolve_conflict_request = resolve_request;
+    resolve_conflict_request.content += "changed";
+    const auto resolved_conflict = client.ResolvePrivateMessage(resolve_conflict_request, options);
+    Expect(resolved_conflict.ok() && resolved_conflict.value->outcome ==
+               tinyimx::rpc::ResolvePrivateMessageRpcOutcome::kIdempotencyConflict &&
+               !resolved_conflict.value->record, "Resolve.RealGrpcConflictHasNoRecord");
+    repository.resolve_status = tinyimx::message::MessageApplicationStatus::kStorageError;
+    const auto read_error = client.ResolvePrivateMessage(resolve_request, options);
+    Expect(!read_error.ok() && read_error.status.code == tinyimx::rpc::RpcErrorCode::kUnavailable,
+           "Resolve.RealGrpcStorageFailureIsError");
+    repository.resolve_status = tinyimx::message::MessageApplicationStatus::kSucceeded;
+    const auto expired_resolve = client.ResolvePrivateMessage(resolve_request, tinyimx::rpc::RpcCallOptions{});
+    Expect(!expired_resolve.ok() && expired_resolve.status.code == tinyimx::rpc::RpcErrorCode::kDeadlineExceeded,
+           "Resolve.ZeroBudgetRejected");
+    const auto missing_endpoint = empty_client.ResolvePrivateMessage(resolve_request, options);
+    Expect(!missing_endpoint.ok() && missing_endpoint.status.code == tinyimx::rpc::RpcErrorCode::kUnavailable,
+           "Resolve.MissingEndpointIsError");
+    Expect(repository.persist_calls == writes_before_resolve && repository.messages.at(7001).delivery_state ==
+               tinyimx::message::MessageDeliveryState::kPending, "Resolve.RealGrpcNoMutation");
 
     tinyimx::rpc::CountPendingRpcRequest count_request;
     count_request.to_user_id = 10002;

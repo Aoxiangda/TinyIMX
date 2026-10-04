@@ -538,6 +538,44 @@ grpc::Status MessageServiceImpl::ConfirmGroupMessageDelivery(
     return grpc::Status::OK;
 }
 
+grpc::Status MessageServiceImpl::ResolvePrivateMessage(
+    grpc::ServerContext* context,
+    const tinyimx::message::v1::ResolvePrivateMessageRequest* request,
+    tinyimx::message::v1::ResolvePrivateMessageResponse* response
+) {
+    if (!ValidateRpcArguments(context, request, response)) {
+        return {grpc::StatusCode::INVALID_ARGUMENT,
+                "invalid ResolvePrivateMessage RPC arguments"};
+    }
+    if (application_service_ == nullptr) {
+        return {grpc::StatusCode::UNAVAILABLE,
+                "MessageService application service is unavailable"};
+    }
+    if (context->IsCancelled()) {
+        return {grpc::StatusCode::CANCELLED,
+                "ResolvePrivateMessage RPC cancelled before read"};
+    }
+    auto result = application_service_->ResolvePrivateMessage(
+        request->from_user_id(), request->to_user_id(),
+        request->client_message_id(), request->message_type(), request->content());
+    if (!result.Succeeded()) return MapApplicationFailure(result.status, result.message);
+    using namespace tinyimx::message::v1;
+    switch (result.outcome) {
+        case ResolvePrivateMessageOutcome::kNotObserved:
+            response->set_result(RESOLVE_PRIVATE_MESSAGE_RESULT_NOT_OBSERVED);
+            break;
+        case ResolvePrivateMessageOutcome::kMatchedDurable:
+            response->set_result(RESOLVE_PRIVATE_MESSAGE_RESULT_MATCHED_DURABLE);
+            FillMessage(*result.record, response->mutable_record());
+            break;
+        case ResolvePrivateMessageOutcome::kIdempotencyConflict:
+            response->set_result(RESOLVE_PRIVATE_MESSAGE_RESULT_IDEMPOTENCY_CONFLICT);
+            break;
+    }
+    response->set_message(result.message);
+    return grpc::Status::OK;
+}
+
 grpc::Status MessageServiceImpl::GetPrivateMessage(
     grpc::ServerContext* context,
     const tinyimx::message::v1::GetPrivateMessageRequest* request,

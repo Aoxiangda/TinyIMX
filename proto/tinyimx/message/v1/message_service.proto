@@ -51,6 +51,33 @@ service MessageService {
     rpc ClaimGroupMessageDeliveriesForRecipient(
         ClaimGroupMessageDeliveriesForRecipientRequest)
         returns (ClaimGroupMessageDeliveriesResponse);
+    // Read-only resolution of an uncertain persistence attempt. Appended so
+    // the original 15 methods and all existing field numbers stay unchanged.
+    rpc ResolvePrivateMessage(ResolvePrivateMessageRequest)
+        returns (ResolvePrivateMessageResponse);
+}
+
+message ResolvePrivateMessageRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 from_user_id = 2;
+    uint64 to_user_id = 3;
+    string client_message_id = 4;
+    uint32 message_type = 5;
+    string content = 6;
+}
+
+enum ResolvePrivateMessageResult {
+    RESOLVE_PRIVATE_MESSAGE_RESULT_UNSPECIFIED = 0;
+    RESOLVE_PRIVATE_MESSAGE_RESULT_NOT_OBSERVED = 1;
+    RESOLVE_PRIVATE_MESSAGE_RESULT_MATCHED_DURABLE = 2;
+    RESOLVE_PRIVATE_MESSAGE_RESULT_IDEMPOTENCY_CONFLICT = 3;
+}
+
+message ResolvePrivateMessageResponse {
+    ResolvePrivateMessageResult result = 1;
+    // Present only for MATCHED_DURABLE; original state is preserved.
+    MessageRecord record = 2;
+    string message = 3;
 }
 
 enum MessageDeliveryState {

@@ -50,6 +50,11 @@ public:
     [[nodiscard]] MessageMutationRpcCallResult ConfirmGroupMessageDelivery(
         const ConfirmGroupMessageDeliveryRpcRequest&, const RpcCallOptions&) const;
 
+    [[nodiscard]] RpcResult<ResolvePrivateMessageRpcResponse> ResolvePrivateMessage(
+        const ResolvePrivateMessageRpcRequest& request,
+        const RpcCallOptions& options
+    ) const;
+
     [[nodiscard]] RpcResult<GetPrivateMessageRpcResponse> GetPrivateMessage(
         const GetPrivateMessageRpcRequest& request,
         const RpcCallOptions& options

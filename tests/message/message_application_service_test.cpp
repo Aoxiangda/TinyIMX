@@ -23,6 +23,33 @@ void Expect(bool condition, const char* label) {
 class FakeRepository final : public tinyimx::message::MessageRepositoryPort {
 public:
 
+    tinyimx::message::MessageRepositoryGetResult FindPrivateMessageByClientMessageId(
+        std::uint64_t sender, const std::string& cid
+    ) override {
+        ++resolve_calls;
+        tinyimx::message::MessageRepositoryGetResult out;
+        out.status = get_status;
+        if (!out.Succeeded()) return out;
+        if (resolve_override) {
+            out.found = true;
+            out.record = *resolve_override;
+            return out;
+        }
+        for (const auto& [id, row] : messages) {
+            (void)id;
+            if (row.from_user_id == sender && row.client_message_id == cid) {
+                out.found = true;
+                out.record = row;
+                break;
+            }
+        }
+        return out;
+    }
+
+    std::size_t resolve_calls{0};
+    std::size_t persist_calls{0};
+    std::optional<tinyimx::message::MessageView> resolve_override;
+
     tinyimx::message::MessageRepositoryPersistResult PersistPrivateMessage(
         std::uint64_t from_user_id,
         std::uint64_t to_user_id,
@@ -30,6 +57,7 @@ public:
         std::uint32_t message_type,
         const std::string& content
     ) override {
+        ++persist_calls;
         tinyimx::message::MessageRepositoryPersistResult out;
         out.status = tinyimx::message::MessageApplicationStatus::kSucceeded;
         out.outcome = persist_outcome;
@@ -399,6 +427,69 @@ void TestConfirmReceiverBatch() {
            "ConfirmReceiverBatch");
 }
 
+void TestResolvePrivateMessage() {
+    using namespace tinyimx::message;
+    FakeRepository repository;
+    MessageApplicationService app(&repository);
+    auto resolve = [&] { return app.ResolvePrivateMessage(10001, 10002, "Opaque-Aa", 1, "body"); };
+    const auto absent = resolve();
+    Expect(absent.Succeeded() && absent.outcome == ResolvePrivateMessageOutcome::kNotObserved &&
+               !absent.record, "Resolve.NotObservedIsReadSnapshot");
+    auto row = FakeRepository::MakeMessage(77, 10001, 10002, MessageDeliveryState::kPending);
+    row.client_message_id = "Opaque-Aa";
+    row.content = "body";
+    row.message_type = 1;
+    repository.messages.emplace(77, row);
+    for (const auto state : {MessageDeliveryState::kPending, MessageDeliveryState::kReceiverConfirmed,
+                            MessageDeliveryState::kRead, MessageDeliveryState::kFailed}) {
+        repository.messages.at(77).delivery_state = state;
+        const auto matched = resolve();
+        Expect(matched.Succeeded() && matched.outcome == ResolvePrivateMessageOutcome::kMatchedDurable &&
+                   matched.record && matched.record->message_id == 77 &&
+                   matched.record->delivery_state == state && repository.messages.at(77).delivery_state == state,
+               "Resolve.LateCommitAndEveryDurableStatePreserved");
+    }
+    for (const auto& result : {
+             app.ResolvePrivateMessage(10001, 10003, "Opaque-Aa", 1, "body"),
+             app.ResolvePrivateMessage(10001, 10002, "Opaque-Aa", 2, "body"),
+             app.ResolvePrivateMessage(10001, 10002, "Opaque-Aa", 1, "other")}) {
+        Expect(result.Succeeded() && result.outcome == ResolvePrivateMessageOutcome::kIdempotencyConflict &&
+                   !result.record, "Resolve.ImmutableConflictHidesOriginalRecord");
+    }
+    const auto other_sender = app.ResolvePrivateMessage(10009, 10002, "Opaque-Aa", 1, "body");
+    const auto different_case = app.ResolvePrivateMessage(10001, 10002, "opaque-aa", 1, "body");
+    Expect(other_sender.Succeeded() && different_case.Succeeded() && !other_sender.record &&
+               !different_case.record, "Resolve.SenderScopedByteIdentity");
+    repository.get_status = MessageApplicationStatus::kStorageError;
+    Expect(!resolve().Succeeded(), "Resolve.StorageErrorIsNotNotObserved");
+    repository.get_status = MessageApplicationStatus::kSucceeded;
+    for (int corruption = 0; corruption < 6; ++corruption) {
+        auto invalid = row;
+        if (corruption == 0) invalid.message_id = 0;
+        if (corruption == 1) invalid.from_user_id = 10009;
+        if (corruption == 2) invalid.client_message_id = "other";
+        if (corruption == 3) invalid.to_user_id = 0;
+        if (corruption == 4) invalid.message_type = 0;
+        if (corruption == 5) invalid.delivery_state = static_cast<MessageDeliveryState>(99);
+        repository.resolve_override = invalid;
+        Expect(resolve().status == MessageApplicationStatus::kInvalidRecord,
+               "Resolve.InvalidRepositoryIdentityIsError");
+    }
+    repository.resolve_override.reset();
+    const auto before_invalid = repository.resolve_calls;
+    Expect(!app.ResolvePrivateMessage(0, 10002, "c", 1, "body").Succeeded() &&
+               !app.ResolvePrivateMessage(10001, 10001, "c", 1, "body").Succeeded() &&
+               !app.ResolvePrivateMessage(10001, 10002, std::string(65, 'c'), 1, "body").Succeeded() &&
+               !app.ResolvePrivateMessage(10001, 10002, "c", 4, "body").Succeeded() &&
+               !app.ResolvePrivateMessage(10001, 10002, "c", 1, "").Succeeded() &&
+               repository.resolve_calls == before_invalid, "Resolve.ValidationBeforeRepository");
+    Expect(repository.persist_calls == 0 && repository.batch_calls == 0 && repository.read_calls == 0 &&
+               repository.messages.size() == 1, "Resolve.NoWritesOrNewLogicalMessages");
+    MessageApplicationService unavailable(nullptr);
+    Expect(unavailable.ResolvePrivateMessage(10001, 10002, "c", 1, "body").status ==
+               MessageApplicationStatus::kStorageError, "Resolve.MissingRepositoryIsError");
+}
+
 void TestMarkDialogRead() {
     FakeRepository repository;
     repository.read_affected_rows = 4;
@@ -418,6 +509,7 @@ int main() {
     TestHistorySentinelPagination();
     TestConversationSentinelPagination();
     TestGetPrivateMessage();
+    TestResolvePrivateMessage();
     TestPendingReadFoundation();
     TestConfirmReceiverMonotonicOwnership();
     TestConfirmReceiverBatch();

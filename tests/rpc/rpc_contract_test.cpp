@@ -499,8 +499,8 @@ int main() {
   const auto* message_service =
       message_file == nullptr ? nullptr :
       message_file->FindServiceByName("MessageService");
-  Expect(message_service != nullptr && message_service->method_count() == 15,
-         "MessageService method count frozen at 15 after M17-B3");
+  Expect(message_service != nullptr && message_service->method_count() == 16,
+         "MessageService appends read-only resolution after original 15 methods");
 
   const char* const expected_message_methods[] = {
       "PersistPrivateMessage",
@@ -518,15 +518,24 @@ int main() {
       "ConfirmReceiverBatch",
       "MarkDialogRead",
       "ClaimGroupMessageDeliveriesForRecipient",
+      "ResolvePrivateMessage",
   };
   if (message_service != nullptr) {
-    for (int i = 0; i < message_service->method_count() && i < 15; ++i) {
+    for (int i = 0; i < message_service->method_count() && i < 16; ++i) {
       const std::string label =
           std::string("MessageService method frozen: ") +
           expected_message_methods[i];
       Expect(message_service->method(i)->name() == expected_message_methods[i],
              label.c_str());
     }
+  }
+
+  const auto* resolve_descriptor = tinyimx::message::v1::ResolvePrivateMessageRequest::descriptor();
+  const char* const resolve_fields[] = {"meta", "from_user_id", "to_user_id", "client_message_id", "message_type", "content"};
+  for (int i = 0; i < 6; ++i) {
+    const auto* field = resolve_descriptor->FindFieldByName(resolve_fields[i]);
+    Expect(field != nullptr && field->number() == i + 1,
+           "ResolvePrivateMessageRequest field numbers");
   }
 
   std::cout << "==============================================\n";

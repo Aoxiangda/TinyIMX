@@ -135,6 +135,15 @@ add_executable(message_application_service_tests
   tests/message/message_application_service_test.cpp
 )
 
+# Manual read-only runtime validation; requires the real MySQL configuration.
+add_executable(resolve_private_message_mysql_tests
+  tests/message/resolve_private_message_mysql_test.cpp
+)
+target_compile_features(resolve_private_message_mysql_tests PRIVATE cxx_std_20)
+target_link_libraries(resolve_private_message_mysql_tests PRIVATE
+  tinyimx_config tinyimx_message_grpc tinyimx_rpc_client
+)
+
 target_compile_features(message_application_service_tests PRIVATE cxx_std_20)
 
 target_link_libraries(message_application_service_tests PRIVATE

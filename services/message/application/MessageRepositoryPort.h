@@ -13,6 +13,17 @@ class MessageRepositoryPort {
 public:
     virtual ~MessageRepositoryPort() = default;
 
+    // Compatibility implementations fail explicitly; an unsupported lookup
+    // must never be interpreted as proof that the original write is absent.
+    [[nodiscard]] virtual MessageRepositoryGetResult FindPrivateMessageByClientMessageId(
+        std::uint64_t,
+        const std::string&
+    ) {
+        MessageRepositoryGetResult result;
+        result.message = "private message identity lookup is unavailable";
+        return result;
+    }
+
     MessageRepositoryPort() = default;
     MessageRepositoryPort(const MessageRepositoryPort&) = delete;
     MessageRepositoryPort& operator=(const MessageRepositoryPort&) = delete;

@@ -18,6 +18,14 @@ public:
     MessageApplicationService(const MessageApplicationService&) = delete;
     MessageApplicationService& operator=(const MessageApplicationService&) = delete;
 
+    [[nodiscard]] ResolvePrivateMessageApplicationResult ResolvePrivateMessage(
+        std::uint64_t from_user_id,
+        std::uint64_t to_user_id,
+        const std::string& client_message_id,
+        std::uint32_t message_type,
+        const std::string& content
+    );
+
     [[nodiscard]] PersistPrivateMessageApplicationResult PersistPrivateMessage(
         std::uint64_t from_user_id,
         std::uint64_t to_user_id,

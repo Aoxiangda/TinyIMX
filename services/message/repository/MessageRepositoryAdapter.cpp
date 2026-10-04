@@ -721,6 +721,32 @@ MessageRepositoryAdapter::ConfirmGroupMessageDelivery(
 }
 
 MessageRepositoryGetResult
+MessageRepositoryAdapter::FindPrivateMessageByClientMessageId(
+    std::uint64_t from_user_id,
+    const std::string& client_message_id
+) {
+    MessageRepositoryGetResult output;
+    if (repository_ == nullptr) {
+        output.message = "message repository is unavailable";
+        return output;
+    }
+    auto result = repository_->FindPrivateMessageByClientMessageId(
+        from_user_id, client_message_id);
+    output.status = MapStatus(result.status);
+    output.found = result.found;
+    output.message = std::move(result.message);
+    if (!result.Succeeded() || !result.found) return output;
+    if (!ValidDeliveryStatus(result.record.delivery_status)) {
+        output.status = MessageApplicationStatus::kInvalidRecord;
+        output.found = false;
+        output.message = "message repository returned invalid delivery status";
+        return output;
+    }
+    output.record = ToView(std::move(result.record));
+    return output;
+}
+
+MessageRepositoryGetResult
 MessageRepositoryAdapter::GetPrivateMessage(
     std::uint64_t message_id
 ) {

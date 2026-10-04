@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -246,6 +247,23 @@ struct MessageRepositoryGetResult {
 struct GetPrivateMessageApplicationResult {
     MessageApplicationStatus status{MessageApplicationStatus::kStorageError};
     MessageView record;
+    std::string message;
+
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return status == MessageApplicationStatus::kSucceeded;
+    }
+};
+
+enum class ResolvePrivateMessageOutcome {
+    kNotObserved = 0,
+    kMatchedDurable,
+    kIdempotencyConflict,
+};
+
+struct ResolvePrivateMessageApplicationResult {
+    MessageApplicationStatus status{MessageApplicationStatus::kStorageError};
+    ResolvePrivateMessageOutcome outcome{ResolvePrivateMessageOutcome::kNotObserved};
+    std::optional<MessageView> record;
     std::string message;
 
     [[nodiscard]] bool Succeeded() const noexcept {

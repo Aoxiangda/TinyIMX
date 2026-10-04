@@ -20,6 +20,61 @@ MessageApplicationService::MessageApplicationService(
     : repository_(repository) {
 }
 
+ResolvePrivateMessageApplicationResult
+MessageApplicationService::ResolvePrivateMessage(
+    std::uint64_t from_user_id,
+    std::uint64_t to_user_id,
+    const std::string& client_message_id,
+    std::uint32_t message_type,
+    const std::string& content
+) {
+    ResolvePrivateMessageApplicationResult output;
+    if (from_user_id == 0 || to_user_id == 0 || from_user_id == to_user_id ||
+        client_message_id.empty() || client_message_id.size() > 64 ||
+        message_type < 1 || message_type > 3 || content.empty()) {
+        output.status = MessageApplicationStatus::kInvalidArgument;
+        output.message = "invalid ResolvePrivateMessage application request";
+        return output;
+    }
+    if (repository_ == nullptr) {
+        output.message = "message repository port is unavailable";
+        return output;
+    }
+    auto result = repository_->FindPrivateMessageByClientMessageId(
+        from_user_id, client_message_id);
+    if (!result.Succeeded()) {
+        output.status = result.status;
+        output.message = std::move(result.message);
+        return output;
+    }
+    if (!result.found) {
+        output.status = MessageApplicationStatus::kSucceeded;
+        output.message = "private message not observed in this read";
+        return output;
+    }
+    const auto& record = result.record;
+    const auto state = static_cast<std::uint32_t>(record.delivery_state);
+    if (record.message_id == 0 || record.from_user_id != from_user_id ||
+        record.client_message_id != client_message_id || record.to_user_id == 0 ||
+        record.to_user_id == from_user_id || record.message_type < 1 ||
+        record.message_type > 3 || record.content.empty() || state > 3) {
+        output.status = MessageApplicationStatus::kInvalidRecord;
+        output.message = "identity lookup returned an invalid private message";
+        return output;
+    }
+    output.status = MessageApplicationStatus::kSucceeded;
+    if (record.to_user_id != to_user_id || record.message_type != message_type ||
+        record.content != content) {
+        output.outcome = ResolvePrivateMessageOutcome::kIdempotencyConflict;
+        output.message = "client_message_id belongs to different immutable content";
+        return output;
+    }
+    output.outcome = ResolvePrivateMessageOutcome::kMatchedDurable;
+    output.record = std::move(result.record);
+    output.message = "matching durable private message observed";
+    return output;
+}
+
 PersistPrivateMessageApplicationResult
 MessageApplicationService::PersistPrivateMessage(
     std::uint64_t from_user_id,
