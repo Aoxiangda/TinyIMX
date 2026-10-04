@@ -25,3 +25,8 @@ add_executable(pool_recovery_probe EXCLUDE_FROM_ALL
     ${CMAKE_CURRENT_LIST_DIR}/pool_recovery_probe.cpp)
 target_compile_features(pool_recovery_probe PRIVATE cxx_std_20)
 target_link_libraries(pool_recovery_probe PRIVATE tinyimx_config tinyimx_db tinyimx_cache)
+
+add_executable(private_persistence_trace_tests EXCLUDE_FROM_ALL
+    ${PROJECT_SOURCE_DIR}/tests/message/private_persistence_trace_test.cpp)
+target_compile_features(private_persistence_trace_tests PRIVATE cxx_std_20)
+target_link_libraries(private_persistence_trace_tests PRIVATE tinyimx_logging)

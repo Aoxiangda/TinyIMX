@@ -1,4 +1,5 @@
 #include "services/message/repository/MessageRepositoryAdapter.h"
+#include "services/message/repository/PrivatePersistenceTrace.h"
 
 #include "services/repository/MessageRepository.h"
 
@@ -177,6 +178,8 @@ MessageRepositoryAdapter::PersistPrivateMessage(
     const std::string& content
 ) {
     MessageRepositoryPersistResult output;
+    PrivatePersistenceTrace trace(from_user_id,to_user_id,output);
+    using Phase=PrivatePersistenceTrace::Phase;
 
     if (repository_ == nullptr || pool_ == nullptr || outbox_ == nullptr) {
         output.status = MessageApplicationStatus::kStorageError;
@@ -244,10 +247,9 @@ MessageRepositoryAdapter::PersistPrivateMessage(
 
     // Fast-path only. The UNIQUE(from_user_id, client_message_id) constraint
     // remains the final concurrent arbiter after a precheck miss.
-    const auto existing = repository_->FindPrivateMessageByClientMessageId(
-        from_user_id,
-        client_message_id
-    );
+    const auto existing = trace.Measure(Phase::Precheck,[&]{
+        return repository_->FindPrivateMessageByClientMessageId(from_user_id,client_message_id);
+    });
 
     if (!existing.Succeeded()) {
         map_query_failure(existing, "precheck");
@@ -263,21 +265,21 @@ MessageRepositoryAdapter::PersistPrivateMessage(
         pre_insert_hook_for_test_();
     }
 
-    auto connection = pool_->Acquire();
+    auto connection = trace.Measure(Phase::Acquire,[&]{return pool_->Acquire();});
     if (!connection) {
         output.status = MessageApplicationStatus::kStorageError;
         output.message = "transactional private message acquire failed";
         return output;
     }
 
-    if (!connection->BeginTransaction()) {
+    if (!trace.Measure(Phase::Begin,[&]{return connection->BeginTransaction();})) {
         output.status = MessageApplicationStatus::kStorageError;
         output.message = "transactional private message begin failed: " +
                          connection->LastError();
         return output;
     }
 
-    const auto save = repository_->SavePrivateMessageOnConnection(
+    const auto save = trace.Measure(Phase::Insert,[&]{return repository_->SavePrivateMessageOnConnection(
         connection.operator->(),
         from_user_id,
         to_user_id,
@@ -285,21 +287,20 @@ MessageRepositoryAdapter::PersistPrivateMessage(
         tinyimx::DeliveryStatus::kPending,
         static_cast<tinyimx::PrivateMessageType>(message_type),
         client_message_id
-    );
+    );});
 
     if (!save.Succeeded()) {
         const std::string insert_error = save.message;
         if (connection->InTransaction()) {
-            connection->Rollback();
+            trace.Measure(Phase::Rollback,[&]{return connection->Rollback();});
         }
         // Release the transaction connection before the recovery read. This is
         // essential for pool_size=1 and avoids self-deadlock.
         connection.Reset();
 
-        const auto recovered = repository_->FindPrivateMessageByClientMessageId(
-            from_user_id,
-            client_message_id
-        );
+        const auto recovered = trace.Measure(Phase::RecoveryRead,[&]{
+            return repository_->FindPrivateMessageByClientMessageId(from_user_id,client_message_id);
+        });
 
         if (!recovered.Succeeded()) {
             map_query_failure(recovered, "recovery read");
@@ -321,14 +322,14 @@ MessageRepositoryAdapter::PersistPrivateMessage(
         return output;
     }
 
-    const auto created = repository_->FindPrivateMessageByIdOnConnection(
+    const auto created = trace.Measure(Phase::IdentityRead,[&]{return repository_->FindPrivateMessageByIdOnConnection(
         connection.operator->(),
         save.message_id
-    );
+    );});
 
     if (!created.Succeeded() || !created.Found() || !same_identity(created.record)) {
         if (connection->InTransaction()) {
-            connection->Rollback();
+            trace.Measure(Phase::Rollback,[&]{return connection->Rollback();});
         }
         if (!created.Succeeded()) {
             map_query_failure(created, "post-insert verification");
@@ -342,37 +343,36 @@ MessageRepositoryAdapter::PersistPrivateMessage(
 
     const MessageView created_view = ToView(created.record);
     const auto event_spec = MessageEventFactory::MessageCreated(created_view);
-    const auto outbox_result = outbox_->InsertOnConnection(
+    const auto outbox_result = trace.Measure(Phase::OutboxInsert,[&]{return outbox_->InsertOnConnection(
         connection.operator->(),
         event_spec.event,
         event_spec.topic,
         event_spec.tag,
         event_spec.message_key
-    );
+    );});
 
     if (!outbox_result.success) {
         if (connection->InTransaction()) {
-            connection->Rollback();
+            trace.Measure(Phase::Rollback,[&]{return connection->Rollback();});
         }
         output.status = MessageApplicationStatus::kStorageError;
         output.message = "message outbox insert failed: " + outbox_result.message;
         return output;
     }
 
-    if (!connection->Commit()) {
+    if (!trace.Measure(Phase::Commit,[&]{return connection->Commit();})) {
         const std::string commit_error = connection->LastError();
         if (connection->InTransaction()) {
-            connection->Rollback();
+            trace.Measure(Phase::Rollback,[&]{return connection->Rollback();});
         }
         connection.Reset();
 
         // MySQL commit failures can be outcome-ambiguous. Recover by the stable
         // M12 idempotency key. If a matching durable row exists, the atomic
         // transaction also made its Outbox row durable.
-        const auto recovered = repository_->FindPrivateMessageByClientMessageId(
-            from_user_id,
-            client_message_id
-        );
+        const auto recovered = trace.Measure(Phase::RecoveryRead,[&]{
+            return repository_->FindPrivateMessageByClientMessageId(from_user_id,client_message_id);
+        });
         if (recovered.Succeeded() && recovered.Found()) {
             set_existing_result(recovered.record);
             output.message = same_identity(recovered.record)

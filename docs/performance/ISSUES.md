@@ -383,3 +383,9 @@
 - 候选只将worker_connections提高到131072，其他nginx参数不改。为一个worker承接全部50k客户端及50k上游预留空间，同时小于nofile262144；保守要求额外1GiB可用内存预算，实测RSS/guest资源另存，不能以配置值推断实际内存占用。
 - 首先将候选复制到自有容器/tmp路径并nginx-t；确认无ownedworker/business连接后，原config保持inode写入以让readonly bind看到内容，白名单源码提交，随后单独审计graceful reload。所有19容器身份/镜像/start必须保持，无重建或删除。原config精确备份；失败时同inode恢复、nginx-t/reload并另记失败。
 - 一个诊断tail误读error.log的/dev/stderr symlink而阻塞；只核对并停止本任务exact tail reader，容器无pgrep/外部kill导致的两次工具失败也保留。后续所有读都有超时，拒绝设备/流。该诊断失败不能当成nginx错误计数0的证据。
+
+### DIAG-018：持久化事务数字阶段计时
+
+- 真实MessageService两个fault-delay环境变量都UNSET；85ms阶段不是残留人工延迟。新增默认OFF的数字计时，明确precheck、获取连接(含Ping)、BEGIN、INSERT、identityread、outboxinsert、COMMIT、recoveryread/ROLLBACK耗时，8条/秒限速，不含C/内容/账号密码/token。
+- SQL顺序、身份核验、幂等冲突、事务与outbox原子性及结果不改；计时不会延長截止时间或隐藏失败。关闭时不调用诊断时钟/sink；测试覆盖move-only返回、void、异常原样传播、重复阶段累计、未执行-1、数字结果、慢失败采样和限速。后续构建/部署须等owned capacity停止并另审计。
+- nginx已预验并保持inode平滑重载；19容器ID/image/start及应用私有configSHA全部保持。记录nginxMEM343.6->448.3MiB，低于额外1GiB保守预算。ng30khold1真实30000认证、30s保持、HB380377/380377、断连0，PASS。50k还在运行；这不代表私聊/其他功能P99通过。
