@@ -366,3 +366,12 @@
 - 原实现`pool-recovery-original1`已真实复现：MySQL关闭后重连FAIL，三个故障Acquire均丢失slot，恢复后SELECT1无法通过；Redis同样三次slot检查FAIL，恢复PING不能成功。共享服务未停止，所有失败保留。
 - 本次候选删除MySQL空句柄拒绝前置条件，Close后总是mysql_init；两种pool重连失败时经Release归还slot再返回空lease，Shutdown已有锁/guard保持。不会重放业务事务，也不把失败请求当成功。组件fixed1待对照验证，运行镜像尚未部署。
 - `hold30kreason1`同100用户/s登录-only诊断到28230/30000，三个worker最终RECV_ERRNO_104，未达到all-online、没有稳态业务发送。入口与Gateway无重启/OOM、nofile262144；选定nginx错误类别均0。不同于原nf30k的较早登录拒绝。需要验证Docker发布端口NAT连接元组限制，尚不能断言数据库/P99修复即可解决。
+
+- `pool-recovery-fixed1`全部36项真实连接检查PASS；空事务自动回滚、Shutdown持有lease不复活、三次故障槽位保留及恢复无需Initialize均通过。另14项snapshot和27项crash-window回归PASS。尚未部署运行镜像，不能把后续入口对照变化归因于此源代码修正。
+
+### TEST-016：同机发布端口的压测客户端路径
+
+- 自有两个loopback源127.0.0.2/.3通过127.0.0.1:9000登录均成功，但nginx看到的对端都为172.18.0.1。原30k在28230认证后同步reset，与guest临时端口32768..60999范围大小28232接近；这是待验证的入口客户端瓶颈假设，尚不是唯一根因证明。
+- 绑定loopback源访问192.168.220.128:9000超时，原FAIL保留。随后只使用已存在的192.168.220.128、192.168.220.129、192.168.58.129、172.18.0.1、172.17.0.1，每个都成功登录真实nginx containerIP以及实际发布的guest-address:9000。没有增加地址或改变routes/firewall/sysctl。
+- coordinator新增显式host/source-ips，override必须是本机现有IPv4，来源唯一且足够每worker一个；记录原CLI和worker源地址。默认旧路径不变，负载速率100用户/s、deadline和门槛不变。先2用户正常hold验证，再30k/50k同条件login-only测量；不把hold成功等同全功能容量。
+- 实际MCP鉴权负向401及授权discover/list9工具通过，但static_user_id=1在真实库不存在，profile业务返回HTTP200/isError=true/not_found。AIagent未运行；实际配置qwen3:8b/host.docker.internal，仅检查配置未调用provider。MCP业务和AI容量不能计为PASS；生产身份修正需要明确合法principal，先用独立合成账号验证完整工具链。

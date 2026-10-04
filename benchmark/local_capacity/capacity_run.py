@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Real nginx TCP hold/private baseline. Full-feature/TLS/fault tests remain separate."""
-import argparse, collections, datetime, hashlib, json, math, os, pathlib, re, resource, subprocess, time
+import argparse, collections, datetime, hashlib, ipaddress, json, math, os, pathlib, re, resource, subprocess, time
 
 ROOT = pathlib.Path('/home/jackson7/projects/TinyIMX_publish')
 MYSQL = 'tinyimx-m21-mysql-1'
@@ -49,6 +49,18 @@ def run(a):
     assert 100000 <= a.user_id_base <= 1000000000000
     assert re.fullmatch(r'[a-zA-Z0-9_-]{1,40}', a.username_prefix)
     assert re.fullmatch(r'sha256:[0-9a-f]{64}', a.gateway_image)
+    count=math.ceil(a.users/10000)
+    ipaddress.IPv4Address(a.host)
+    sources=['127.0.0.'+str(i+2) for i in range(count)]
+    if a.host!='127.0.0.1' or a.source_ips:
+        interfaces=json.loads(cmd(['ip','-j','-4','address','show']))
+        local={x['local'] for interface in interfaces for x in interface['addr_info'] if x['family']=='inet'}
+        assert a.host in local, 'Override target must be an existing local published address'
+        if a.source_ips:
+            supplied=a.source_ips.split(',')
+            assert len(supplied)>=count and len(supplied)<=8 and len(set(supplied))==len(supplied), 'Unique source per worker required'
+            assert all(str(ipaddress.IPv4Address(x))==x and x in local for x in supplied), 'Use existing local IPv4 sources only; no aliases'
+            sources=supplied[:count]
     stage = ROOT / '.local/codex' / ('capacity-' + a.run)
     assert not stage.exists(), 'Keep all prior runs immutable'
     stage.mkdir()
@@ -99,6 +111,7 @@ def run(a):
             f.write(datetime.datetime.now(datetime.timezone.utc).isoformat()+'\n')
             f.write(pathlib.Path('/proc/meminfo').read_text())
             f.write(pathlib.Path('/proc/pressure/memory').read_text())
+            f.write(pathlib.Path('/proc/pressure/cpu').read_text())
             f.write(cmd(['docker','stats','--no-stream','--format','{{.Name}} CPU={{.CPUPerc}} MEM={{.MemUsage}} PIDS={{.PIDs}}']))
         available=int(re.search(r'MemAvailable:\s+(\d+)',pathlib.Path('/proc/meminfo').read_text()).group(1))
         assert available >= 768*1024, 'Guest memory safety threshold; retain failed run'
@@ -118,7 +131,7 @@ def run(a):
             argv=[str(binary),'--out',str(d),'--control',str(control),'--run-id',a.run,
                   '--connections',str(n),'--total-users',str(a.users),'--offset',str(i*10000),
                   '--user-id-base',str(base),'--username-prefix',a.username_prefix,
-                  '--worker-id',str(i),'--source-ip','127.0.0.'+str(i+2),'--host','127.0.0.1','--port','9000',
+                  '--worker-id',str(i),'--source-ip',sources[i],'--host',a.host,'--port','9000',
                   '--rate',str(a.rate*n/a.users),'--ramp-per-sec',str(100/count),
                   '--duration',str(a.duration),'--drain-seconds','15','--verify-timeout','120',
                   '--heartbeat-seconds','15','--mode',a.mode]
@@ -226,6 +239,8 @@ if __name__=='__main__':
     p.add_argument('--mode',choices=['private','hold'],default='private')
     p.add_argument('--user-id-base',type=int,default=500000)
     p.add_argument('--username-prefix',default='m21b500000_')
+    p.add_argument('--host',default='127.0.0.1')
+    p.add_argument('--source-ips',default=None,help='Comma-separated existing local IPv4 addresses, one per worker; no network changes')
     p.add_argument('--gateway-image',default=IMAGE)
     a=p.parse_args()
     # A duplicate run is rejected before error handling can touch its evidence.
