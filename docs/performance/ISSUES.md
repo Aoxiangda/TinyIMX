@@ -227,3 +227,17 @@
 - `w1k16a`：恢复重新启用，16 workers 实际启动；1,000 在线、100msg/s、60s，正 ACK 5,379/6,000、负 ACK 621，P99 2,982.1ms、最大 3,066.105ms、活跃正 ACK 86.8333/s。SQL 5,482 条全部已确认，其中 103 条没有正 ACK，518 次发送在快照未观察到耐久记录。
 - 所有正 ACK 均已匹配真实 wire delivery 和 SQL 身份/确认，修正对账器正常工作。心跳末尾 5306/5309 为未 settle 的旧口径；本轮仍因真实负 ACK 和 P99 FAIL。
 - 结论：单独增加线程未能消除共享资源和长队列问题，不作为已解决根因。配置迭代 `734effb`、独立镜像和该轮失败账本均保留；仍需低率标定、共享资源/数据库等待定位及同条件复测。
+
+### TEST-005（结束屏障实际验证）
+
+- `8e6e386` 保存心跳 settle 改动。`low1k16a` 1,000 用户、10msg/s、30s 全部 300 条正 ACK、wire 和 SQL ReceiverConfirmed，P99 41.0ms、心跳 3119/3119，低负载私聊 PASS。
+- `diag1k16a` 1,000 用户、100msg/s、30s，正 ACK 2415/3000、负 ACK 585、P99 2986.6ms，心跳 3000/3000、无断连。修正测试结束计数没有掩盖负载性能 FAIL。低率成绩不代表 10k～50k 或全功能验收。
+
+### PERF-006：缓存不足与持续写入/查询等待需要分别验证
+
+- `mysql-load-diagnostic-20261004/` 对同轮前后聚合取增量：物理缓冲页读取 11745 次、数据 fsync 17460 次；Outbox 状态更新均值 28.259ms，COMMIT 7.101ms，未读会话 COUNT 10.793ms，待投递接收者发现 72.662ms。等待采样多次出现 waiting for handler commit。不能使用两天历史平均冒充本轮数据。
+- MySQL 8.0.40 原缓存 128MiB，应用表/索引约 630MiB。`mysql-buffer-1g-20261004/audit-before.json` 记录资源预算、零活动事务、原值、风险、非持久 SET GLOBAL 和回滚；临时增至 1GiB，flush_log_at_trx_commit=1、sync_binlog=1 均保持。没有重启、SET PERSIST、清理数据库、终止用户应用或修改 VMware。
+- `buf1k16a` 1k、100msg/s、60s：6000/6000 正 ACK、真实投递及 SQL 确认，负 ACK 0，心跳 5000/5000、无断连、活跃正 ACK 99.6333/s；P99 393.4ms、最大 684.104ms，仍为 FAIL。物理缓冲读取 2708 次；会话 COUNT 均值 6.9ms，发现查询 50.896ms。
+- 相同参数预热复测 `buf1k16b`：6000/6000 全部成功确认、负 ACK 0、心跳 5192/5192，无断连；P99 508.1ms、最大 797.577ms、活跃 99.7833/s，仍 FAIL。物理读取仅 4 次，说明缓存候选消除本轮负 ACK 后仍未解决尾延迟；不能声称唯一根因已修复。
+- 原始 SQL 查询已有索引 (to_user_id,delivery_status,message_id) 不能同时覆盖 from_user_id 过滤；发现查询按 delivery_status=0 和 to_user_id 游标筛选。迁移 012 候选新增 (to_user_id,from_user_id,delivery_status) 与 (delivery_status,to_user_id) 两个非唯一索引，保留原索引、所有行和业务语义。
+- 索引候选必须保存详细前置审计、精确定义、旧/新 EXPLAIN、同一只读一致快照查询结果等价，以及原值回滚 SQL；显式 ALGORITHM=INPLACE、LOCK=NONE、会话 metadata lock 等待 5 秒。没有活动压测时执行，构建完再复测。状态：查询索引候选，待真实验证与负载结果，不是全功能 PASS。
