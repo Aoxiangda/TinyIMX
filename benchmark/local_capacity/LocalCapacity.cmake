@@ -36,3 +36,8 @@ add_executable(private_receiver_ack_tests EXCLUDE_FROM_ALL
     ${PROJECT_SOURCE_DIR}/gateway/ReceiverDeliveryTracker.cpp)
 target_include_directories(private_receiver_ack_tests PRIVATE ${PROJECT_SOURCE_DIR})
 target_compile_features(private_receiver_ack_tests PRIVATE cxx_std_20)
+
+add_executable(offered_schedule_tests EXCLUDE_FROM_ALL
+    ${PROJECT_SOURCE_DIR}/tests/gateway/offered_schedule_test.cpp)
+target_include_directories(offered_schedule_tests PRIVATE ${PROJECT_SOURCE_DIR})
+target_compile_features(offered_schedule_tests PRIVATE cxx_std_17)

@@ -411,3 +411,12 @@
 - Message55d矩阵`nm10kp1`10000认证，6000正ACK/确认/接收、HB82464/82464，49操作链同窗口PASS，但P99=934.7ms。`nm20kp1`20000认证，4741正ACK/1259负ACK、HB230504/230504、P99=3002.1ms，功能链16操作后权限预算耗尽。源代码／数字限速采样显示20k chat dispatch中位1324.011ms，不能当全体P99。所有FAIL保留。
 - Gateway接收ACK先GetPrivateMessage，再ConfirmReceiver；后者在MessageApplicationService再次读取并校验持久化recipient及Pending/Confirmed/Read/Failed状态。跟踪器已用private domain/M/认证账号/D验证已注册尝试。候选删除前一个重复读取，生产helper仅在kConfirmed或kDuplicate时调用一次原ConfirmReceiver，其服务端持久化身份校验仍保留。
 - 未知消息、foreign receiver、未注册D、zero字段和group domain均不能调用确认；不确定RPC失败后本地ACK保持单调，重复有效ACK继续修复。已登记旧retry序号仍是有效接收证据。新目标有10项真实跟踪器／生产helper边界测试；后续构建、端到端验证和性能对照另存。当前30k/50k55d矩阵不部署这项变更。
+
+- `nm30kp1`30000全部认证，4346正ACK、1657负ACK，HB453004/453004，P99=3030.9ms、scheduled3032.9ms，49操作链同窗口PASS，容量FAIL；本轮实际6003发送不是精确6000。`nm50kp1`约35445认证后五worker记录auth_timeout，中止时业务发送0、未达到全在线，不能代表50k业务测量。之前ng50khold1仍是独立的30s在线保持PASS。
+- ACK候选编译commit c7ffd3a，132检查全部PASS（新生产helper10、Gateway51、ACK boundary22、MessageApplication49）。镜像7f7143、Gateway binarySHA=d99604d58286a653c2bedfd58b708ab5bdd2de9992eaec9ec2abdecee5636f77。仅GWa/B部署核验其他17容器、全部配置和环境完全保留，性能尚待同负载验证。
+
+### TEST-022：浮点终点截断多发送一条计划请求
+
+- 30k三worker各100/3消息/s、60s；ordinal2000的理论时间恰是终点，浮点除法再转换整纳秒后落到终点前，send_due额外发送一条。旧排空计数的nearinteger ceil只补漏，不拦截已多发；三个worker总6003而目标6000，原FAIL不改写。
+- 新生产OfferedRequestCount统一发送上限和缺失尾部计数；正整数附近1e-8绝对误差才吸附，tiny正速率保留slot0，真正fractional count仍ceil。所有skip/late仍记录，catchup256和固定drain不变。计划上限拦截终点多发，不减少合法计划量。8项边界测试包含真实100/3浮点截断案例及原1/2/5worker基线。
+- 此轮仅测试工具/docs，不改应用。Gateway镜像7f7143仍compiledc7，Message55d仍compiled667；测试Git HEAD和workerSHA单独记录。保留原worker d667及完整原始6003计数。

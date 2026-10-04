@@ -1,6 +1,7 @@
 // Local capacity worker: normal hold/private traffic, NOT a failover/full-feature runner.
 // Reuses TinyIMX's real Packet/ProtocolCodec/Buffer. No service code is modified.
 #include "common/protocol/ProtocolCodec.h"
+#include "benchmark/local_capacity/OfferedSchedule.h"
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/json_parser.hpp>
 #include <arpa/inet.h>
@@ -162,7 +163,7 @@ class Worker {
         if(ev&EPOLLIN)read(i);if(ev&EPOLLOUT)flush(i);if(ev&(EPOLLERR|EPOLLHUP|EPOLLRDHUP)){close(i);throw std::runtime_error("SOCKET_CLOSED");}}
     }
     void heartbeat(TP now){if(stop_heartbeats)return;while(!heartbeats.empty()&&heartbeats.top().first<=now){auto [_,i]=heartbeats.top();heartbeats.pop();auto&x=conns[i];if(x.state!=3)continue;if(x.hb_seq){if(ms(x.hb_sent,now)>2.0*c.hb*1000)throw std::runtime_error("HEARTBEAT_UNRESOLVED");heartbeats.push({now+std::chrono::seconds(1),i});continue;}x.hb_seq=seq(x);x.hb_sent=now;queue(i,MessageType::kHeartbeat,x.hb_seq,"{}");++m["heartbeat_sent"];heartbeats.push({now+std::chrono::seconds(c.hb),i});}}
-    void send_due(TP now){if(c.mode!="private")return;std::size_t burst=0;while(burst++<256){TP due=start+std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(planned/c.rate));if(due>=end||due>now)break;++planned;++m["planned_requests"];ready_lag.add(ms(due,now));std::size_t i=rr++%conns.size();auto&x=conns[i];if(x.state!=3||x.chat_seq){++m["skipped_scheduled_requests"];continue;}x.chat_seq=seq(x);x.scheduled=due;x.enqueued=Clock::now();x.cid="l"+c.run+"-w"+std::to_string(c.worker)+"-u"+std::to_string(x.uid)+"-n"+std::to_string(++x.serial);if(x.cid.size()>64)throw std::runtime_error("CID_LENGTH");
+    void send_due(TP now){if(c.mode!="private")return;const auto limit=tinyimx::capacity::OfferedRequestCount(c.rate,c.duration);std::size_t burst=0;while(burst++<256){if(planned>=limit)break;TP due=start+std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(planned/c.rate));if(due>=end||due>now)break;++planned;++m["planned_requests"];ready_lag.add(ms(due,now));std::size_t i=rr++%conns.size();auto&x=conns[i];if(x.state!=3||x.chat_seq){++m["skipped_scheduled_requests"];continue;}x.chat_seq=seq(x);x.scheduled=due;x.enqueued=Clock::now();x.cid="l"+c.run+"-w"+std::to_string(c.worker)+"-u"+std::to_string(x.uid)+"-n"+std::to_string(++x.serial);if(x.cid.size()>64)throw std::runtime_error("CID_LENGTH");
         queue(i,MessageType::kChatMessage,x.chat_seq,"{\"client_message_id\":"+quote(x.cid)+",\"to\":"+std::to_string(x.to)+",\"text\":"+quote(std::string(128,'x'))+"}");++m["send_attempts"];if(now>=end)++m["late_offered_requests"];event("send",x,0,x.chat_seq);}}
     std::string result()const{std::ostringstream o;o<<"{\"schema\":\"tinyimx-capacity-worker-v1\",\"run_id\":"<<quote(c.run)<<",\"worker_id\":"<<c.worker<<",\"offset\":"<<c.offset<<",\"connections\":"<<c.count<<",\"total_users\":"<<c.total<<",\"mode\":"<<quote(c.mode)<<",\"status\":"<<quote(terminal)<<",\"online_now\":"<<online<<",\"duration_seconds\":"<<c.duration<<",\"rate\":"<<c.rate<<",\"source_ip\":"<<quote(c.source)<<",\"start_steady_ns\":"<<(started?ns(start):0)<<",\"snapshot_steady_ns\":"<<ns(Clock::now())<<",\"inflight\":";std::size_t inflight=0;for(auto&x:conns)inflight+=(x.chat_seq!=0);o<<inflight<<",\"metrics\":{";bool first=true;for(auto&[k,v]:m){if(!first)o<<',';first=false;o<<quote(k)<<':'<<v;}o<<"},\"ack_histogram\":"<<ack_latency.json()<<",\"scheduled_to_ack_histogram\":"<<schedule_latency.json()<<",\"schedule_lag_histogram\":"<<ready_lag.json()<<",\"login_histogram\":"<<login_latency.json()<<'}';return o.str();}
 public:
@@ -178,7 +179,7 @@ public:
          // whose wakeup crosses end. Late offers retain scheduled timestamps;
          // their ACKs do not count in the original active throughput window.
          // Catchup remains bounded in send_due and the drain deadline is fixed.
-         if(started&&now>=start&&!audit_ready){send_due(now);if(now>=end+std::chrono::seconds(c.drain)){if(!end_accounted){end_accounted=true;const auto expected=static_cast<std::uint64_t>(std::ceil(c.rate*c.duration-1e-8));if(c.mode=="private"&&expected>planned){m["planned_requests"]+=expected-planned;m["skipped_scheduled_requests"]+=expected-planned;planned=expected;}}audit_ready=true;audit_at=now;ledger.flush();terminal="AUDIT_READY";atomic(c.out/"audit-ready.json",result());}}
+         if(started&&now>=start&&!audit_ready){send_due(now);if(now>=end+std::chrono::seconds(c.drain)){if(!end_accounted){end_accounted=true;const auto expected=tinyimx::capacity::OfferedRequestCount(c.rate,c.duration);if(c.mode=="private"&&expected>planned){m["planned_requests"]+=expected-planned;m["skipped_scheduled_requests"]+=expected-planned;planned=expected;}}audit_ready=true;audit_at=now;ledger.flush();terminal="AUDIT_READY";atomic(c.out/"audit-ready.json",result());}}
          if(audit_ready){
            if(fs::exists(c.control/"quiesce_heartbeats"))stop_heartbeats=true;
            if(stop_heartbeats&&!heartbeat_drained&&m["heartbeat_sent"]==m["heartbeat_ack"]){heartbeat_drained=true;atomic(c.out/"heartbeat-drained.json",result());}
