@@ -92,6 +92,14 @@ public:
         const std::vector<std::string>& arguments
     );
 
+    // Bulk strings preserve signed 64-bit counters without Lua number rounding.
+    std::optional<std::vector<std::string>>
+    EvalStringArray(
+        const std::string& script,
+        const std::vector<std::string>& keys,
+        const std::vector<std::string>& arguments
+    );
+
     const std::string&
     LastError() const;
 

@@ -1977,7 +1977,8 @@ void GatewayServer::EnsureUnreadProjection(
             message_id,
             receiver_user_id,
             sender_user_id,
-            should_count_as_unread
+            should_count_as_unread,
+            true
         );
 
     if (!projection_result.Succeeded()) {
@@ -2004,13 +2005,14 @@ void GatewayServer::EnsureUnreadProjection(
     }
 
     if (private_unread != nullptr) {
-        *private_unread = GetPrivateUnread(
-            receiver_user_id,
-            sender_user_id
-        );
+        *private_unread = projection_result.Succeeded() && projection_result.private_count
+            ? *projection_result.private_count
+            : GetPrivateUnread(receiver_user_id, sender_user_id);
     }
     if (total_unread != nullptr) {
-        *total_unread = GetTotalUnread(receiver_user_id);
+        *total_unread = projection_result.Succeeded() && projection_result.total_count
+            ? *projection_result.total_count
+            : GetTotalUnread(receiver_user_id);
     }
 }
 

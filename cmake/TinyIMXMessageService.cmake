@@ -232,6 +232,14 @@ target_link_libraries(unread_projection_cache_integration_tests PRIVATE
   tinyimx_cache_service
 )
 
+add_executable(unread_projection_snapshot_tests
+  tests/projection/unread_projection_snapshot_test.cpp
+)
+target_compile_features(unread_projection_snapshot_tests PRIVATE cxx_std_20)
+target_link_libraries(unread_projection_snapshot_tests PRIVATE
+  tinyimx_config tinyimx_logging tinyimx_cache tinyimx_cache_service
+)
+
 add_executable(message_outbox_integration_tests
   tests/outbox/message_outbox_integration_test.cpp
 )

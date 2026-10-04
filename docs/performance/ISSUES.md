@@ -474,3 +474,8 @@
 - 真实guest Ollama服务active，127.0.0.1:11434监听，仅qwen2.5:7b。原AI host.docker.internal/qwen3:8b不匹配；未改变绑定或下载模型，实际推理尚未运行。正式MCP principal1不存在的问题仍待身份配置处理。
 - 隔离MCP测试保留全部失败：首次只读脚本模块命名冲突；第二次logger.file为空被项目配置拒绝，已通过正常API创建群26并保留；第三次工具假定User/Social端口颠倒；第四次使用运行命令提取真实端口后profile/friends通过，但page100会话返回HTTP200/isError=true/invalid_argument。源码MCP schema最大100，而MessageRpcClient history/conversations最大50，这是真实产品契约缺陷，尚未修复。
 - 第五次page50正向对照八业务工具及两个鉴权/schema负例PASS，主体519870、peer519872、group26、AVAILABLEfile16的1835041字节/已校验SHA身份一致。原19实例和配置保持。不能把page50PASS掩盖page100FAIL，也不能称AI或MCP性能达标；测试完成后只停止exact own MCP容器，证据/配置/群/文件和其他应用保留。
+### PERF-030：ACK前未读投影的原子计数候选（尚未构建/部署）
+
+- 运行私聊EnsureUnreadProjection依次Acquire/PING/EVAL、Acquire/PING/GET private、Acquire/PING/GET total，共三个lease和六次Redis往返。候选Gateway请求原子Lua同时返回原投影status和两个计数快照，仅一次lease/PING/EVAL；原四参数消费者保持integer返回。
+- 稳定M marker身份、Applied/AlreadyApplied/Read语义、溢出/非法计数判定、原子增量全部保留。计数由GET原十进制字符串返回并from_chars解析int64，不转换Lua number，防止2^53精度丢失；零值optional也有效。成功且对应计数有效才用快照；投影失败或某一计数非法时保留原逐项读取回退，不提前ACK。
+- 新真实Redis目标硬性要求--owned-isolated-redis及127.0.0.1:16390/db0/pool1；验证精度、最大int64、溢出不安装marker、身份冲突、wrongtype、旧scalar兼容、关闭连接恢复以及四线程64同M重试只增一次。运行需要新独立Redis容器/配置审计，不能指向正式Redis。当前仅本地候选，50k矩阵期间不应用源码/构建/部署，不宣称性能提升。

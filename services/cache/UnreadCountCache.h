@@ -3,6 +3,7 @@
 #include "common/cache/RedisConnectionPool.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -81,6 +82,9 @@ struct EnsureUnreadProjectionResult {
     };
 
     bool incremented{false};
+    // Present only for an opt-in successful parse of the atomic counter snapshot.
+    std::optional<std::int64_t> private_count;
+    std::optional<std::int64_t> total_count;
     std::string error_message;
 
     [[nodiscard]] bool Succeeded() const noexcept {
@@ -196,7 +200,8 @@ public:
         std::uint64_t message_id,
         std::uint64_t receiver_user_id,
         std::uint64_t sender_user_id,
-        bool should_count_as_unread
+        bool should_count_as_unread,
+        bool include_counts = false
     );
 
     GetUnreadCountResult

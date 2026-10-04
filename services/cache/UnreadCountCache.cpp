@@ -118,6 +118,21 @@ return private_count
  */
 constexpr const char*
     kEnsurePrivateUnreadProjectionScript = R"lua(
+-- Legacy callers retain scalar outcomes. Only the Gateway opts into counts.
+local function count_text(key)
+    local value = redis.pcall('GET', key)
+    if value == false then return '0' end
+    if type(value) == 'string' then return value end
+    return '' -- Wrong type: retain projection status and let caller use fallback.
+end
+
+local function report(status)
+    if ARGV[3] == 'counts' then
+        return {tostring(status), count_text(KEYS[1]), count_text(KEYS[2])}
+    end
+    return status
+end
+
 local max_before_increment =
     '9223372036854775806'
 
@@ -146,18 +161,18 @@ end
 local marker = redis.call('GET', KEYS[3])
 if marker then
     if marker ~= ARGV[1] then
-        return -5
+        return report(-5)
     end
-    return 0
+    return report(0)
 end
 
 local private_status = validate_count(redis.call('GET', KEYS[1]))
-if private_status == 1 then return -1 end
-if private_status == 2 then return -3 end
+if private_status == 1 then return report(-1) end
+if private_status == 2 then return report(-3) end
 
 local total_status = validate_count(redis.call('GET', KEYS[2]))
-if total_status == 1 then return -2 end
-if total_status == 2 then return -4 end
+if total_status == 1 then return report(-2) end
+if total_status == 2 then return report(-4) end
 
 redis.call('SET', KEYS[3], ARGV[1])
 
@@ -166,7 +181,7 @@ if ARGV[2] == '1' then
     redis.call('INCR', KEYS[2])
 end
 
-return 1
+return report(1)
 )lua";
 
 constexpr const char*
@@ -506,7 +521,8 @@ UnreadCountCache::EnsurePrivateUnreadProjection(
     std::uint64_t message_id,
     std::uint64_t receiver_user_id,
     std::uint64_t sender_user_id,
-    bool should_count_as_unread
+    bool should_count_as_unread,
+    bool include_counts
 ) {
     EnsureUnreadProjectionResult result;
 
@@ -538,18 +554,36 @@ UnreadCountCache::EnsurePrivateUnreadProjection(
         std::to_string(receiver_user_id) + ":" +
         std::to_string(sender_user_id);
 
-    const auto script_result = connection->EvalInteger(
-        kEnsurePrivateUnreadProjectionScript,
-        std::vector<std::string>{
+    const std::vector<std::string> keys{
             BuildPrivateKey(receiver_user_id, sender_user_id),
             BuildTotalKey(receiver_user_id),
             BuildProjectionKey(message_id)
-        },
-        std::vector<std::string>{
+        };
+    std::vector<std::string> arguments{
             identity,
             should_count_as_unread ? "1" : "0"
+        };
+    std::optional<std::int64_t> script_result;
+    if (include_counts) {
+        arguments.emplace_back("counts");
+        const auto values = connection->EvalStringArray(
+            kEnsurePrivateUnreadProjectionScript, keys, arguments);
+        const auto parse = [](const std::string& text, bool nonnegative)
+            -> std::optional<std::int64_t> {
+            std::int64_t value = 0;
+            const auto parsed = std::from_chars(text.data(), text.data()+text.size(), value);
+            if (parsed.ec != std::errc{} || parsed.ptr != text.data()+text.size() ||
+                (nonnegative && value < 0)) return std::nullopt;
+            return value;
+        };
+        if (values && values->size() == 3) {
+            script_result = parse((*values)[0], false);
+            result.private_count = parse((*values)[1], true);
+            result.total_count = parse((*values)[2], true);
         }
-    );
+    } else {
+        script_result = connection->EvalInteger(kEnsurePrivateUnreadProjectionScript, keys, arguments);
+    }
 
     if (!script_result.has_value()) {
         result.status = EnsureUnreadProjectionStatus::kRedisError;

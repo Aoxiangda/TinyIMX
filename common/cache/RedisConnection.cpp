@@ -593,6 +593,42 @@ RedisConnection::EvalInteger(
     );
 }
 
+std::optional<std::vector<std::string>> RedisConnection::EvalStringArray(
+    const std::string& script,
+    const std::vector<std::string>& keys,
+    const std::vector<std::string>& arguments
+) {
+    if (script.empty()) {
+        SetError("redis eval failed: script is empty");
+        return std::nullopt;
+    }
+    std::vector<std::string> command_arguments{"EVAL", script, std::to_string(keys.size())};
+    command_arguments.insert(command_arguments.end(), keys.begin(), keys.end());
+    command_arguments.insert(command_arguments.end(), arguments.begin(), arguments.end());
+    RedisReplyPtr reply(Command(command_arguments), freeReplyObject);
+    if (!reply) return std::nullopt;
+    if (reply->type == REDIS_REPLY_ERROR) {
+        SetError("redis eval failed: " + ReplyText(reply.get()));
+        return std::nullopt;
+    }
+    if (reply->type != REDIS_REPLY_ARRAY) {
+        SetError("redis eval failed: reply is not a string array");
+        return std::nullopt;
+    }
+    std::vector<std::string> values;
+    values.reserve(reply->elements);
+    for (std::size_t i = 0; i < reply->elements; ++i) {
+        const auto* element = reply->element[i];
+        if (element == nullptr || element->type != REDIS_REPLY_STRING) {
+            SetError("redis eval failed: array element is not a bulk string");
+            return std::nullopt;
+        }
+        values.push_back(ReplyText(element));
+    }
+    last_error_.clear();
+    return values;
+}
+
 const std::string& RedisConnection::LastError() const {
     return last_error_;
 }
