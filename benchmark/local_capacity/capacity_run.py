@@ -172,6 +172,7 @@ def run(a):
             'all_send_positive_ack':metrics['send_attempts']==metrics['chat_ack_ok'] and metrics['chat_ack_fail']==0,
             'active_ack_throughput_95pct':metrics['ack_in_active_window']/a.duration>=.95*a.rate,
             'positive_ack_p99_le_100ms':p99 is not None and p99<=100,
+            'scheduled_to_ack_p99_le_100ms':scheduled_p99 is not None and scheduled_p99<=100,
             'all_sent_db_and_confirmed':len(sent)==len(db) and all(x[3]==1 for x in db.values())})
         summary={'status':'PASS' if all(gates.values()) else 'FAIL','scenario':vars(a),'gates':gates,'metrics':dict(metrics),
                  'positive_ack_p99_ms_upper_bin':p99,'scheduled_to_ack_p99_ms_upper_bin':scheduled_p99,

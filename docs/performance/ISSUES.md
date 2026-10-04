@@ -262,3 +262,20 @@
 - `warn1k16a` 1k100msg/s60s，6000/6000 正 ACK、wire、SQL 已确认，负 ACK0，心跳5000/5000、断连0；P99 349.5ms、最大638.074ms、活跃99.9167/s，仍 FAIL。CPU20s聚合观察不是调用栈或可确定因果的 profile，不能据此宣称日志为唯一根因或永久降低日志级别。
 - ZooKeeper 现探针每5s执行 zkServer.sh status；该 Java CLI 与采样中的新 Java 进程一致性仍需隔离验证。只读验证 bash直接 srvr 返回 Mode: standalone，耗时约12ms，保持旧探针的 standalone/leader/follower 判据。新 override 为候选，不直接改全局默认、不关闭健康检查。
 - 计划：正/负健康查询、精确 healthcheck-only 漂移检查、零业务连接保护，保留 ZK image/env/volume、仅重建 ZK；验证所有原服务健康及注册恢复，再同1k负载复测。原 healthcheck 详细定义及 rollback override 在变更前保存；失败回滚，不删除卷或强杀。状态：轻量健康探针候选，未容量验收。
+
+### PERF-007（等价健康探针真实结果）
+
+- 第一轮前置 FAIL：执行器错误将 CMD-SHELL 字符串当程序名，返回127，未部署运行容器；原脚本、源码备份和失败记录保留。第二轮改用 sh -c，正探针成功、错误端口负探针失败，通过 healthcheck-only 漂移核对及零业务连接审计后仅重建 ZK。同镜像、同命名卷，其他18容器ID/启动时间不变，全部原服务健康。
+- `eecbf18` 保存可选 override 与复盘。`zk1k16a` 1k100msg/s60s，6000/6000正ACK、wire、SQL确认，负ACK0，心跳5180/5180、断连0；P99 230.7ms、最大560.888ms、活跃99.7667/s，仍FAIL。前WARN轮349.5ms只是一次对照，不能外推稳定改善或全功能容量。
+
+### PERF-008：redo 线程分配候选保留耐久性后待复测
+
+- `mysql-direct-redo-20261004/audit-before.json` 保存MySQL8.0.40原参数和精确回滚，在零活动压测/事务时临时 SET GLOBAL innodb_log_writer_threads=OFF；事务线程承担 redo 写入/刷新，innodb_flush_log_at_trx_commit=1、sync_binlog=1、doublewrite及1GiB缓存不变，没有SET PERSIST或重启。
+- 官方依据仅为工作负载相关假设：https://docs.oracle.com/cd/E17952_01/mysql-8.0-en/optimizing-innodb-logging.html 。低并发事务可受益，高并发必须逐档复测，不能减少落盘责任换性能。
+- `redo1k16a` 6000计划中5999实际发送，5999全部正ACK/wire/SQL确认，负ACK0；P99 142.4ms、最大235.911ms、活跃99.95/s，心跳5000/5000。少发1条与P99>100均为FAIL；完整原报告保留。日志fsync增量14360，前轮25422，采样时长含ramp/drain，不直接当steady吞吐。
+
+### TEST-006：窗口尾部计划请求被10ms事件等待丢弃
+
+- `redo1k16a`原账本最后一次发送为59986.768ms，序号5999；最后计划due=59990ms没有发送，最大既有调度延迟12.164ms。源码到end即将未发计划全部记为skip，导致最后一次epoll等待跨界后遗漏尾部请求。原FAIL不重标PASS。
+- 候选：在固定15s drain内继续每次最多256条追赶所有due<end的绝对计划；迟发保留原scheduled时间并独立late_offered_requests计数。活跃ACK吞吐窗口不扩大，坏连接或在途冲突仍skip并FAIL；drain结束仍未发的计划保持skip失败。
+- 增加scheduled-to-ACK P99≤100ms门槛，覆盖客户端调度等待，原正ACK P99、全计划/零skip、SQL与wire等门槛都保留。状态：执行器候选待构建及真实复测；不修改服务器性能指标或掩盖任何原失败。
