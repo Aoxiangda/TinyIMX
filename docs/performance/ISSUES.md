@@ -549,3 +549,11 @@
 - 已精确回滚Message到b24及原环境，其他18/config/pool16/013保持；同时恢复源码MAX默认2，f7失败代码保留于Git。v13归档SHAb1bb6473e8f0a7c00c0c41ef4a6f90a22f5500d39b4432c2043788922a288b21，本机74文件SHA验证。21历史/后续诊断辅助脚本保存到evidence_tools，旧脚本有不可覆盖阶段/身份守卫，不代表可直接重放历史部署。
 - 只读确认MySQL8.0.40保持innodb_flush_log_at_trx_commit=1/sync_binlog=1/log_bin=1、groupdelay0/count0、fsync。累计fileMISC等待不能代替本次同步成本，MISC不全是fsync。下一步先固定原运行b24/1d8做150/s窗口，只在窗口起止读取file/status/digest与guestCPU/procstat/pressure增量，不reset/启用instrument或改设置。若实际同步成本支持，再独立审计1000微秒groupcommit等待候选；保留双1持久性、不SET PERSIST，并逐值精确恢复。官方说明合并可能减少同步次数，也可能增加延迟/竞争，必须由实测决定，不预宣称提升。
 - 当前I/O增量基线及groupcommit候选尚未运行；所有功能10k-50k极致性能仍未实现。schedstats0时runqueue聚合无效，候选分析已以null明确表示；v12原始无效聚合保留并在文档标注，绝不据此证明调度等待。
+
+### PERF-040：原版基线登录排队过期，先补齐认证分段证据
+
+- 26308后的原版 io150base 实际中止于 Worker exited before ready.json / worker_or_coordinator_abort，connected1222/login_ok1023、elapsed14.8664s，没有all-online或计划业务发送/HB窗口。UID700913收到实际 business_deadline_exceeded。原raw/final/failure和observer-error No activewindow保留，I/O解析器严格保持NOT_RUN；MySQL1/1/1/0/0未改变，不将这轮归因为新groupcommit参数。
+- 成功子集1023登录均886.6733ms、P50上界846.4/P952148.1/P992627.6/max2965.122；完整sw150a/mp150diag10k登录均34.4334/33.5201、P99上界分别92.2/89.8ms。部分成功直方图不含失败，绝不是10k容量结果。3个5秒资源点memory PSI0/guest约8.1GiB可用，CPU PSI8.81→35.53→47.07，User CPU256.7→287.8→10.4%（单核100）；只能支持同窗口压力存在，不证明全部时间归属密码函数。窗口后Windows进程CPU快照不代表窗口内，不据此关闭用户应用。
+- 实际编译33fc Gateway ExecuteTask在work开始前判断原deadline，调用DispatchDeadlineTerminal；连接失效分支直接取消，并不发该负响应。至少一条等待任务在开始前已经过期。原DrainStripe持续处理同stripe直到清空，存在慢服务下冷stripe公平性风险；此前全局fair候选性能未接受，不能直接重启未接受的源码或宣称已解决认证问题。
+- 新增默认OFF TINYIMX_AUTH_PHASE_TRACE_ENABLE：UserRepository实际FindByUsername和PasswordHasher调用的wall/threadCPU、UserService Authenticate方法总wall/threadCPU，数字uid/tid/status/outcome，成功uid%16采样，repo+handler组合日志每second bucket上限8。KDF100000、常量时间比较、授权结果、原截止时间、SQL连接生命周期、best-effort last_login保持。方法计时不包含gRPC入口前排队/返回transport；采样非随机且会受日志限速，需要时间/TID/uid配对，不相减不同总体均值冒充RPC开销。
+- 11路径白名单审计保存beforeSHA/新路径不存在、风险/回滚。计时回归验证禁用零clock/sink、move-only/返回值/异常保持、CPU不可用-1、状态及成功/失败采样、重复阶段累加和日志桶边界；原User应用及真实gRPC回归后才允许单独封装User诊断镜像。此阶段构建/部署/受控测量NOT_RUN；当前19容器/配置保持，无全局SQL设置变更、无用户应用停止、无数据删除。

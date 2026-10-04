@@ -1,5 +1,9 @@
 # 先分析、再修正、最后验证：性能根因复盘（2026-10-05）
 
+最新状态补充：原版本 I/O 基线 io150base 在登录阶段中止，未进入有效负载窗口，不能计算文件/fsync/digest 增量，也未改变 groupcommit 设置。1222 连接、1023 成功认证、一个真实 business_deadline_exceeded；成功子集登录均886.673ms、P99上界2627.6ms，而前两轮完整10k均约33–34ms、P99约90–92ms。原始失败、observer-error 和只读复核均保留。实际33fc编译Gateway在 ExecuteTask 开始前判断原3s期限，过期后派发该负响应，证明至少一条任务排队过期；不能据此断定密码计算或主机应用是唯一原因。源码数据库连接在 FindByUsername 返回时释放，Redis Ping已在池锁外，均不是新修复。
+
+下一阶段只增加默认关闭的认证数字分段诊断：查库、PBKDF2和UserService方法的wall/threadCPU，保留KDF100000及所有鉴权/状态/期限语义。User handler计时不含gRPC入口前等待或返回后transport，wall-minus-CPU仍不能单独判I/O或调度。成功uid%16为非随机样本，repo+handler共用8/秒bucket日志上限，只有同uid/TID/包含时间区间的样本才可配对。此次源码/测试/审计与失败证据先保存Git，构建/部署/测量此时未运行；运行Gateway1d8、Messageb24、User38dca及SQL设置保持。以下“最新迭代”是先前阶段历史记录，不代表I/O基线尚未尝试。
+
 最新迭代更新：f7 MAX_POLLERS16通过205检查但同诊断150/sP99225.5ms，线程仍107/113不同TID，未证实性能收益；已回退原Messageb24/environment并恢复默认2源码，失败Git和v13的74文件保留。前轮a315诊断278检查及P99179.0FAIL的v12共88文件也保留。池mutex/slot低耗时不支持盲目扩池；仓储CPU远短于wall不能独自判IO或调度。下一阶段先采集原版本同窗口提交/日志同步/file/status/digest和guestCPU增量，再决定是否测保持双1持久性的groupcommit合并。当前这一步尚未运行，所有功能10k-50k极致性能仍未实现；以下为历史阶段分析。
 
 ## 当前结论与操作边界

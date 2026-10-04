@@ -92,3 +92,9 @@ add_test(
   NAME user_service_integration_tests
   COMMAND user_service_integration_tests
 )
+
+add_executable(auth_phase_trace_tests tests/user/auth_phase_trace_test.cpp)
+target_compile_features(auth_phase_trace_tests PRIVATE cxx_std_20)
+target_include_directories(auth_phase_trace_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(auth_phase_trace_tests PRIVATE tinyimx_logging)
+add_test(NAME auth_phase_trace_tests COMMAND auth_phase_trace_tests)

@@ -2,6 +2,7 @@
 
 #include "common/logging/LogMacros.h"
 #include "common/security/PasswordHasher.h"
+#include "common/security/AuthPhaseTrace.h"
 
 #include <stdexcept>
 #include <utility>
@@ -315,6 +316,7 @@ UserRepository::VerifyLogin(
     const std::string& password
 ) {
     LoginVerifyResult result;
+    diagnostics::AuthPhaseTrace auth_trace(1);
 
     if (username.empty() ||
         password.empty()) {
@@ -325,11 +327,14 @@ UserRepository::VerifyLogin(
         result.message =
             "username or password is empty";
 
+        auth_trace.Result(static_cast<int>(result.status), 0);
         return result;
     }
 
     const UserLookupResult lookup_result =
-        FindByUsername(username);
+        auth_trace.Measure(diagnostics::AuthPhaseTrace::Phase::Lookup, [&]() {
+            return FindByUsername(username);
+        });
 
     if (lookup_result.NotFound()) {
         result.status =
@@ -339,6 +344,7 @@ UserRepository::VerifyLogin(
         result.message =
             "user not found";
 
+        auth_trace.Result(static_cast<int>(result.status), 0);
         return result;
     }
 
@@ -355,6 +361,7 @@ UserRepository::VerifyLogin(
                 "user lookup failed";
         }
 
+        auth_trace.Result(static_cast<int>(result.status), 0);
         return result;
     }
 
@@ -371,6 +378,7 @@ UserRepository::VerifyLogin(
         result.message =
             "user disabled";
 
+        auth_trace.Result(static_cast<int>(result.status), user.user_id);
         return result;
     }
 
@@ -385,16 +393,21 @@ UserRepository::VerifyLogin(
         result.message =
             "password not set";
 
+        auth_trace.Result(static_cast<int>(result.status), user.user_id);
         return result;
     }
 
     PasswordHasher hasher;
 
-    if (!hasher.VerifyPassword(
-            password,
-            user.password_salt,
-            user.password_hash
-        )) {
+    const bool verified = auth_trace.Measure(
+        diagnostics::AuthPhaseTrace::Phase::Password, [&]() {
+            return hasher.VerifyPassword(
+                password,
+                user.password_salt,
+                user.password_hash
+            );
+        });
+    if (!verified) {
         result.status =
             LoginVerifyStatus::
                 kWrongPassword;
@@ -404,6 +417,7 @@ UserRepository::VerifyLogin(
         result.message =
             "wrong password";
 
+        auth_trace.Result(static_cast<int>(result.status), user.user_id);
         return result;
     }
 
@@ -423,6 +437,7 @@ UserRepository::VerifyLogin(
         << user.username
     );
 
+    auth_trace.Result(static_cast<int>(result.status), user.user_id);
     return result;
 }
 

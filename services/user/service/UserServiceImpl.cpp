@@ -2,6 +2,7 @@
 
 #include "common/observability/GrpcTracing.h"
 #include "common/logging/LogMacros.h"
+#include "common/security/AuthPhaseTrace.h"
 
 #include <grpcpp/grpcpp.h>
 
@@ -163,10 +164,12 @@ grpc::Status UserServiceImpl::Authenticate(
         );
     }
 
+    diagnostics::AuthPhaseTrace auth_trace(2);
     const auto fault_delay = AuthenticateFaultDelay();
     if (fault_delay > std::chrono::milliseconds::zero()) {
         std::this_thread::sleep_for(fault_delay);
         if (context->IsCancelled()) {
+            auth_trace.Result(static_cast<int>(grpc::StatusCode::CANCELLED), 0);
             return grpc::Status(
                 grpc::StatusCode::CANCELLED,
                 "Authenticate cancelled during injected fault delay"
@@ -181,10 +184,12 @@ grpc::Status UserServiceImpl::Authenticate(
         );
 
     if (!result.Completed()) {
-        return MapApplicationFailure(
+        const auto status = MapApplicationFailure(
             result.status,
             result.message
         );
+        auth_trace.Result(static_cast<int>(status.error_code()), 0);
+        return status;
     }
 
     response->set_result(
@@ -224,6 +229,8 @@ grpc::Status UserServiceImpl::Authenticate(
         }
     }
 
+    auth_trace.Result(0, result.profile ? result.profile->user_id : 0,
+                      static_cast<int>(result.outcome));
     return grpc::Status::OK;
 }
 
