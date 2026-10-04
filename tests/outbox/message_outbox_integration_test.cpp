@@ -151,23 +151,57 @@ void TestRecipientConfirmation(
         return lease && lease->Execute("UPDATE im_private_messages SET delivery_status = " +
             std::to_string(status) + " WHERE message_id = " + std::to_string(mid));
     };
+    auto select_count = [&]() -> std::optional<std::uint64_t> {
+        auto lease = pool->Acquire(); tinyimx::MySqlQueryResult rows;
+        if (!lease || !lease->Query("SHOW SESSION STATUS LIKE 'Com_select'", &rows) ||
+            rows.rows.size() != 1 || rows.rows[0].size() != 2 || rows.rows[0][0] != "Com_select") return std::nullopt;
+        try { return std::stoull(rows.rows[0][1]); } catch (...) { return std::nullopt; }
+    };
     const auto pending = fresh("confirm-single-");
     Expect(pending.Accepted(), "ReceiverConfirm owned pending fixture");
     Expect(app.ConfirmReceiver(pending.message_id, kUserA).status == MessageApplicationStatus::kPermissionDenied &&
                state(pending.message_id, tinyimx::DeliveryStatus::kPending),
            "ReceiverConfirm wrong recipient leaves Pending unchanged");
+    const auto selects_before = pool->Size() == 1 ? select_count() : std::nullopt;
     const auto first = app.ConfirmReceiver(pending.message_id, kUserB);
+    const auto selects_after = pool->Size() == 1 ? select_count() : std::nullopt;
+    if (pool->Size() == 1)
+        Expect(selects_before && selects_after && *selects_before == *selects_after,
+               "ReceiverConfirm Pending normal path avoids SELECT before update");
     Expect(first.Succeeded() && first.affected_rows == 1 &&
                state(pending.message_id, tinyimx::DeliveryStatus::kReceiverConfirmed),
            "ReceiverConfirm correct recipient commits once");
     Expect(pool->AvailableCount() == pool->Size(), "ReceiverConfirm returns its one lease");
     const auto duplicate = app.ConfirmReceiver(pending.message_id, kUserB);
     Expect(duplicate.Succeeded() && duplicate.affected_rows == 0, "ReceiverConfirm duplicate is idempotent");
+    Expect(app.ConfirmReceiver(pending.message_id, kUserA).status == MessageApplicationStatus::kPermissionDenied &&
+               state(pending.message_id, tinyimx::DeliveryStatus::kReceiverConfirmed),
+           "ReceiverConfirm wrong owner cannot reuse Confirmed success");
     const auto read = app.MarkDialogRead(kUserB, kUserA);
     const auto read_ack = app.ConfirmReceiver(pending.message_id, kUserB);
     Expect(read.Succeeded() && read_ack.Succeeded() && read_ack.affected_rows == 0 &&
                state(pending.message_id, tinyimx::DeliveryStatus::kRead),
            "ReceiverConfirm cannot downgrade Read");
+
+    Expect(app.ConfirmReceiver(pending.message_id, kUserA).status == MessageApplicationStatus::kPermissionDenied &&
+               state(pending.message_id, tinyimx::DeliveryStatus::kRead),
+           "ReceiverConfirm wrong owner cannot reuse Read success");
+    for (unsigned type : {0U, 4U}) {
+        const auto invalid_type = fresh("confirm-invalid-type-");
+        bool changed = false;
+        { auto lease = pool->Acquire(); changed = lease && lease->Execute(
+              "UPDATE im_private_messages SET message_type = " + std::to_string(type) +
+              " WHERE message_id = " + std::to_string(invalid_type.message_id)); }
+        const auto rejected = app.ConfirmReceiver(invalid_type.message_id, kUserB);
+        tinyimx::MySqlQueryResult raw;
+        bool still_pending = false;
+        { auto lease = pool->Acquire(); still_pending = lease && lease->Query(
+              "SELECT delivery_status FROM im_private_messages WHERE message_id = " +
+              std::to_string(invalid_type.message_id), &raw) && raw.rows.size() == 1 &&
+              raw.rows[0].size() == 1 && raw.rows[0][0] == "0"; }
+        Expect(invalid_type.Accepted() && changed && rejected.status == MessageApplicationStatus::kInvalidRecord && still_pending,
+               "ReceiverConfirm invalid message type remains Pending without mutation");
+    }
 
     const auto failed = fresh("confirm-failed-");
     Expect(failed.Accepted() && update_owned(failed.message_id, 3) &&
@@ -199,6 +233,18 @@ void TestRecipientConfirmation(
     Expect(all_ok && affected == 1 && state(concurrent.message_id, tinyimx::DeliveryStatus::kReceiverConfirmed),
            "ReceiverConfirm concurrent retries commit exactly one transition");
     Expect(pool->AvailableCount() == pool->Size(), "ReceiverConfirm concurrent retries release all slots");
+
+    const auto competing = fresh("confirm-owner-race-");
+    std::barrier owner_start(2);
+    MessageMutationApplicationResult wrong_owner, right_owner;
+    std::thread wrong([&] { owner_start.arrive_and_wait(); wrong_owner = app.ConfirmReceiver(competing.message_id, kUserA); });
+    std::thread right([&] { owner_start.arrive_and_wait(); right_owner = app.ConfirmReceiver(competing.message_id, kUserB); });
+    wrong.join(); right.join();
+    Expect(competing.Accepted() && wrong_owner.status == MessageApplicationStatus::kPermissionDenied &&
+               wrong_owner.affected_rows == 0 && right_owner.Succeeded() && right_owner.affected_rows == 1 &&
+               state(competing.message_id, tinyimx::DeliveryStatus::kReceiverConfirmed),
+           "ReceiverConfirm competing wrong owner cannot perform transition");
+    Expect(pool->AvailableCount() == pool->Size(), "ReceiverConfirm owner race releases every slot");
 
     const auto racing = fresh("confirm-read-race-");
     std::barrier race_start(2);

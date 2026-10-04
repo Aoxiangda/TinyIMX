@@ -198,3 +198,14 @@ callback父级strace 1500/1500、clone3 44（先前同步traced681），调用P9
 v18_attempt2归档100文件 SHAece928ff8e5251c4fd6cdb8b3d5533bd9c1e912e0dca8a708682b1f0ed51f4f8，包含首轮编译失败、修复、直接/gRPC、ABBA候选和首轮导出失败分类。Windows旧extractor已安全完整解包，但只接受v数字清单名而拒绝-attempt2后缀；保留该失败审计/目录，不删除或重新覆盖，只用准确指定清单逐文件复核，100个SHA全部通过，独立验证记录已保存。
 
 只读审查确认MySQL池借用每次Ping且已经在池锁外，失败重连会归还slot，不是旧锁内网络错误。下一项另建诊断CPP，16专属健康连接，现有Message凭据只在进程内读取，地址换为真实MySQL Docker IP；只做SELECT1不读写用户表。固定300/s20秒的Ping+Query-A1、Query-B1、Query-B2、Ping+Query-A2，保存6000条逐请求Ping/Query/CPU/计划迟到与MySQL cgroup计数。native→Docker路径不同于正式container→Docker，且没有真实SQL/事务/10k心跳，Query-only只用于衡量一轮健康检查RTT成本，不是产品政策或故障恢复证明。当前尚未测量，不修改连接验证/重试/SQL/持久化/服务部署；机制收益确认后再设计空闲失效、出错后恢复、事务回收等产品验证。目标仍未达。
+
+
+### 2026-10-05：减少确认路径SQL往返的原子收件人条件候选（尚未构建/测试/部署）
+
+699b062只读健康连接ABBA四轮各6000条SELECT1正确。A1/A2 Ping平均0.561194/0.568582ms、P99 1.324623/1.354024ms；Ping+Query调用P99 2.368942/2.380542、均值1.149633/1.162640，Query-only P99 1.470426/1.556427、均值0.679460/0.680934。probeCPU A0.206279/0.204724核 vsB0.137156/0.138409；整个MySQL cgroup A0.248183/0.257747 vsB0.166127/0.170207（含后台/启动，不是探针独占）。每轮全部逐请求和资源计数保留，MySQL1/1/1/0/0不变，19服务/配置不变；native到Docker健康SELECT1成本不能当真实业务188ms延迟归因或10k性能通过。v19本地53文件逐SHA验证，归档97240a934d0e064d765d1d7badf0462ec66e3be561b551e6c65e5b9730d8e72e。
+
+不更改连接池健康政策。跳过/缓存Ping会使已有断线测试从Acquire失败变为先拿到失效lease，语义变弱，当前候选保留每次健康检查。也不重复旧dc7083先查后更新单lease候选；新方案在成功Pending确认路径先执行收件人绑定原子UPDATE：PK message_id、to_user_id=认证收件人、status0、from_user_id非0、消息类型在当前枚举1..3、created_at非NULL。当前真实表是数值/日期类型，非NULL日期读取为非空字符串，其余字段原解析允许空值；所有原解析会拒绝的有效性条件在快路径保留，不加入额外的发送者!=收件人限制。影响1行才成功，0行在同一健康lease全记录查询，仍按原解析→不存在→所有权→Confirmed/Read/Failed/异常顺序分类。UPDATE错误不重试、不假报成功；0行后仍合法Pending视为存储不一致，保守失败。批量确认、已读、私信持久化、群消息和RPC取消/故障seam都不改；不降低事务/同步日志持久化。
+
+真数据库回归新增：pool1同一会话SHOW SESSION Com_select前后差值证明成功Pending确认没有SELECT（初值不假设0）；消息类型0/4不更新；Confirmed/Read错收件人仍拒绝；合法和错误收件人并发只有合法者能迁移。原有状态9/Failed、不存在、重复、确认与Read交叉、4线程幂等、连接归还、原子outbox/回滚全部保留。会话计数只读前测曾错误要求初值0，实际mysql CLI初始1→SELECT后2；原失败/原始SHA729ce3a3338f992b9e67c0e0ebb5d8d32a95d5dc2678e814530269184cb166cc保留，独立只读复核差值1通过，不修改原失败。一次跨层命令参数错误发生在SSH/SQL之前，后改固定脚本/结构化SQL，无秘密输出或产品影响。
+
+代码先审计/Git，当前尚未得到新候选构建或性能结果。构建只Message与必要测试、parallel1/缓存SDK，不部署Gateway当前fair源码；验证同步Server默认原源码重新编译，不能误封装缓存MAX16版本。新建两套精确命名独立schema池1/4（只读生产DDL，不拷贝生产行），所有测试写入/故障trigger/记录只在新schema，保存全部失败和schemas不DROP。测试通过后再独立审计镜像/Message替换和完全回退，匹配真实私信控制；目标仍未达，继续迭代。
