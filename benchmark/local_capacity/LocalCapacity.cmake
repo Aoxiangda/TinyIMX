@@ -30,3 +30,9 @@ add_executable(private_persistence_trace_tests EXCLUDE_FROM_ALL
     ${PROJECT_SOURCE_DIR}/tests/message/private_persistence_trace_test.cpp)
 target_compile_features(private_persistence_trace_tests PRIVATE cxx_std_20)
 target_link_libraries(private_persistence_trace_tests PRIVATE tinyimx_logging)
+
+add_executable(private_receiver_ack_tests EXCLUDE_FROM_ALL
+    ${PROJECT_SOURCE_DIR}/tests/gateway/private_receiver_ack_test.cpp
+    ${PROJECT_SOURCE_DIR}/gateway/ReceiverDeliveryTracker.cpp)
+target_include_directories(private_receiver_ack_tests PRIVATE ${PROJECT_SOURCE_DIR})
+target_compile_features(private_receiver_ack_tests PRIVATE cxx_std_20)

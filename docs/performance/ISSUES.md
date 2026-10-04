@@ -403,3 +403,11 @@
 - `pctrl1k1`旧MessageService对照1000用户、100消息/s、60s：6000发送、5994正ACK、6负ACK，HB5217/5217，P99=349.5ms、scheduled354.1ms，FAIL。保存的六条回包全部是701000发向700001的not_friend，每轮1000消息一次；不是已证实的持久化失败。
 - 新50k原始数据是双向ring；coordinator切出较小用户范围时仅补最后用户到首用户一条边，实际权限要求互为好友。修复枚举所有测试ring边及反向边，UNION去重两用户情形，只INSERT审计中明确不存在的合成账号关系。任何已有非好友状态，包括0/blocked，都拒绝；不覆盖、删除或重置关系。
 - 本轮仅Python/docs变更。先在同一旧运行镜像05380下重新对照，保留原FAIL和P99，不把消除夹具负ACK当成延迟通过或新MessageService优化成果。后续候选仍绑定compiled667与binary/image SHA。
+
+- `pctrl1k2`修正夹具后旧镜像6000发送/正ACK/真实接收/SQL确认、负ACK0、HB5261/5261，P99=269.7ms、scheduled270.8ms，仍FAIL。MessageService55d单服务部署核验其他18容器和全部私有配置未变。`ptrace1k1`候选6000正ACK/确认、负ACK0、HB5230/5230、P99=292.6ms、scheduled295.3ms，仍FAIL；一次对照不能证明改善。
+
+### PERF-021：接收确认重复读取与业务工作池排队
+
+- Message55d矩阵`nm10kp1`10000认证，6000正ACK/确认/接收、HB82464/82464，49操作链同窗口PASS，但P99=934.7ms。`nm20kp1`20000认证，4741正ACK/1259负ACK、HB230504/230504、P99=3002.1ms，功能链16操作后权限预算耗尽。源代码／数字限速采样显示20k chat dispatch中位1324.011ms，不能当全体P99。所有FAIL保留。
+- Gateway接收ACK先GetPrivateMessage，再ConfirmReceiver；后者在MessageApplicationService再次读取并校验持久化recipient及Pending/Confirmed/Read/Failed状态。跟踪器已用private domain/M/认证账号/D验证已注册尝试。候选删除前一个重复读取，生产helper仅在kConfirmed或kDuplicate时调用一次原ConfirmReceiver，其服务端持久化身份校验仍保留。
+- 未知消息、foreign receiver、未注册D、zero字段和group domain均不能调用确认；不确定RPC失败后本地ACK保持单调，重复有效ACK继续修复。已登记旧retry序号仍是有效接收证据。新目标有10项真实跟踪器／生产helper边界测试；后续构建、端到端验证和性能对照另存。当前30k/50k55d矩阵不部署这项变更。

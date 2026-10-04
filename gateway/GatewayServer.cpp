@@ -16,6 +16,7 @@
 #include "common/protocol/GatewayGroupPeerProtocol.h"
 #include "common/protocol/GroupMessageDeliveryProtocol.h"
 #include "gateway/DeliveryIdentity.h"
+#include "gateway/PrivateReceiverAck.h"
 #include "gateway/GatewayPeerTransportManager.h"
 #include "common/protocol/ClientChatProtocol.h"
 #include "gateway/RemoteDurableAcceptance.h"
@@ -4442,36 +4443,6 @@ void GatewayServer::ExecuteReceiverChatDeliveryAck(
         return options;
     };
 
-    rpc::GetPrivateMessageRpcRequest get_request;
-    get_request.message_id = ack.message_id;
-    auto get_result = message_rpc_client_->GetPrivateMessage(
-        get_request, make_call_options("get-private-message-for-ack"));
-    if (!get_result.ok()) {
-        LOG_WARN("gateway receiver delivery ack durable lookup failed"
-                 << ", message_id=" << ack.message_id
-                 << ", delivery_seq=" << packet.seq
-                 << ", receiver=" << receiver
-                 << ", rpc_code="
-                 << static_cast<int>(get_result.status.code)
-                 << ", error=" << get_result.status.message);
-        return;
-    }
-
-    const rpc::MessageRpcRecord& message = get_result.value->record;
-    if (message.to_user_id != receiver) {
-        LOG_WARN("gateway rejected receiver delivery ack identity mismatch"
-                 << ", message_id=" << ack.message_id
-                 << ", delivery_seq=" << packet.seq
-                 << ", authenticated_receiver=" << receiver
-                 << ", persisted_receiver=" << message.to_user_id
-                 << ", sender=" << message.from_user_id);
-        return;
-    }
-
-    const ReceiverDeliveryAckStatus ack_status =
-        receiver_delivery_tracker_.Acknowledge(
-            ack.message_id, receiver, packet.seq);
-
     auto persist_receiver_confirmation = [&]() -> bool {
         rpc::ConfirmReceiverRpcRequest confirm_request;
         confirm_request.message_id = ack.message_id;
@@ -4509,13 +4480,17 @@ void GatewayServer::ExecuteReceiverChatDeliveryAck(
         return true;
     };
 
+    const auto result = ProcessPrivateReceiverAck(
+        receiver_delivery_tracker_, ack.message_id, receiver, packet.seq,
+        persist_receiver_confirmation);
+    const auto ack_status = result.status;
+
     if (ack_status == ReceiverDeliveryAckStatus::kConfirmed) {
-        const bool durable_confirmed = persist_receiver_confirmation();
+        const bool durable_confirmed = result.durable_confirmed;
         LOG_INFO("gateway receiver delivery ack confirmed"
                  << ", message_id=" << ack.message_id
                  << ", delivery_seq=" << packet.seq
                  << ", receiver=" << receiver
-                 << ", sender=" << message.from_user_id
                  << ", durable_confirmed=" << durable_confirmed);
         return;
     }
@@ -4523,7 +4498,7 @@ void GatewayServer::ExecuteReceiverChatDeliveryAck(
     if (ack_status == ReceiverDeliveryAckStatus::kDuplicate) {
         // Duplicate ACK is also a repair opportunity after an uncertain or
         // failed durable confirmation attempt.
-        const bool durable_repaired = persist_receiver_confirmation();
+        const bool durable_repaired = result.durable_confirmed;
         LOG_INFO("gateway ignored duplicate receiver delivery ack"
                  << ", message_id=" << ack.message_id
                  << ", delivery_seq=" << packet.seq
