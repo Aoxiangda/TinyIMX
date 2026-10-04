@@ -356,3 +356,9 @@
 - 旧worker登录失败只抛LOGIN_IDENTITY_OR_FAILURE，负ACK只计数，丢失reason/message；旧coordinator中途异常没有summary。原失败证据保留，补充工具不改变速率、截止时间或验收门槛。
 - 新worker仅在失败时追加allowlist响应字段至failure-responses.jsonl，最大512字节/字符串、合成密码脱敏，不保存原始body。新coordinator在owned workers退出后汇总部分认证数、全在线标记、原窗口与原因计数，明确中止不是容量通过。
 - 验证要求：真实合成错误密码必须产生失败原因；随后相同100用户/s条件重现30k登录问题。单独归档旧binary，单线程编译新测试binary；没有应用服务部署。结果另存，不修改旧FAIL。
+
+### REC-015：数据库/缓存连接槽位在失败重连后丢失
+
+- 源码Acquire弹出连接后，Ping和Connect都失败时直接返回空lease，unique_ptr销毁、AvailableCount永久减少而Size不变。MySQL/Redis均有该路径；重复瞬态故障可能耗尽所有槽位。MySQL Connect另有mysql_为空立即拒绝的前置条件，Close或失败Connect后无法再初始化。
+- 先新增显式opt-in组件探针，以真实MySQL/Redis连接经过自有loopback relay。故障仅关闭测试连接，执行SELECT1/PING、空事务，三个连续故障Acquire、恢复后无需重新Initialize及Shutdown持有lease不复活槽位。共享服务、业务行与其他应用不改变；真实密码配置仅在runtime-private，输出仅白名单测试标记。
+- 当前修复尚未应用，先保存原实现真实FAIL，再按独立审计修正并对照重验。正确性修复不自动代表容量或P99改善。
