@@ -5,9 +5,9 @@ cd /home/jackson7/projects/TinyIMX_publish
 python3 - <<'PY'
 import pathlib,json,hashlib,tarfile,datetime,subprocess
 r=pathlib.Path.cwd();base=r/'.local/codex';archive=base/'post-restart-evidence-v18.tar.gz';assert not archive.exists()
-names='''message-rpc-kernel-probe-source-20261005 message-rpc-kernel-probe-20261005'''.split()
+names='''message-rpc-kernel-probe-source-20261005 message-rpc-kernel-probe-20261005 message-rpc-kernel-probe-compile-failure-review-20261005 message-rpc-kernel-probe-alias-fix-source-20261005 message-rpc-kernel-probe-attempt2-20261005'''.split()
 assert len(names)==len(set(names))
-assert json.loads((base/'message-rpc-kernel-probe-20261005/summary.json').read_text())['status']=='MESSAGE_RPC_SYNTHETIC_COMPONENT_DIAGNOSTIC_COMPLETED'
+assert json.loads((base/'message-rpc-kernel-probe-attempt2-20261005/summary.json').read_text())['status']=='MESSAGE_RPC_SYNTHETIC_COMPONENT_DIAGNOSTIC_COMPLETED'
 secrets=set()
 def sensitive(k):return any(t in k.lower() for t in ['password','token','api_key','secret']) and not k.lower().endswith('_env')
 def walk(v,key=''):

@@ -168,3 +168,10 @@ MCP image bc85c186271873610ff759c008d5f36d49d1a9c331e064eb7fa1121d822485a3，编
 新组件诊断比较相同20ms受控等待/128B synthetic echo的direct6000次与真实gRPC6000次，各300/s20s；再仅父strace -c跟踪自己子进程1500次5s。CQ1/MIN1/MAX2匹配原默认，16驱动线程、3s每次RPC、35s各进程上限，所有计划请求不跳过。记录严格响应身份/内容/数量、迟发、各index对应的caller/handler wall及handler threadCPU/TID、rusage合计CPU与context-switch。只编译自己的文件和缓存proto/gRPC，排除全部其他TinyIMX实现archive和缓存MAX16 MessageServer；不构建正式目标或安装依赖。
 
 不访问SQL/Redis/鉴权/真实用户/AI，不包含receiver/wire/10k在线背景。synthetic成功不是durable ACK或容量接受。rusage包括caller和server，strace计数包括启动关闭、等待时间并受ptrace干扰；不能用模拟结果直接替代真实Message CPU或归因全部延迟。用未跟踪成对计时和CPU测增量，以跟踪计数检验创建机制，保留共享主机顺序对比限制。源码/审计先Git，当前未测量，所有19/config保持；只在cmdline/starttime/PGID匹配时清理自己的新进程组。旧完整19身份压测工具因MCP更新不能直接重放。准备阶段自动审查超时未创建生成器/包/候选源，核验后单次重试；不是安全拒绝，无生产动作。目标未达，继续测量再选择优化。
+
+
+### 2026-10-05：隔离RPC诊断首轮编译失败已保留，工具修正待测
+
+5cd8b4b20826c8eec4d80fdae8c5b590b19f917f 的新工具在编译阶段失败：匿名命名空间 pb 别名与当前 Protobuf extension_set.h 的全局 pb 冲突。compile.log SHA44c558e859759be3a0729352b870f2b244eea2b1a53006d0303979c5d5153ddc，没有link/测量/容量结果。原失败目录不修改，单独只读归类确认全部19/配置保持、自有probe未运行；不能把编译失败当业务延迟或根因证据。
+
+只把诊断别名改为 probe_message_proto 并全局限定协议命名空间；不修改任何生产实现。新attempt2目录/helper保留同样case和所有检查；编译/链接也使用自己的新进程组、180s期限和cmdline/starttime/PGID清理，INT/TERM/HUP已移至编译前，失败保存明确phase/exit/error及运行状态。全部原Git/日志/工具保留，v18尚未导出，将同时包含首轮失败、只读复核、两次源码迭代及attempt2完成结果。修正/审计先Git，当前尚未得到RPC增量测量；性能目标仍未达，继续测量。

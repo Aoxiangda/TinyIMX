@@ -20,7 +20,7 @@
 #include <unistd.h>
 
 namespace {
-namespace pb = tinyimx::message::v1;
+namespace probe_message_proto = ::tinyimx::message::v1;
 using Clock = std::chrono::steady_clock;
 using Json = nlohmann::json;
 constexpr int kWorkers = 16;
@@ -35,18 +35,18 @@ std::int64_t ThreadCpu() {
     return value.tv_sec * 1000000000LL + value.tv_nsec;
 }
 std::int64_t Micros(const timeval& value) { return value.tv_sec * 1000000LL + value.tv_usec; }
-class Service final : public pb::MessageService::Service {
+class Service final : public probe_message_proto::MessageService::Service {
 public:
     explicit Service(std::vector<Row>& rows) : rows_(rows) {}
     grpc::Status PersistPrivateMessage(grpc::ServerContext*,
-            const pb::PersistPrivateMessageRequest* request,
-            pb::PersistPrivateMessageResponse* response) override {
+            const probe_message_proto::PersistPrivateMessageRequest* request,
+            probe_message_proto::PersistPrivateMessageResponse* response) override {
         const auto started = Clock::now();
         const auto cpu = ThreadCpu();
         const auto index = std::stoull(request->client_message_id());
         if (index >= rows_.size()) return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "probe index");
         std::this_thread::sleep_for(std::chrono::milliseconds(kWaitMs));
-        response->set_result(pb::PERSIST_PRIVATE_MESSAGE_RESULT_CREATED);
+        response->set_result(probe_message_proto::PERSIST_PRIVATE_MESSAGE_RESULT_CREATED);
         response->set_message_id(index + 1);
         auto* record = response->mutable_record();
         record->set_message_id(index + 1);
@@ -55,7 +55,7 @@ public:
         record->set_to_user_id(request->to_user_id());
         record->set_message_type(request->message_type());
         record->set_content(request->content());
-        record->set_delivery_state(pb::MESSAGE_DELIVERY_STATE_PENDING);
+        record->set_delivery_state(probe_message_proto::MESSAGE_DELIVERY_STATE_PENDING);
         // These are synthetic fields, never a durable acceptance assertion.
         record->set_created_at("synthetic-probe");
         const auto end_cpu = ThreadCpu();
@@ -85,7 +85,7 @@ int main(int argc,char** argv) {
     if((mode!="direct"&&mode!="grpc")||rate<1||rate>500||seconds<1||seconds>20) return 2;
     const std::size_t count=static_cast<std::size_t>(rate)*seconds;
     std::vector<Row> rows(count);Service service(rows);std::unique_ptr<grpc::Server> server;
-    std::unique_ptr<pb::MessageService::Stub> stub;std::shared_ptr<grpc::Channel> channel;
+    std::unique_ptr<probe_message_proto::MessageService::Stub> stub;std::shared_ptr<grpc::Channel> channel;
     if(mode=="grpc") {
         grpc::ServerBuilder builder;int port=0;
         builder.AddListeningPort("127.0.0.1:0",grpc::InsecureServerCredentials(),&port);
@@ -96,7 +96,7 @@ int main(int argc,char** argv) {
         if(!server||port<=0) return 3;
         channel=grpc::CreateChannel("127.0.0.1:"+std::to_string(port),grpc::InsecureChannelCredentials());
         if(!channel->WaitForConnected(std::chrono::system_clock::now()+std::chrono::seconds(2))) return 4;
-        stub=pb::MessageService::NewStub(channel);
+        stub=probe_message_proto::MessageService::NewStub(channel);
     }
     std::atomic<std::size_t> next{0};std::atomic<int> exceptions{0};
     std::barrier ready(kWorkers+1);Clock::time_point origin;std::vector<std::thread> clients;
@@ -107,7 +107,7 @@ int main(int argc,char** argv) {
             try {
                 const auto due=origin+std::chrono::nanoseconds(index*1000000000LL/rate);
                 std::this_thread::sleep_until(due);
-                pb::PersistPrivateMessageRequest request;pb::PersistPrivateMessageResponse response;
+                probe_message_proto::PersistPrivateMessageRequest request;probe_message_proto::PersistPrivateMessageResponse response;
                 request.set_from_user_id(10001);request.set_to_user_id(10002);
                 request.set_client_message_id(std::to_string(index));request.set_message_type(1);request.set_content(std::string(128,'x'));
                 const auto started=Clock::now();rows[index].late_ns=std::max<std::int64_t>(0,std::chrono::duration_cast<std::chrono::nanoseconds>(started-due).count());
@@ -117,12 +117,12 @@ int main(int argc,char** argv) {
                     result=stub->PersistPrivateMessage(&context,request,&response);
                 } else result=service.PersistPrivateMessage(nullptr,&request,&response);
                 rows[index].caller_ns=std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now()-started).count();
-                rows[index].ok=result.ok()&&response.result()==pb::PERSIST_PRIVATE_MESSAGE_RESULT_CREATED&&
+                rows[index].ok=result.ok()&&response.result()==probe_message_proto::PERSIST_PRIVATE_MESSAGE_RESULT_CREATED&&
                     response.message_id()==index+1&&response.record().message_id()==index+1&&
                     response.record().client_message_id()==request.client_message_id()&&
                     response.record().from_user_id()==10001&&response.record().to_user_id()==10002&&
                     response.record().message_type()==1&&response.record().content()==request.content()&&
-                    response.record().delivery_state()==pb::MESSAGE_DELIVERY_STATE_PENDING;
+                    response.record().delivery_state()==probe_message_proto::MESSAGE_DELIVERY_STATE_PENDING;
             } catch(...) {++exceptions;}
         }
     });
