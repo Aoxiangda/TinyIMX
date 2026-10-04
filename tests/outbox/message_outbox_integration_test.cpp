@@ -206,9 +206,17 @@ void TestRecipientConfirmation(
     std::thread confirmer([&] { race_start.arrive_and_wait(); confirm_result = app.ConfirmReceiver(racing.message_id, kUserB); });
     std::thread reader([&] { race_start.arrive_and_wait(); read_result = app.MarkDialogRead(kUserB, kUserA); });
     confirmer.join(); reader.join();
+    // Read only advances status1. If it runs before Pending confirmation,
+    // status1 is the correct intermediate result; a later Read must reach2.
     Expect(racing.Accepted() && confirm_result.Succeeded() && read_result.Succeeded() &&
+               (state(racing.message_id, tinyimx::DeliveryStatus::kReceiverConfirmed) ||
+                state(racing.message_id, tinyimx::DeliveryStatus::kRead)),
+           "ReceiverConfirm concurrent Read retains original Pending ordering contract");
+    const auto later_read = app.MarkDialogRead(kUserB, kUserA);
+    const auto later_ack = app.ConfirmReceiver(racing.message_id, kUserB);
+    Expect(later_read.Succeeded() && later_ack.Succeeded() && later_ack.affected_rows == 0 &&
                state(racing.message_id, tinyimx::DeliveryStatus::kRead),
-           "ReceiverConfirm concurrent Read remains monotonic");
+           "ReceiverConfirm subsequent Read reaches2 and late ACK cannot downgrade");
     Expect(pool->AvailableCount() == pool->Size(), "ReceiverConfirm concurrent Read returns all slots");
 }
 

@@ -516,3 +516,9 @@
 - 按先分析后修正的顺序处理已确认冗余：原单条ConfirmReceiver先查完整消息并释放lease，再借/Ping第二个连接更新。新增recipient-aware port，兼容实现保留原校验，实际SQL adapter在同一lease内调用原完整OnConnection解析再条件更新，消除正常Pending路径一次Acquire/Ping。
 - 错误收件人、NotFound、Failed及非法状态拒绝；重复/Read返回零行成功。UPDATE额外绑定recipient且只允许status0，保留确认/Read竞争时状态不降级。没有新增长事务、改变持久性、跳过鉴权、提前ACK、改Gateway线程/队列或重写batch确认。底层StorageError仍经原RPC/ACK不确定写入语义处理。
 - 八文件白名单审计已保存，MySQL trace草稿排除。新增应用拒绝路径测试和真实独立MySQL pool1/pool4的错误收件人、确认/重复/Read/Failed/非法记录、并发确认及确认与Read竞争、所有租约归还检查。构建/隔离回归/业务性能此时NOT_RUN；当前Messageb24/Gateway1d8/16/pool16/013保持，不能宣称性能改善。
+
+### TEST-036：新增并发Read用例误解原状态转换
+
+- dc7083a候选构建125项相关检查PASS。第一次真实独立MySQL pool1回归46个PASS、1个实际断言FAIL和最终整体FAIL（脚本计数2FAIL）；pool4未执行。原日志/schema/audit保留，不部署、不压测。
+- 失败用例假定Pending确认与Read同时发生时最终必为Read。原MarkReadByDialogOnConnection明确只UPDATE status1；若Read先于确认则合法最终status1，属于新增用例契约错误。没有修改生产SQL来迎合测试。
+- 修正仅测试/文档三文件：并发后两操作成功且状态只能1或2；之后显式Read必须到2，晚到确认affected0且不降级。不会接受0/3或吞掉错误。重建测试后以新schema重跑pool1/pool4，保留原失败；Message候选二进制编译版本仍dc7083a，测试/编排Git单独记录。
