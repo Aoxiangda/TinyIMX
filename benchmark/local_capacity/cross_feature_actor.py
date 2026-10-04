@@ -221,7 +221,12 @@ class Run:
         mine = self.request(b, 'my-groups', 2047, {'limit': 100})
         self.check('joined-group-visible', any(x['group_id'] == gid for x in mine['groups']))
         self.group(a, 'group-role-admin', 2039, gid, target_user_id=b.uid, role='admin')
-        until = (datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=10)).strftime('%Y-%m-%d %H:%M:%S')
+        future = datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=10)
+        self.request(a, 'group-mute-invalid-time-rejected', 2041,
+                     {'client_operation_id': self.op(), 'group_id': gid, 'target_user_id': c.uid,
+                      'muted_until': future.strftime('%Y-%m-%d %H:%M:%S')},
+                     success=False, reason={'invalid_group_request'})
+        until = future.strftime('%Y-%m-%dT%H:%M:%S.000Z')
         self.group(a, 'group-mute', 2041, gid, target_user_id=c.uid, muted_until=until)
         denied = self.request(c, 'muted-group-send-denied', 2049, {'group_id': gid, 'client_message_id': self.prefix+'-muted', 'message_type': 1, 'content': text}, success=False)
         self.check('mute-negative-reason', 'mut' in str(denied.get('reason', '')).lower() or 'mut' in str(denied.get('message', '')).lower())

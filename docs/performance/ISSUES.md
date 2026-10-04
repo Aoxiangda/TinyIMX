@@ -312,3 +312,9 @@
 - `mixed10ka` 在全部10000用户在线、100私聊/s背景中完成17操作，好友双向关系与拒绝无关系、真实私聊M/from/to/text/wire、重复发送同M、SQL已确认全部通过，历史内容断言失败；原FAIL/响应/账本完整保留。
 - 真实history回包content为持久化JSON envelope `{from,text,to}` 字符串，Gateway源代码server_body.dump()存储并由history原样返回；首版测试误认为plain text。仅修正测试：按M找到唯一项，检查外层from/to/type/state，再JSON解码内容对三个字段精确比较。生产协议/存储代码不改动。
 - 重跑必须选新的非相邻、无既有关系/请求的测试对，不能覆盖已产生的首轮数据；新run保存新HEAD及原始失败。后台10k协调器与worker不修改，其启动时的源码身份保持可追溯。
+
+### TEST-008：群禁言公开UTC时间与SQL内部格式不同
+
+- `mixed10kb` 完成32操作；修正后的完整history内容、私聊已读SQL2和会话unread0、群创建幂等、加入/邀请、version更新、两页成员恰好4人、我的群及管理员设置均通过。群禁言的SQL-style输入被真实服务拒绝为invalid_group_request，整轮FAIL保留，文件/后续群操作没有标PASS。
+- GroupApplicationService.NormalizeMuteTimestamp及现有集成测试要求公开UTC格式 `YYYY-MM-DDTHH:MM:SS.000Z`，内部才规范化成SQL datetime。测试脚本现使用明确UTC毫秒格式，另外保留错误SQL-format输入必须拒绝的负向断言。业务服务没有修改。
+- 下一轮必须用fresh四账号519820/822/824/826；之前的好友/群历史保留，不自动清理或重置。链测试的逐操作样本仍不能代表P99容量指标。
