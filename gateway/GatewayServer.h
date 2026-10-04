@@ -457,7 +457,9 @@ private:
         * delivery_seq重复，
         * 参数非法。
         */
-        kTrackerRejected
+        kTrackerRejected,
+        kWaitingAck,
+        kWindowFull
     };
 
 

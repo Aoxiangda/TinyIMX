@@ -13,6 +13,133 @@ void
 RegisterReceiverDeliveryTrackerTests(
     TestRunner& runner
 ) {
+    runner.Add("ReceiverDeliveryTracker.WindowCountBytesAndAckRelease", []() {
+        ReceiverDeliveryTracker::WindowOptions limits;
+        limits.max_waiting_entries = 3;
+        limits.max_waiting_per_recipient = 2;
+        limits.max_waiting_bytes = 100;
+        limits.max_bytes_per_recipient = 60;
+        ReceiverDeliveryTracker tracker(10, limits);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(PrivateDeliveryIdentity(1, 10), 1, 30), ReceiverDeliveryRegisterStatus::kRegistered);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(PrivateDeliveryIdentity(2, 10), 2, 30), ReceiverDeliveryRegisterStatus::kRegistered);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(PrivateDeliveryIdentity(3, 10), 3, 1), ReceiverDeliveryRegisterStatus::kWindowFull);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(PrivateDeliveryIdentity(4, 20), 4, 40), ReceiverDeliveryRegisterStatus::kRegistered);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(PrivateDeliveryIdentity(5, 30), 5, 1), ReceiverDeliveryRegisterStatus::kWindowFull);
+        auto state = tracker.GetWindowStats();
+        TINYIMX_EXPECT_EQ(state.waiting_entries, static_cast<std::size_t>(3));
+        TINYIMX_EXPECT_EQ(state.waiting_bytes, static_cast<std::size_t>(100));
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(1, 10, 999), ReceiverDeliveryAckStatus::kUnknownAttempt);
+        TINYIMX_EXPECT_EQ(tracker.GetWindowStats().waiting_bytes, static_cast<std::size_t>(100));
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(1, 10, 1), ReceiverDeliveryAckStatus::kConfirmed);
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(1, 10, 1), ReceiverDeliveryAckStatus::kDuplicate);
+        TINYIMX_EXPECT_EQ(tracker.GetWindowStats().waiting_bytes, static_cast<std::size_t>(70));
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(PrivateDeliveryIdentity(5, 30), 5, 30), ReceiverDeliveryRegisterStatus::kRegistered);
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(2, 10, 2), ReceiverDeliveryAckStatus::kConfirmed);
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(4, 20, 4), ReceiverDeliveryAckStatus::kConfirmed);
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(5, 30, 5), ReceiverDeliveryAckStatus::kConfirmed);
+        state = tracker.GetWindowStats();
+        TINYIMX_EXPECT_EQ(state.waiting_entries, static_cast<std::size_t>(0));
+        TINYIMX_EXPECT_EQ(state.waiting_bytes, static_cast<std::size_t>(0));
+        TINYIMX_EXPECT_EQ(state.waiting_recipients, static_cast<std::size_t>(0));
+    });
+    runner.Add("ReceiverDeliveryTracker.WindowByteOverflowAndOversizeRejectBeforeMutation", []() {
+        ReceiverDeliveryTracker::WindowOptions limits;
+        limits.max_waiting_bytes = 100;
+        limits.max_bytes_per_recipient = 60;
+        ReceiverDeliveryTracker tracker(10, limits);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(PrivateDeliveryIdentity(1, 10), 1, 61), ReceiverDeliveryRegisterStatus::kWindowFull);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(PrivateDeliveryIdentity(2, 20), 2, static_cast<std::size_t>(-1)), ReceiverDeliveryRegisterStatus::kWindowFull);
+        TINYIMX_EXPECT_EQ(tracker.Size(), static_cast<std::size_t>(0));
+        TINYIMX_EXPECT_EQ(tracker.GetWindowStats().waiting_bytes, static_cast<std::size_t>(0));
+    });
+    runner.Add("ReceiverDeliveryTracker.WindowGrowthRejectionPreservesOldAttemptEvidence", []() {
+        ReceiverDeliveryTracker::WindowOptions limits;
+        limits.max_waiting_bytes = 100;
+        limits.max_bytes_per_recipient = 60;
+        ReceiverDeliveryTracker tracker(10, limits);
+        const auto id = PrivateDeliveryIdentity(1, 10);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(id, 1, 40), ReceiverDeliveryRegisterStatus::kRegistered);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(id, 2, 61), ReceiverDeliveryRegisterStatus::kWindowFull);
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(id, 2), ReceiverDeliveryAckStatus::kUnknownAttempt);
+        TINYIMX_EXPECT_EQ(tracker.GetWindowStats().attempt_sequences, static_cast<std::size_t>(1));
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(id, 3, 60), ReceiverDeliveryRegisterStatus::kRetryRegistered);
+        TINYIMX_EXPECT_EQ(tracker.GetWindowStats().waiting_bytes, static_cast<std::size_t>(60));
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(id, 1), ReceiverDeliveryAckStatus::kConfirmed);
+        TINYIMX_EXPECT_EQ(tracker.GetWindowStats().waiting_bytes, static_cast<std::size_t>(0));
+    });
+    runner.Add("ReceiverDeliveryTracker.WindowSharesRecipientQuotaAcrossPrivateAndGroup", []() {
+        ReceiverDeliveryTracker::WindowOptions limits;
+        limits.max_waiting_per_recipient = 2;
+        limits.max_waiting_bytes = 100;
+        limits.max_bytes_per_recipient = 60;
+        ReceiverDeliveryTracker tracker(10, limits);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(PrivateDeliveryIdentity(1, 10), 1, 30), ReceiverDeliveryRegisterStatus::kRegistered);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(GroupDeliveryIdentity(1, 10), 2, 20), ReceiverDeliveryRegisterStatus::kRegistered);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(GroupDeliveryIdentity(2, 10), 3, 1), ReceiverDeliveryRegisterStatus::kWindowFull);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(GroupDeliveryIdentity(1, 20), 4, 25), ReceiverDeliveryRegisterStatus::kRegistered);
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(GroupDeliveryIdentity(1, 10), 2), ReceiverDeliveryAckStatus::kConfirmed);
+        TINYIMX_EXPECT_EQ(tracker.GetWindowStats().waiting_bytes, static_cast<std::size_t>(55));
+        TINYIMX_EXPECT_EQ(tracker.GetWindowStats().waiting_entries, static_cast<std::size_t>(2));
+    });
+    runner.Add("ReceiverDeliveryTracker.RecoveryCooldownAndBoundedKnownDRetransmission", []() {
+        ReceiverDeliveryTracker::WindowOptions limits;
+        limits.max_attempt_sequences = 2;
+        ReceiverDeliveryTracker tracker(10, limits);
+        const auto id = PrivateDeliveryIdentity(1, 10);
+        const auto now = ReceiverDeliveryTracker::Clock::now();
+        const auto first = tracker.RegisterReplayAttempt(id, 1, 20, now);
+        TINYIMX_EXPECT_EQ(first.status, ReceiverDeliveryRegisterStatus::kRegistered);
+        TINYIMX_EXPECT_EQ(tracker.RegisterReplayAttempt(id, 2, 20, now + std::chrono::seconds(1)).status,
+                          ReceiverDeliveryRegisterStatus::kWaitingAck);
+        const auto retry = tracker.RegisterReplayAttempt(id, 2, 20, now + std::chrono::seconds(6));
+        TINYIMX_EXPECT_EQ(retry.status, ReceiverDeliveryRegisterStatus::kRetryRegistered);
+        for (int i = 2; i < 100; ++i) {
+            const auto retransmission = tracker.RegisterReplayAttempt(id, static_cast<std::uint32_t>(i + 1), 20,
+                now + std::chrono::seconds(i * 6));
+            TINYIMX_EXPECT_EQ(retransmission.status, ReceiverDeliveryRegisterStatus::kRetryRegistered);
+            TINYIMX_EXPECT_TRUE(retransmission.reused_attempt);
+            TINYIMX_EXPECT_EQ(retransmission.delivery_seq, static_cast<std::uint32_t>(2));
+        }
+        TINYIMX_EXPECT_EQ(tracker.GetWindowStats().attempt_sequences, static_cast<std::size_t>(2));
+        TINYIMX_EXPECT_EQ(tracker.GetWindowStats().waiting_bytes, static_cast<std::size_t>(20));
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(id, 1), ReceiverDeliveryAckStatus::kConfirmed);
+        TINYIMX_EXPECT_EQ(tracker.GetWindowStats().waiting_entries, static_cast<std::size_t>(0));
+        TINYIMX_EXPECT_EQ(tracker.RegisterReplayAttempt(id, 999, 20, now + std::chrono::hours(1)).status,
+                          ReceiverDeliveryRegisterStatus::kAlreadyConfirmed);
+    });
+    runner.Add("ReceiverDeliveryTracker.RetryEvidenceCapPreservesEarliestLateAck", []() {
+        ReceiverDeliveryTracker::WindowOptions limits;
+        limits.max_attempt_sequences = 2;
+        ReceiverDeliveryTracker tracker(1, limits);
+        const auto id = PrivateDeliveryIdentity(1, 10);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(id, 1, 10), ReceiverDeliveryRegisterStatus::kRegistered);
+        TINYIMX_EXPECT_EQ(tracker.RegisterRetryAttempt(id, 1, 2, 1000), ReceiverDeliveryRetryRegisterStatus::kRetryRegistered);
+        TINYIMX_EXPECT_EQ(tracker.RegisterRetryAttempt(id, 2, 3, 1000), ReceiverDeliveryRetryRegisterStatus::kAttemptLimitReached);
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(id, 1), ReceiverDeliveryAckStatus::kConfirmed);
+        TINYIMX_EXPECT_EQ(tracker.RegisterAttempt(PrivateDeliveryIdentity(2, 20), 4, 10), ReceiverDeliveryRegisterStatus::kRegistered);
+        TINYIMX_EXPECT_EQ(tracker.Acknowledge(2, 20, 4), ReceiverDeliveryAckStatus::kConfirmed);
+        TINYIMX_EXPECT_EQ(tracker.GetWindowStats().attempt_sequences, static_cast<std::size_t>(1));
+    });
+    runner.Add("ReceiverDeliveryTracker.ConcurrentWindowAdmissionCannotExceedCapacity", []() {
+        ReceiverDeliveryTracker::WindowOptions limits;
+        limits.max_waiting_entries = 2;
+        limits.max_waiting_per_recipient = 2;
+        limits.max_waiting_bytes = 2;
+        limits.max_bytes_per_recipient = 2;
+        ReceiverDeliveryTracker tracker(10, limits);
+        std::atomic<int> accepted{0}, blocked{0};
+        std::vector<std::thread> threads;
+        for (std::uint64_t m = 1; m <= 16; ++m) threads.emplace_back([&, m] {
+            const auto status = tracker.RegisterAttempt(PrivateDeliveryIdentity(m, 10), static_cast<std::uint32_t>(m), 1);
+            if (status == ReceiverDeliveryRegisterStatus::kRegistered) ++accepted;
+            if (status == ReceiverDeliveryRegisterStatus::kWindowFull) ++blocked;
+        });
+        for (auto& thread : threads) thread.join();
+        TINYIMX_EXPECT_EQ(accepted.load(), 2);
+        TINYIMX_EXPECT_EQ(blocked.load(), 14);
+        TINYIMX_EXPECT_EQ(tracker.GetWindowStats().waiting_entries, static_cast<std::size_t>(2));
+        TINYIMX_EXPECT_EQ(tracker.GetWindowStats().waiting_bytes, static_cast<std::size_t>(2));
+    });
     runner.Add("ReceiverDeliveryTracker.PrivateIndexEvictionAndGroupNamespace", []() {
         ReceiverDeliveryTracker tracker(1);
         const auto group = GroupDeliveryIdentity(4001, 77);

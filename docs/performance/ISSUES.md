@@ -125,7 +125,17 @@
 - 责任边界：元数据不是持久事实源；SQL Pending 保留恢复依据。新 epoch 和 Stop/Resume 世代拒绝旧查询/旧游标完成，断连仅退役匹配 epoch。查询 worker 不捕获 Gateway 或 Session，事件线程仅 bookkeeping 和非阻塞 Submit。
 - 验证计划：单 flight 并发、拒绝与任务析构、错误页、游标循环和迟到提交、旧会话 fencing、状态容量、退出世代，另编译 Gateway 并保留原回归。
 - 启用边界：源码接线暂设 `enable_durable_private_recovery=false`，等待未确认/字节/重试窗口及真实恢复验证后统一启用；没有部署容器，没有新增全功能或规模 PASS。
-- 状态：候选，真实自动交付仍待验证。
+- 验证：提交 `20ab7a1` 的调度组件 36、Gateway 41、R1 15 项全部通过（合计 92），`gateway_demo` 实际编译链接成功。证据在 `.local/codex/durable-scheduler-20261004/`。
+- 状态：组件与默认关闭的接线已验证，真实自动交付仍待验证。
+
+### REL-005：未确认数量、正文保留和尝试序号缺少完整窗口
+
+- 审计候选：跟踪器限制 waiting 总数 200,000、每接收者 64、wire-byte 总额 256MiB、每接收者 1MiB。私聊与群聊共享接收者资源额度但保持业务身份命名空间独立。只有合法真实 ACK 释放等待窗口；重复 ACK 不重复释放，拒绝入队不抹去原证据或 SQL Pending。
+- 重试证据：每身份最多保留 64 个 D 序号。持续恢复重发间隔至少 5 秒；达到序号证据上限后重传当前已知 D，不新建 M、不增长序号集合，并保留最早真实迟到 ACK 的效力。原 timeout 主动重试上限仍为 3。
+- 启用控制：`gateway_demo` 支持显式环境开关 `TINYIMX_DURABLE_PRIVATE_RECOVERY_ENABLE=0/1`，源码默认仍关闭，供隔离 E2E  opt-in；生产容器尚未变动。discovery request/trace ID 改为每次查询唯一，避免周期回绕造成观测混淆。
+- 验证计划：数量/字节额度、溢出、ACK 释放、增量 reservation 拒绝不改变旧尝试、跨域共享额度、并发接纳、重试证据上限/已知 D 重传及最早 ACK；再执行 Gateway、R1、调度组件和实际 Gateway 构建。
+- 实际内存快照：04:48 UTC，guest 可用约 7,666MiB、PSI 平均为 0、短时 si/so 为 0；host 可用约 1.33GiB，压力实验前需持续采样。没有清缓存、切 swap、终止用户应用。旧 bundle/image 脚本含删除目录及 swap reset，未直接调用。
+- 状态：候选，尚待构建、真实恢复和负载验证；这些窗口值是当前控制参数，不是已证明的容量上限。
 
 - 源码证据：`benchmark/local_capacity/capacity_worker.cpp` 的 mode 校验只有 hold/private；group delivery 的计数名称明确标注不是 group test。
 - 含义：它可作为连接和私聊的规模证据基础，不能作为群管理、File、AI/MCP 或全部交叉功能的规模验收工具。

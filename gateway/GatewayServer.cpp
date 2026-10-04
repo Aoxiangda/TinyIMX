@@ -2461,7 +2461,7 @@ SubmitReceiverChatDelivery(
     }
 
 
-    const std::string bytes =
+    std::string bytes =
         output.RetrieveAllAsString();
 
 
@@ -2492,15 +2492,32 @@ SubmitReceiverChatDelivery(
      * Gateway可能先处理ACK、
      * 后登记Attempt。
      */
-    const
-        ReceiverDeliveryRegisterStatus
-        register_status =
-            receiver_delivery_tracker_.
-                RegisterAttempt(
-                    message_id,
-                    to_user_id,
-                    delivery_packet.seq
-                );
+    ReceiverDeliveryTracker::ReplayRegistration registration;
+    const auto identity = PrivateDeliveryIdentity(message_id, to_user_id);
+    if (options_.enable_durable_private_recovery) {
+        registration = receiver_delivery_tracker_.RegisterReplayAttempt(identity, delivery_packet.seq, bytes.size());
+    } else {
+        registration.status = receiver_delivery_tracker_.RegisterAttempt(identity, delivery_packet.seq, bytes.size());
+        registration.delivery_seq = delivery_packet.seq;
+    }
+    const auto register_status = registration.status;
+    if (register_status == ReceiverDeliveryRegisterStatus::kWaitingAck) {
+        set_error("existing receiver attempt still waiting for ACK");
+        return ReceiverDeliverySubmitStatus::kWaitingAck;
+    }
+    if (register_status == ReceiverDeliveryRegisterStatus::kWindowFull) {
+        set_error("receiver delivery resource window is full; durable Pending retained");
+        return ReceiverDeliverySubmitStatus::kWindowFull;
+    }
+    if (registration.reused_attempt) {
+        delivery_packet.seq = registration.delivery_seq;
+        Buffer retransmission;
+        if (!codec_.Encode(delivery_packet, &retransmission, &encode_error)) {
+            set_error(encode_error);
+            return ReceiverDeliverySubmitStatus::kEncodeFailed;
+        }
+        bytes = retransmission.RetrieveAllAsString();
+    }
 
 
     if (
@@ -3705,8 +3722,30 @@ GatewayServer::ReceiverDeliverySubmitStatus GatewayServer::SubmitGroupMessageDel
 
     const DeliveryIdentity identity = GroupDeliveryIdentity(
         work.message.message_id, work.delivery.recipient_user_id);
-    const auto registered = receiver_delivery_tracker_.RegisterAttempt(
-        identity, packet.seq);
+    ReceiverDeliveryTracker::ReplayRegistration registration;
+    if (options_.enable_durable_private_recovery) {
+        registration = receiver_delivery_tracker_.RegisterReplayAttempt(identity, packet.seq, output.ReadableBytes());
+    } else {
+        registration.status = receiver_delivery_tracker_.RegisterAttempt(identity, packet.seq, output.ReadableBytes());
+        registration.delivery_seq = packet.seq;
+    }
+    const auto registered = registration.status;
+    if (registered == ReceiverDeliveryRegisterStatus::kWaitingAck) {
+        set_error("existing group attempt still waiting for ACK");
+        return ReceiverDeliverySubmitStatus::kWaitingAck;
+    }
+    if (registered == ReceiverDeliveryRegisterStatus::kWindowFull) {
+        set_error("group receiver delivery resource window is full");
+        return ReceiverDeliverySubmitStatus::kWindowFull;
+    }
+    if (registration.reused_attempt) {
+        packet.seq = registration.delivery_seq;
+        output.RetrieveAll();
+        if (!codec_.Encode(packet, &output, &encode_error)) {
+            set_error(encode_error);
+            return ReceiverDeliverySubmitStatus::kEncodeFailed;
+        }
+    }
     if (registered == ReceiverDeliveryRegisterStatus::kAlreadyConfirmed) {
         set_error("group delivery already receiver-confirmed");
         return ReceiverDeliverySubmitStatus::kAlreadyConfirmed;
@@ -12007,11 +12046,13 @@ void GatewayServer::PumpPrivateReplayAdmission() {
     // owns only a shared coordinator lease; it never captures Gateway/Session.
     auto* client = message_rpc_client_;
     const auto gateway_id = options_.gateway_id;
-    task.work = [client, recovery, attempt, gateway_id](const BusinessExecutor::ExecutionContext& context)
+    const auto query_id = next_internal_rpc_id_.fetch_add(1, std::memory_order_relaxed);
+    task.work = [client, attempt, gateway_id, query_id](const BusinessExecutor::ExecutionContext& context)
         -> BusinessExecutor::Completion {
         if (context.CancellationRequested() || context.DeadlineExpired()) return {};
         rpc::RpcCallOptions options;
-        options.request_id = gateway_id + ":durable-discovery:" + std::to_string(attempt->Cursor());
+        options.request_id = gateway_id + ":durable-discovery:" + std::to_string(query_id);
+        options.trace_id = options.request_id + ":trace";
         options.caller_service = "gateway";
         options.caller_instance = gateway_id;
         options.remaining_timeout = context.Request().RemainingTime();
@@ -12408,6 +12449,13 @@ void GatewayServer::ExecutePersistentOfflineReplay(
                          << ", message_id=" << message.message_id
                          << ", delivery_seq=" << submitted_packet.seq
                          << ", page_index=" << page_index);
+                continue;
+            }
+
+            if (submit_status == ReceiverDeliverySubmitStatus::kWaitingAck ||
+                submit_status == ReceiverDeliverySubmitStatus::kWindowFull) {
+                // Bounded admission is not a durable delivery failure. Move
+                // scan progress fairly; a later cycle retries these SQL rows.
                 continue;
             }
 

@@ -115,6 +115,15 @@ int main(int argc, char* argv[]) {
         options.close_on_decode_error = true;
         options.io_thread_count = static_cast<std::size_t>(config.Server().io_thread_count);
         options.listen_backlog = config.Server().backlog;
+        if (const auto* value = std::getenv("TINYIMX_DURABLE_PRIVATE_RECOVERY_ENABLE")) {
+            const std::string flag(value);
+            if (flag != "0" && flag != "1") {
+                LOG_ERROR("TINYIMX_DURABLE_PRIVATE_RECOVERY_ENABLE must be 0 or 1");
+                tinyimx::Logger::Instance().Shutdown();
+                return 1;
+            }
+            options.enable_durable_private_recovery = flag == "1";
+        }
 
         /*
         * ============================================================
