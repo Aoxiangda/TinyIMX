@@ -1,5 +1,9 @@
 # 先分析、再修正、最后验证：性能根因复盘（2026-10-05）
 
+最新完成补充：374f280认证诊断通过36检查（计时16、User应用6、真实gRPC关7/开7），User-only1ff078镜像仅增加一个诊断开关，其他18/config保持。auth10kdiag在原100用户/s爬坡和3s期限下10000全部登录，hold30s/61440心跳全部响应，登录完整总体P9986.5ms、均35.3858ms，无断连。402同uid/TID/时间包含的成对样本：仓储wall20.3534ms/CPU13.7974ms，查库2.1142/0.4974ms，密码18.0865/13.2046ms；handlerwall20.6654/CPU13.9881，额外wall0.312/CPU0.191ms。采样为uid%16且日志限速，以上不能当总体P99或与全客户端均值相减测transport。本轮没有复现原秒级认证失败，也没有证实诊断代码改善性能；原失败保持未解释的瞬时排队问题，未删改或放宽门槛。
+
+诊断User已恢复原38dca镜像和ae1b6f二进制，原环境键和值完全一致、诊断开关移除，其他18/所有配置保持。回滚脚本按ENV数组顺序比较而误报AssertionError，独立只读post-review确认仅排列不同，没有再次重启。资源31点cgroupCPU有效，20个完整爬坡间隔User均1.5932核、GWs各0.4902/0.4899核，guest平均busy82.5%、memory最低8494776KiB，未观测服务自身throttle；maxcapture17.431ms。原线程计数来自Docker initPID，仅适用于init，不能作为业务线程数；另存复核确认当前实际child31/57/57线程（这是回滚后快照，不代表此前诊断窗口）。实际认证SYS_gettid402样本326不同TID可用，但不据此盲目再次加poller。完整直方图桶已向上取整，旧复核多加0.1ms；保留旧复核并另存准确值：sw92.1、mp89.7、io失败子集2627.5ms。v14待导出，以上所有阶段/失败/工具源版本均保存。下一步恢复原运行版本后采集尚未成功取得的存储窗口增量，groupcommit保持0。
+
 最新状态补充：原版本 I/O 基线 io150base 在登录阶段中止，未进入有效负载窗口，不能计算文件/fsync/digest 增量，也未改变 groupcommit 设置。1222 连接、1023 成功认证、一个真实 business_deadline_exceeded；成功子集登录均886.673ms、P99上界2627.6ms，而前两轮完整10k均约33–34ms、P99约90–92ms。原始失败、observer-error 和只读复核均保留。实际33fc编译Gateway在 ExecuteTask 开始前判断原3s期限，过期后派发该负响应，证明至少一条任务排队过期；不能据此断定密码计算或主机应用是唯一原因。源码数据库连接在 FindByUsername 返回时释放，Redis Ping已在池锁外，均不是新修复。
 
 下一阶段只增加默认关闭的认证数字分段诊断：查库、PBKDF2和UserService方法的wall/threadCPU，保留KDF100000及所有鉴权/状态/期限语义。User handler计时不含gRPC入口前等待或返回后transport，wall-minus-CPU仍不能单独判I/O或调度。成功uid%16为非随机样本，repo+handler共用8/秒bucket日志上限，只有同uid/TID/包含时间区间的样本才可配对。此次源码/测试/审计与失败证据先保存Git，构建/部署/测量此时未运行；运行Gateway1d8、Messageb24、User38dca及SQL设置保持。以下“最新迭代”是先前阶段历史记录，不代表I/O基线尚未尝试。

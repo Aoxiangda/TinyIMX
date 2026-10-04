@@ -557,3 +557,13 @@
 - 实际编译33fc Gateway ExecuteTask在work开始前判断原deadline，调用DispatchDeadlineTerminal；连接失效分支直接取消，并不发该负响应。至少一条等待任务在开始前已经过期。原DrainStripe持续处理同stripe直到清空，存在慢服务下冷stripe公平性风险；此前全局fair候选性能未接受，不能直接重启未接受的源码或宣称已解决认证问题。
 - 新增默认OFF TINYIMX_AUTH_PHASE_TRACE_ENABLE：UserRepository实际FindByUsername和PasswordHasher调用的wall/threadCPU、UserService Authenticate方法总wall/threadCPU，数字uid/tid/status/outcome，成功uid%16采样，repo+handler组合日志每second bucket上限8。KDF100000、常量时间比较、授权结果、原截止时间、SQL连接生命周期、best-effort last_login保持。方法计时不包含gRPC入口前排队/返回transport；采样非随机且会受日志限速，需要时间/TID/uid配对，不相减不同总体均值冒充RPC开销。
 - 11路径白名单审计保存beforeSHA/新路径不存在、风险/回滚。计时回归验证禁用零clock/sink、move-only/返回值/异常保持、CPU不可用-1、状态及成功/失败采样、重复阶段累加和日志桶边界；原User应用及真实gRPC回归后才允许单独封装User诊断镜像。此阶段构建/部署/受控测量NOT_RUN；当前19容器/配置保持，无全局SQL设置变更、无用户应用停止、无数据删除。
+
+### PERF-041：认证分段实测完成，原瞬时失败没有复现
+
+- 374f280构建36检查PASS：auth计时16、User应用6、真实gRPC关闭7/开启7。编译User二进制SHA62d2e300e366255e57d5ebade869f5cc556450372adf284e15c3ac8ea70b64a9，诊断镜像1ff078；原运行二进制ae1b6f和38dca未标编译Git，因此不虚构其编译版本。仅User新增TINYIMX_AUTH_PHASE_TRACE_ENABLE=1，其他18/config/SQL1/1/1/0/0保持。诊断ON不是优化部署或全功能接受。
+- auth10kdiag原100用户/s登录、原3s期限，10000/10000成功，30s hold、61440/61440HB、无断连，无业务发送。完整登录均35.3858ms、P50为32.1、P95为61.5、P99为86.5/max151.433ms。客户端完整直方图和失败仍分开报告，这一轮不是私聊/群聊/文件/AI容量。
+- 804数字记录包括402仓储和402handler，全部严格同uid/TID/time包含配对，0歧义。仓储wall均20.3534/CPU13.7974ms，查库wall2.1142/CPU0.4974，密码wall18.0865/CPU13.2046；handlerwall20.6654/CPU13.9881，配对额外wall0.312/CPU0.191。成功样本非随机且限速，phase采样分位不能替代完整客户端分位。认证CPU确有密码成本，但该正常窗口并未支持lookup/metadata作为秒级延迟主因。原io150base排队过期未复现，不能宣称已经修复或归功于新增诊断。
+- 31资源快照maxcapture17.431ms，最低guest内存8494776KiB；20完整爬坡间隔guestbusy均82.5%，User均1.5932核、GWs各0.4902/0.4899核，自身throttle计数增量0。服务cgroup覆盖init和childCPU，计数有效；原threads=1来自DockerStatePid的docker-init而非业务进程，另存INIT_THREAD_COUNTS_CORRECTED_REVIEW明确无效server标记。当前回滚后真实child31/57/57线程，只是当前快照，不能补造历史线程数。402认证实际SYS_gettid样本326不同TID可用，但线程复用候选此前未证实消息收益，不盲目推广。
+- 已恢复原User38dca/ae1b6f、原环境键值/command/health，移除诊断flag；其他18及全部配置SHA保持。首次回滚验证使用ENV数组顺序，实际值全相同但排列不同，产生AssertionError；失败stage/log原样保留，新只读review按无重复key的映射逐值核验PASS，无再次重建。未来环境核验比较键值，不以列表顺序作为语义。
+- 旧loginreview又给已ceil100us桶加一次step，P50/P95/P99偏高0.1ms；原raw/旧review保留，新分析准确上界sw92.1/mp89.7/io失败子集2627.5/auth86.5。镜像辅助脚本生成时相关旧MySQL gate替换失败，守卫阻止写脚本/构建/部署，另存本地failure审计后以User36实际回归门禁创建正确helper。自动权限审核曾超时未执行归档准备；一次重试成功，没有安全拒绝或项目修改。
+- 15路径文档及实际历史helper保存Git；v14将同时保留原26308源码记录、登录abort、36回归、诊断/完整hold/成对样本、回滚失败及独立复核，不覆盖v1-v13。当前所有功能10k-50k极致性能尚未实现，SQLgroupcommit仍0；下一步只采集原版尚未取得的有效存储窗口计数。
