@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import signal
 import socket
 import struct
@@ -152,7 +153,8 @@ class Client:
         self.buffer, self.packets = bytearray(), []
         self.send(1001, {'username': username, 'password': password})
         _, _, body = self.wait(1002, seconds=10)
-        assert body.get('success') is True and int(body['user_id']) == uid, 'Fixture login failed'
+        assert body.get('success') is True and int(body['user_id']) == uid, \
+            f'Fixture login failed: {body.get("reason", "identity mismatch")}'
         self.emit('login', user_id=uid, success=True)
 
     def send(self, kind, body, seq=None):
@@ -259,11 +261,18 @@ def main():
         msg = json.loads((config_root / 'message.json').read_text())
         ips = {name: command(['docker', 'inspect', '--format', '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}',
                              'tinyimx-m21-' + name + '-1']) for name in ['mysql', 'user-service', 'social-service', 'group-service', 'file-service']}
+        targets = {}
+        for name in ['user-service', 'social-service', 'group-service', 'file-service']:
+            cmd = json.loads(command(['docker', 'inspect', '--format', '{{json .Config.Cmd}}', 'tinyimx-m21-' + name + '-1']))
+            ports_found = [int(m.group(1)) for arg in cmd if (m := re.fullmatch(r'[0-9.]+:([0-9]{1,5})', arg))]
+            assert len(ports_found) == 1 and 0 < ports_found[0] <= 65535, f'Cannot determine actual {name} listen port'
+            targets[name] = (ips[name], ports_found[0])
+            wait_port(*targets[name], seconds=3)
         redis_image = command(['docker', 'inspect', '--format', '{{.Image}}', 'tinyimx-m21-redis-1'])
         ports = {name: free_port() for name in ['redis', 'source', 'receiver', 'message', 'message-gate']}
         assert len(set(ports.values())) == len(ports), 'Port collision; retry with a fresh experiment'
         save('audit-before.json', {'timestamp_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            'operation': 'Isolated live durable recovery', 'source_commit': state['source_commit'], 'ports': ports,
+            'operation': 'Isolated live durable recovery', 'source_commit': state['source_commit'], 'ports': ports, 'existing_rpc_targets': targets,
             'owned_redis': redis_name, 'redis_image': redis_image, 'redis_memory_limit_mib': 64,
             'planned_processes': ['source gateway (and restart)', 'receiver gateway', 'MessageService (and restart)'],
             'faults': ['SIGKILL owned source', 'SIGTERM/restart owned MessageService', 'hold only test peer/RPC streams'],
@@ -281,10 +290,10 @@ def main():
                  '-p', f'127.0.0.1:{ports["redis"]}:6379', redis_image, 'redis-server', '--save', '', '--appendonly', 'no'])
         redis_created = True
         wait_port('127.0.0.1', ports['redis'])
-        env = {'TINYIMX_USER_RPC_TARGET': ips['user-service'] + ':50051',
-               'TINYIMX_SOCIAL_RPC_TARGET': ips['social-service'] + ':50052',
-               'TINYIMX_GROUP_RPC_TARGET': ips['group-service'] + ':50054',
-               'TINYIMX_FILE_RPC_TARGET': ips['file-service'] + ':50055',
+        env = {'TINYIMX_USER_RPC_TARGET': '%s:%d' % targets['user-service'],
+               'TINYIMX_SOCIAL_RPC_TARGET': '%s:%d' % targets['social-service'],
+               'TINYIMX_GROUP_RPC_TARGET': '%s:%d' % targets['group-service'],
+               'TINYIMX_FILE_RPC_TARGET': '%s:%d' % targets['file-service'],
                'TINYIMX_DURABLE_PRIVATE_RECOVERY_ENABLE': '1'}
         for c in [base, msg]:
             c['service_discovery']['provider'] = 'static'
