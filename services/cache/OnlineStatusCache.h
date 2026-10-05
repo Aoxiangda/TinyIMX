@@ -56,7 +56,8 @@ struct GetOnlineStatusResult {
 enum class SetOnlineStatus {
     kStored = 0,
     kInvalidArgument,
-    kRedisError
+    kRedisError,
+    kAlreadyExists
 };
 
 struct SetOnlineResult {
@@ -151,6 +152,15 @@ public:
     ) = delete;
 
     SetOnlineResult SetOnline(
+        std::uint64_t user_id,
+        const std::string& gateway_id,
+        const std::string& connection_name,
+        int ttl_seconds
+    );
+
+    // Self-heal missing presence only. Any existing value and TTL survive,
+    // including a competing owner or an invalid record. Login uses SetOnline.
+    SetOnlineResult SetOnlineIfMissing(
         std::uint64_t user_id,
         const std::string& gateway_id,
         const std::string& connection_name,

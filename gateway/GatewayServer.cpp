@@ -16,6 +16,7 @@
 #include "common/protocol/GatewayGroupPeerProtocol.h"
 #include "common/protocol/GroupMessageDeliveryProtocol.h"
 #include "gateway/DeliveryIdentity.h"
+#include "gateway/PresenceOrderingKey.h"
 #include "gateway/PrivateReceiverAck.h"
 #include "gateway/GatewayPeerTransportManager.h"
 #include "common/protocol/ClientChatProtocol.h"
@@ -3394,6 +3395,9 @@ void GatewayServer::HandleConnection(
 
         task.request.session_epoch =
             unbind_result.epoch;
+
+        task.request.ordering_key =
+            PresenceUserOrderingKey(unbind_result.user_id);
 
         /*
          * Session已经解绑，cleanup正是因为ownership结束才需要执行。
@@ -11747,7 +11751,7 @@ void GatewayServer::HandleHeartbeat(
             "gateway.presence.refresh",
             BusinessCancellationPolicy::
                 kCancelable,
-            std::nullopt,
+            PresenceUserOrderingKey(user_id),
             [
                 this,
                 user_id,
@@ -11951,13 +11955,26 @@ void GatewayServer::RefreshUserOnlineIfMatch(
                 connection
             )) {
             LOG_WARN(
-                "gateway restoring missing online status"
+                "gateway attempting missing online status restore"
                 << ", user_id=" << user_id
                 << ", gateway_id=" << options_.gateway_id
                 << ", connection=" << connection->Name()
             );
 
-            SetUserOnline(user_id, connection);
+            // Shared user ordering places old-session restoration before its
+            // must-run cleanup, or cancels a queued stale restoration. Redis
+            // NX separately preserves any concurrently installed remote owner.
+            const auto restore = online_status_cache_->SetOnlineIfMissing(
+                user_id, options_.gateway_id, connection->Name(),
+                options_.online_status_ttl_seconds
+            );
+            if (!restore.Succeeded() &&
+                restore.status != SetOnlineStatus::kAlreadyExists) {
+                LOG_WARN("gateway missing online status restore failed"
+                    << ", user_id=" << user_id
+                    << ", status=" << SetOnlineStatusToString(restore.status)
+                    << ", error=" << restore.error_message);
+            }
         }
 
         return;

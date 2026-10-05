@@ -783,3 +783,14 @@ f036ee5 `redis-command-timeout-original-probe-20261005`实际完成：AUTH/SELEC
 本次仅新增诊断，使用已350验证的actualcacheAPI.o与finiteidleConnection.o，objects SHA冻结、cache/header source与编译输入SHA核对，原SDK/cachedELF不覆盖。独立namespace codex:online-restore-interleave-probe-20261005:60001..60004四个全新自有键，TTLs120/300。四个确定性交叉case：缺失直接恢复control；localcheck后remote owner先SetOnline、旧SetOnline再写；localcheck后模拟unbind/current=false及ownmissingOfflineCleanup、旧SetOnline再写；原restore先写remote再写的反序control。Expectedred两窗口、healthy两控制，逐个记录typed结果/完整自有record/操作顺序；明确local-current是模型boolean，不操作或声称验证真实TCP/Gateway会话、不估计线上竞态频率或性能。ownSetOfflineIfMatch只对原missing夹具返回NotFound，不执行删除；没有生产key/直接DEL/FLUSH/CONFIG/SQL/login/服务修改。
 
 执行前结果明确NOT_RUN。若复现，应单独审计missing-only原子Lua避免覆盖并发新owner，且给恢复与下线设置共同的user ordering/fence，保留oldconn/epoch取消和kMustRun清理；单独SETNX不能解决“cleanup之后旧恢复重新创建”的本地生命周期窗口。异步刷新不得在独立batch线程直接blind自恢复，应把恢复交回有会话取消和用户排序的presence域，再验证断线/替换/重连/队列deadline/shutdown计数。后续有界input/ready/maxoutstanding/worker collector和即时Pong仍未实现，没有极致全功能性能验收。生产仍GWs33fc/1d8、Message原ddc/b24/c119、User38、MCPbc85，所有apps/game/Python保持，无资源清理或VM/security/NIC修改。继续按证据迭代。
+
+
+### 2026-10-05：缺失presence恢复保留新owner，刷新与下线共享用户排序
+
+648ca58 actualcacheAPI窗口诊断四个自有键：正常恢复与反序remote写两控制正确；remote先写/oldrestore后写覆盖新owner、cleanup先结束/oldrestore后写重建旧记录两原问题确定性复现。local-current是明确模型布尔量，未验证真实Gateway/TCP频率。v28冻结28文件/29条目 SHAbf1f42fabdfd3773a82bf3093caaaf1cca4194ed68e3846caa7962ae7d48b4c7、本地全28 SHA通过。
+
+本轮11路径修改前审计/原文件备份，以648为parent，添加单key原子SetOnlineIfMissing(SET EX NX Lua)，SetOnlineStatus新增kAlreadyExists尾值3、原Stored0/Invalid1/RedisError2保持，合法login原SetOnline不改；任何既有owner/坏JSON/错类型byte与TTL保留。Gateway仅missing heartbeat自恢复改用新API，失败typed告警；即时Pong保持。Heartbeat取消任务与kMustRun离线cleanup显式使用同一PresenceUserOrderingKey(userID)，保持sessionepoch/connection取消，cleanup解绑后必须执行；原restored33fc执行器调度不改。SETNX解决远端owner窗口，共同用户排序/取消解决本地下线之后重建窗口，两者缺一不可。未来异步batch线程不允许直接missing blindrestore，必须回交同域用户排序和session取消任务。
+
+新增独立actualRedis缓存测试，privatepool1/4、全新固定namespace、最多160键、TTL300/120/expiry1；现有owner/无效记录/错类型bytes与TTL、invalid/null/uninit/ownshutdown、只有一个竞争恢复赢家、两交叉窗口；真实restoredBusinessExecutor+ThreadPool自有编译对象测试active restore→mustRun cleanup、cleanup→queued stale restore cancel及accepted终态计数，local-current仍明确模型，不能当真实Gateway会话验收。只允许explicit ownfixture SetOfflineIfMatch生命周期清理，不涉及其他记录/直接DEL/FLUSH/CONFIG/SQL。原350APIharness仅freshstage/prefix替换并冻结源/生成SHA，复验缓存API扩展影响。全部编译/链接180s、测试90s有ownPID/starttime/PGID/cmdline守护，失败/部分结果保留。
+
+提交时测试NOT_RUN，完整Gateway构建及真实会话交叉回归、异步有界队列生命周期、匹配150/s压力尚待执行；生产19身份/config/health均保持，GWs33fc/1d8、Message原ddc/b24/c119、User38/MCPbc85，durability1/1/1/0/0保持。命令3sec仅perI/O idle，不是wholecmd/partialdrip/全局停机绝对时限；先前4healthy/4stall+350API已绿但未部署。所有apps/game/Python保留，不清理/删文件/改VM/security/NIC，不重跑已拒绝callback/worker32/groupcommitdelay或跳过healthyPing。10k50k所有功能性能尚未达预期，继续凭证据迭代。

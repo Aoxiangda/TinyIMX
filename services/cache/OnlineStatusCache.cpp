@@ -23,6 +23,12 @@ std::int64_t NowUnixSeconds() {
     return seconds.count();
 }
 
+constexpr const char* kSetOnlineIfMissingScript = R"lua(
+    local stored = redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2], 'NX')
+    if stored then return 1 end
+    return 0
+)lua";
+
 constexpr const char* kSetOfflineIfMatchScript = R"lua(
     local value = redis.call('GET', KEYS[1])
 
@@ -255,6 +261,48 @@ SetOnlineResult OnlineStatusCache::SetOnline(
         << ttl_seconds
     );
 
+    return result;
+}
+
+SetOnlineResult OnlineStatusCache::SetOnlineIfMissing(
+    std::uint64_t user_id,
+    const std::string& gateway_id,
+    const std::string& connection_name,
+    int ttl_seconds
+) {
+    SetOnlineResult result;
+    if (user_id == 0 || gateway_id.empty() || connection_name.empty() ||
+        ttl_seconds <= 0) {
+        result.status = SetOnlineStatus::kInvalidArgument;
+        result.error_message = "missing online status restore: invalid argument";
+        return result;
+    }
+    if (pool_ == nullptr) {
+        result.error_message = "missing online status restore: redis pool is null";
+        return result;
+    }
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        result.error_message = "missing online status restore: acquire redis failed";
+        return result;
+    }
+    OnlineStatusRecord record;
+    record.user_id = user_id;
+    record.gateway_id = gateway_id;
+    record.connection_name = connection_name;
+    record.login_time = NowUnixSeconds();
+    const auto stored = connection->EvalInteger(
+        kSetOnlineIfMissingScript, {BuildKey(user_id)},
+        {Serialize(record), std::to_string(ttl_seconds)}
+    );
+    if (stored && (*stored == 0 || *stored == 1)) {
+        result.status = *stored == 1 ? SetOnlineStatus::kStored :
+                                     SetOnlineStatus::kAlreadyExists;
+        return result;
+    }
+    result.error_message = connection->LastError();
+    if (result.error_message.empty())
+        result.error_message = "missing online status restore: invalid Redis reply";
     return result;
 }
 
@@ -993,6 +1041,9 @@ std::string SetOnlineStatusToString(
         case SetOnlineStatus::
             kRedisError:
             return "redis_error";
+
+        case SetOnlineStatus::kAlreadyExists:
+            return "already_exists";
 
         default:
             return "unknown";
