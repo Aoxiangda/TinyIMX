@@ -19,6 +19,13 @@ cfg=pathlib.Path('/home/jackson7/.local/share/tinyimx/m21/config');assert {str(p
 base=['docker','compose','--env-file',str(r/'deploy/production/.env'),'-f',str(r/'deploy/production/docker-compose.yml'),'-f',str(deployed/'rollback.override.json'),'up','-d','--no-deps','--pull','never','message-service']
 d.mkdir();(d/'audit-before.json').write_text(json.dumps({'utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'operation':'Restore only Message originalb24 image afterprivatecontrol, or verify alreadyoriginal withoutrecreation','current_id':current['Id'],'current_image':current['Image'],'target_image':old,'command':base,'scope':'No other18/env/config/durability/dependency changes','preserve':'Candidate/image/evidence/DBrows and stoppedprobes retained; no delete/prune/reset/push','config_sha256':before['private_config_sha256']},indent=2)+'\n')
 if current['Image']!=old:
+ private=d/'runtime-private';private.mkdir()
+ try:
+  with (private/'message-service-before-rollback.log').open('w') as out:
+   recorded=subprocess.run(['docker','logs','--since',before['utc'],'--timestamps',current['Id']],stdout=out,stderr=subprocess.STDOUT,timeout=25)
+  (d/'phase-capture-status.json').write_text(json.dumps({'captured_container_id':current['Id'],'exit_code':recorded.returncode,'private_log_retained_not_exported':True})+'\n')
+ except BaseException as error:
+  (d/'phase-capture-status.json').write_text(json.dumps({'status':'FAIL','type':type(error).__name__,'rollback_still_required':True})+'\n')
  with (d/'rollback.log').open('w') as out:subprocess.run(base,stdout=out,stderr=subprocess.STDOUT,check=True,timeout=60)
 end=time.monotonic()+50
 while True:
