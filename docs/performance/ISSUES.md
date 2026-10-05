@@ -897,3 +897,10 @@ CQ机制尚NOT_RUN，只在实测CPU/延迟同时值得时才考虑生产具体�
 在单独两张absent且fixed命名codex_sql_rtt_messages_20261005/codex_sql_rtt_outbox_20261005上做真实durableInnoDB提交；原表LIKE复制列/索引/check/charset，LIKE遗漏FK所以只在ownmessage表加两个ownnamed同RESTRICT/CASCADE FK→原已验证synthetic700001..710000用户，原用户/消息/outbox/schema数据不改、normalprojector/relay不会读own表。DDL之前单独审计所有语句/源SHA/原schema/index/无trigger/own名不存在/10000用户名status1，然后3ownDDL分别再写audit；任何失败保留partial，不DROP/DELETE/TRUNCATE/重建。配置密码只读RAM，不写配置/环境/密钥。
 
 16专属native连接同原clientflag/utf8mb4/5sI/O，300/s20s6000×ABBA，24k own消息+24k ownoutbox全部提交保存、全字段/JSON/uniqueMID/CID/计数/事务结束验证，所有raw单条CPU/阶段/迟发及SQLerrno保全。Native-Docker线路不是product路线，processCPU是caller，wholeMySQLcgroup含background/连接setup/只读audit，不作exclusiveCPU推断。业务完整性、领域EventCodec、并发幂等/注入错误/identitytampering/提交不确定恢复还需要产品后续特定回归；component正常成功不等于生产协议/全10k50k。完整比较前NOT_RUN，无preset收益结论。all19/config/currenta8candidate/noactivecapacity/>2GiB/>1GiBdisk守卫，原索引/durability前后保护；一编译器ownELF/noSDK，无任何production archives链接。v37显式source/preflight/probe所有complete或failed/ownDDL记录，原档案保持。继续针对实测瓶颈，所有功能极致尚未达到。
+
+
+### 2026-10-05：SQL往返实测收益及提交前校验边界
+
+becd组件正常ABBA各6000真实durable own表事务。Single A1/A2 caller mean6.993567/6.965908ms、P9912.320544/12.148644ms、client CPU0.471217/0.467212核、MySQL wholecgroup1.213829/1.212815核；fourSQL batch B1/B2 mean6.014814/6.169501ms、P9910.398923/11.185632ms、client0.411941/0.424788核、MySQL1.048054/1.069916核。PING/precheck/BEGIN保持，native7→4，对照一致24k消息和24koutbox保留，failure0；MySQL cgroup包含背景/连接setup，native线路非RPC，不外推全负载P99。v37实际426文件已封存SHAa769f17f9bc17ec1c84dd0cac56ca1a2c563a2133df9b7a51ff6ac2422b8e66d。
+
+审查发现上一成本probe在combinedCOMMIT后才校验C++记录，正常路径虽正确但不能作为产品API：错误记录必须在outbox/COMMIT前拒绝。拒绝直接移植四SQLbatch，原源码/结果保留。新7路径审计只新增safe组件；同6SQL/PING/precheck两控制均先校验全部record和insert_id再单独outboxINSERT/COMMIT。只把START TRANSACTION+INSERT+identitySELECT3语句单包，native7→5。使用既有两own表，schema/index/FK/24k旧行和无新CIDprefix先核对，不DDL/delete/原消息写。4固定轮300/s20s6000共追加24kown消息/outbox，记录新总数48k，不覆盖旧行。两negative fixture（identity projection故意错recipient、中间SQL1054）均需校验拒绝/rollback后0行/同connection SELECT1可用，测量前counter重置。组件仍不证明全生产EventCodec/幂等竞争/提交不确定/故障恢复，后续产品需逐项回归；本轮未执行前不预设收益。原durability1/1/1/0/0、所有19容器/config/其它应用保持。代码/每条raw/失败/审计新阶段独立Git及v38保全。
