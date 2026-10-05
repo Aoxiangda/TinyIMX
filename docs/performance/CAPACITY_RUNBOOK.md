@@ -460,3 +460,8 @@ ed90提交产品默认OFF候选及真实fault测试，运行仍a8Gateway/b24Mess
 ### 2026-10-05：独立构建首次工具前置失败保全，精确主对象选择后重试
 
 16b构建在compiler启动前的linkplanning断言失败，private_receiver_ack_tests实际除test main还直接链接ReceiverDeliveryTracker.cpp.o；工具将全部cppobjects数量假定1错误。保留原stage四份link snapshots/实际FAILmarker/runtime19/config一致性；无编译/SQL/schema或产品改动，不伪造PASS。新7路径source工具审计，main改为精确matchingtarget.dir/tests/唯一cpp object，额外tracker object原样保留且与所有借用archives一起SHA前后核对。earlypreflight审计提前到任何link snapshot写入之前，planning异常保留failedmarker，另起attempt2 build/SQLstage，旧helper不覆盖。所有ed90产品源码未改；四ownschemas尚未create，运行服务不变。重试尚未执行时BUILD/SQL仍NOT_RUN，v40明确包括initialfailed及attempt2source/build/SQL complete或failed，不删除失败链条。
+
+
+### 2026-10-05：四产品对象实际编译成功；无库测试链接工具修正
+
+9be attempt2四个新产品对象Driver/Repository/Adapter/ApplicationService和四个test main实际编译成功；前三个测试ELF已链接，但尚未执行unit。随后private_receiver_ack_tests无libtinyimx archive，寻找首次library的位置StopIteration。private_chat_ack_boundary_tests也仅main无库。是工具链接布局假设失败，非CPP编译或业务失败，全部8objects/3ELF/commands/raw/failed/runtime-before-after保留，真实SQL未开始。新attempt3使用next(iterator,len(link))明确支持无库目标；借用own先前编译对象先要求common/services/tests自9be无任何源码或头变化、每个对象SHA前后相同，再只读复用，不重复编译。仍保留extraTracker缓存object哈希及全部SDK不变，剩余main才编译，所有产物写freshstage。新工具source审计/版本+v41含两次失败及三次stage，产品源码ed90未改、运行无变化；unit/SQL尚需实际执行才可PASS，不删失败或掩盖为产品性能结论。
