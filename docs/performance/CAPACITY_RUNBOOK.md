@@ -373,3 +373,18 @@ daf296c真实online-maintenance-session-control实际36检查PASS、18个Pong样
 batchfunc1原功能链在built-inpreflight因已有socialpair记录而停止，operations_completed=0，无login/friend/group/file变更，原失败result/trace/log完整保留。这是fixture选择碰撞，不是业务实现失败或性能退化。只读在reserved519800..519950范围检查exactusername/status、所有双向relation/request和RedisEXISTS0，验证新pairs519800/519803、519801/519804，未执行SQL/Redis写或重置。7路径audit新增freshbatchfunc2/functional attempt2包装，原cross_feature_actor不改且执行前再次同样fixture验证；仅正常公共API创建own新记录/explicitown featuredisband/cancel，所有history/files保持。ownactor300sec PID/starttime/argv/PGID保护，fileRPC子进程继承自有group，最后runtime/config核对。候选38/a8两GW保持，其他17未变化。
 
 新v33明确保存batchfunc1的0操作preflight失败、36真实session与attempt2所有raw、原10k150A1 P99180.5/scheduled181.7FAIL和后来候选控制/rollback有则冻结；不覆盖任何旧结果。提交前attempt2和candidate150均NOT_RUN，功能门控通过后再匹配测量；极致所有功能10k50k未达，不把completedstate/小样本PASS当容量验收。Messageddc/b24/c119、User38/MCPbc85、SQLdurability1/1/1/0/0和所有apps/game/Python保持，无清理/删除/安全/VM/NIC更改，持续准确分析和Git迭代。
+
+
+### 2026-10-05：候选10k150 ACK P99首次180.5→104.4，继续同窗瓶颈核对
+
+30bfa3d已提交fixture碰撞修正与只读选择；freshbatchfunc2真实49operations/35assertions全部PASS，4actors519800/803/801/804各HB1/1，friendaccept/reject/private幂等wire/history/read/group权限/fanout/file真实bytes/checksum均通过；原batchfunc1零操作已有关系preflightFAIL完整保存，36真实twoGW sessionPASS保持。仍是功能样本，不是全功能50k容量。
+
+actualcandidate batch150B1 completed/privateexit2/FAIL，原同10k15060秒9000负载全部login/attempt/positive/wire/receiverACK/SQLconfirmed，negative/skip/late/disconnect0、HB82196/82196；P99104.4、scheduled106.0、max178.393ms、active8991/60=149.85/s、within100ms8884/9000。baselineA1相同完整gates、HB82612/82612、P99180.5/scheduled181.7/max346.497/within100ms8155，首次ACK尾延迟降42.16%，明显但仍不达100门槛和极致目标；没有把completed当PASS。候选B2/A2尚未执行，不能用单次sharedhost差异证明可重复极致。
+
+本轮8路径预审计只新增分析/保全工具，产品source/CMake/运行19/privateconfig不改。按SHA冻结2窗口19wholecgroup CPU、gueststat/CPU/IO/memoryPSI、SQLdigest ps差分/count→mean-ms/1e9及captureduration/activewindow界限；原100us histogram/完整9000 send→ACK/wire MID/CID/UID/seq严格关联，signedwire-minusACK允许先投递再senderACK的合法负值、不筛掉。缺失/失败窗口明示unqualified，不假造9000分位；mean不是P99或exclusiveRPC CPU，内核waitshare不是CPU，wholeRedis/MySQL包括background，guest压力不独占指向IO/调度。
+
+新增readonly阶段日志采集：baselineGW来自部署前privatefullLog，candidateGW与原Message按A1UTC→当前区间保存privatefullLogs，再仅提取matchedpositiveMID允许numericfields；chatUID/seq/epoch>0、peer内部UID/epoch0必须按实际上下文判别，persistence字段mid/from正确。Gateway>=100ms/rate8及repo>=10ms/rate8偏置样本不当全体P99，不拿不同人群均值相减声称瓶颈占比，零日志不意味着零工作。分析结果提交前NOT_RUN，不凭希望宣称CPU或commit收益。
+
+候选日后回滚时原before-log捕获会丢SIGTERM后drain统计，本轮添加独立wrapper预审计2个ownDocker logs --follow进程到runtime-private再调用原已审计2GWrollback；通过stream保留oldcontainer停止/移除期间真实batchaccepted/terminals/pending/maxbatch日志。日志失败不阻止恢复，只有ownPID/starttime/argv/PGID验证后关闭followers，缺失line只算未证实；原rollback按精确1d8/flag缺省/worker16/other17/config保护，source旧helper不改且所有raw/失败/rows/files保留。v34显式扩展analysis/source/phases/drainrollback和未来B2/A2完整/失败记录，不覆盖旧归档。
+
+当前a8/38候选两GW healthy，Message原ddc/b24/c119 User38 MCPbc85 SQLdurability1/1/1/0/0保持，所有apps/game/Python保留，不删文件清内存/改VM/security/NIC。先分析同窗机制与剩余长尾，再根据首次明显改善决定B2/A2复制验证或下轮具体修复，不能盲重复加worker/callback/groupcommitdelay/跳healthyPing。全10k50k所有功能极致未达到，继续准确分析并Git迭代。
