@@ -1003,3 +1003,14 @@ OFF/ON真实功能链各49操作、35断言及4heartbeat通过，包括好友接
 SQL digest COMMIT平均wall6.25–6.92ms，接收确认UPDATE7.76–8.39ms，包含并发等待并非CPU或总体P99。ON的byMID完整记录SELECT约13150另加LAST_INSERT_ID完整记录SELECT8724，合计21874，OFF约21977：身份验证没有删除，不能只比较byMID单个digest误称查询减半。批处理仅减少BEGIN/INSERT/READ通信7→5，所有完整记录校验仍在outbox与COMMIT之前。权限源码实际一个Social RPC/一个双向关系SELECT；路由Redis+本地discovery snapshot，避免错误假设多UserRPC或每条Zookeeper请求。
 
 观察快照与慢ACK重叠A1/B1/B2/A2仅49/42/6/16，慢ACK诊断计数654/362/383/758；剔除重叠后的纯诊断P99仍156.20/131.91/132.47/167.99ms。这不是官方指标替代或删样本许可，说明快照重叠不足以解释大部分尾延迟。新增fresh分析保留完整failed gates、9000消息配对、直算同MID阶段和偏置边界；稀疏slow样本不代表全体。后续先获取真实CPU函数与同消息等待证据再改代码，不重复盲加worker、弱化持久化/PBKDF2/健康PING或以组件PASS结束任务。分析及保留helper在本source提交时NOT_RUN，运行后独立保存结果。
+
+
+### 2026-10-05：批处理收益保留，准备最小权限 CPU 采样工具自检
+
+`8fecf51` 分析实际完成，四轮9000 send/ACK/delivery逐条配对。ACK总体mean54.197/49.315/50.013/54.403ms，ledger仅诊断的wireP99176.484/163.750/154.965/204.240ms；ACK官方P99仍156.7/135.0/132.3/164.5，均FAIL。新同MID交集A1/B1/B2/A2只有10/8/14/9条，都是threshold/rate8偏置慢样本。ON匹配样本commit均值70.115/65.524ms，仓储75.382/77.975ms；OFF样本dispatch22.446/23.883ms。此为准确同消息位置线索，不能用人群差异声称整体commit退化、组成P99或唯一根因。全部配对数值、窗口CPU/SQL/observer、完整四轮failedgates保存fresh分析阶段。
+
+`private-batch-message-deployment-retained-on-20261005` 已实际保留同be8/ELF2548的batch1，Message CID `0263dbd9cf204a4f02f10ff02667cbf6100013d4162823184f28d96a4d8ad737`，其他18/config及durable1/1/1/0/0保持。v49实际导出1207文件，归档SHA `dc5e9831ae9c4418d616f6dd740e1ff814f219c0e067cd64f2f8a1654fd3c1f6`；本source提交时本机下载核验待执行，不提前称完成。
+
+真实CPU函数剖析尚缺失。只读系统核对实际kernel6.8.0-138、匹配perf6.8.12、Docker29.8.1，perf_event_paranoid4/kptr1保持。官方 https://docs.kernel.org/admin-guide/perf-security.html 推荐CAP_PERFMON；Docker官方default https://raw.githubusercontent.com/moby/profiles/main/seccomp/default.json 有CAP_PERFMON条件perf_event_open许可。不要从仅CPU高推测全部开销属于gRPC/MySQL/VM主机安全设置。当前新工具只做隔离自检：三个新自有容器UID0无CAP、UID0仅PERFMON、UID1000仅PERFMON，同nativeperf+逐个依赖ELF只读mount，自有futex1线程1秒、cpu-clock:u49Hz平面IP采样；不读取产品PID、宿主PID空间或用户应用。默认seccomp/dropALL/只读/no-net/nnp/128MiB/CPU1/pids64，无SYS_ADMIN/SYS_PTRACE/privileged/unconfined/setcap/sysctl/全盘mount。
+
+record输出binary pipe由guest进程直接保存fresh0700私有目录/0600文件，Dockerlogdrivernone，不采集堆栈、寄存器、内存或内核；报告从stdin只读取自有raw，零CAP/平面符号聚合。既有系统perf/libSHA保留且不下载或安装，所有probe停止后保留。20秒上限只按exact自有CID/name/image/argv停止。真实UID能力以实测为准，若失败保留错误先分析，不擅自扩大权限。自检在本source提交时NOT_RUN；成功仍需后续单独审计实际服务附加与诊断扰动，不能据此宣称生产瓶颈或性能达标。继续优化目标仍未达成。
