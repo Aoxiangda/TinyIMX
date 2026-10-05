@@ -328,3 +328,14 @@ f036ee5 `redis-command-timeout-original-probe-20261005`实际完成：AUTH/SELEC
 新增独立actualRedis缓存测试，privatepool1/4、全新固定namespace、最多160键、TTL300/120/expiry1；现有owner/无效记录/错类型bytes与TTL、invalid/null/uninit/ownshutdown、只有一个竞争恢复赢家、两交叉窗口；真实restoredBusinessExecutor+ThreadPool自有编译对象测试active restore→mustRun cleanup、cleanup→queued stale restore cancel及accepted终态计数，local-current仍明确模型，不能当真实Gateway会话验收。只允许explicit ownfixture SetOfflineIfMatch生命周期清理，不涉及其他记录/直接DEL/FLUSH/CONFIG/SQL。原350APIharness仅freshstage/prefix替换并冻结源/生成SHA，复验缓存API扩展影响。全部编译/链接180s、测试90s有ownPID/starttime/PGID/cmdline守护，失败/部分结果保留。
 
 提交时测试NOT_RUN，完整Gateway构建及真实会话交叉回归、异步有界队列生命周期、匹配150/s压力尚待执行；生产19身份/config/health均保持，GWs33fc/1d8、Message原ddc/b24/c119、User38/MCPbc85，durability1/1/1/0/0保持。命令3sec仅perI/O idle，不是wholecmd/partialdrip/全局停机绝对时限；先前4healthy/4stall+350API已绿但未部署。所有apps/game/Python保留，不清理/删文件/改VM/security/NIC，不重跑已拒绝callback/worker32/groupcommitdelay或跳过healthyPing。10k50k所有功能性能尚未达预期，继续凭证据迭代。
+
+
+### 2026-10-05：deef66c安全恢复136+350全部通过，接入默认关闭的有界在线维护合批
+
+实际online-restore-missing-fence-test-20261005 pool1/4各68、合136全部PASS；original350 APIharness只freshstage/prefix替换各175全部PASS。真实Cache/33fcExecutor/ThreadPool编译自有对象，remote owner写后oldmissing restore保留bytes/TTL、8竞争仅1winner、active oldrestore后mustRun cleanup最终missing、cleanup先active后的queuedstale取消且0IO、排队deadline过期0IO、accepted终态2/2归零。local-current依旧受控模型，不代替完整Gateway真实会话。v29冻结70文件/71条目 SHA88db90de3b379b64facbc8489a4a1bec977e496a675226648a22c9160dec1d36，本地70逐文件SHA全部通过。
+
+本轮11路径预审计后添加headeronly OnlineStatusMaintenance：单collector、4worker/max16/5ms；总pending包含input、ready、执行/callback，不允许独立队列突破现有presence容量；TrySubmit不等Redis。10sec beforeI/Odeadline，epoch/connection current前置及callback前取消。所有accepted只记一个completed/cancel-beforeIO/cancel-beforecallback/deadline-beforeIO/workerexception/completionexception终态；typedRedis结果独立计数，不重复terminal。worker只ownerchecked EXPIRE、不创建记录，NotFound回交原presence userordering/cancelable RefreshUserOnlineIfMatch→missing-onlyNX；cleanup原kMustRun保持；恢复提交继承原心跳received时间防止重置预算。即时Pong保持。
+
+默认关闭，只有exact TINYIMX_ONLINE_MAINTENANCE_BATCH_ENABLE=1开启；Bootstrap loop结束先Stop维护并join所有worker/callback，再drainpresence/cache，Gateway.Stop/析构幂等补偿。Stop不声称绝对30sec；Redis3sec仍只是I/Oidle，部分响应/全局截止未证明。新增realcache生命周期受控测试包含capacity/inflight/ready上限、shutdownadmission、cancel/deadline/exception隔离、批量关联和计数；独立编译完整GatewayServer+gateway_demo及exact restoredExecutor、新Cache、finiteidleConnection覆盖cached对象，避免rejectedfair旧library，原SDKlibs/ELF不覆盖、不CMakebuildMessage84candidate。
+
+提交前上述新测试及完整Gateway编译NOT_RUN，仍须现场会话回归和匹配150/s压力评估。静态本地准备attempt1使用不存在KickOldConnection作边界而失败，仅已审计header写入；原generator/failure/部分headerSHA保留，按真实PushOfflineMessages边界修正并从preimage确定性生成，未发生guest写/编译/运行失败。单组件ABBA此前nativeCPU-7.45/8.75%、Rediswhole-0.237/0.240cores是真实受控收益，freshness P99升至约8ms；不是privateACK/全功能/50k容量验收。本轮无部署、19身份/config/health不变，Message原ddc/b24/c119 User38 MCPbc85、SQLdurability1/1/1/0/0保持。所有apps保留，不清理删文件，不改VM/security/NIC，不重复已否定盲调参。所有raw/失败/代码Git保存，继续验证及迭代。

@@ -16,12 +16,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <chrono>
 
 namespace tinyimx {
 
 class OnlineStatusCache;
+class OnlineStatusMaintenance;
 class UnreadCountCache;
 class GatewayRouteResolver;
 class GatewayPeerTransportManager;
@@ -219,6 +221,10 @@ public:
     // dropped merely because a reconnect/auth storm saturates foreground work.
     // Non-owning, bootstrap-owned; falls back to business_executor_ for tests.
     void SetPresenceExecutor(BusinessExecutor* presence_executor);
+
+    // Bootstrap calls Stop before presence/cache drain. Default remains off.
+    bool StartOnlineMaintenanceBatching(std::size_t max_pending);
+    void StopOnlineMaintenance();
 
     // Background durable replay is throughput-oriented and must not compete
     // with latency-sensitive Login/Chat work. Non-owning, bootstrap-owned.
@@ -812,6 +818,8 @@ private:
 
 
     OnlineStatusCache* online_status_cache_{nullptr};
+    std::unique_ptr<OnlineStatusMaintenance> online_maintenance_;
+    bool online_maintenance_reported_{false};
     GatewayRouteResolver* gateway_route_resolver_{nullptr};
     GatewayPeerVerifyCallback gateway_peer_verify_callback_;
     GatewayPeerResponseDropCallback gateway_peer_response_drop_callback_for_test_;

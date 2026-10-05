@@ -1189,6 +1189,19 @@ if (redis_pool) {
 
         gateway.SetPresenceExecutor(presence_executor.get());
 
+        const char* online_batch_env = std::getenv("TINYIMX_ONLINE_MAINTENANCE_BATCH_ENABLE");
+        if (online_batch_env != nullptr && std::string(online_batch_env) == "1" &&
+            !gateway.StartOnlineMaintenanceBatching(presence_options.max_pending_tasks)) {
+            LOG_ERROR("gateway online maintenance batching start failed");
+            gateway.Stop();
+            presence_executor->ShutdownGraceful();
+            if (message_executor) message_executor->ShutdownGraceful();
+            business_executor->ShutdownGraceful();
+            if (redis_pool) redis_pool->Shutdown();
+            tinyimx::Logger::Instance().Shutdown();
+            return 1;
+        }
+
         // Isolate durable replay from latency-sensitive foreground/message work. Replay
         // keeps per-user ordering but has its own bounded queue and workers,
         // preventing a reconnect storm from amplifying foreground queue delay.
@@ -1353,6 +1366,7 @@ if (redis_pool) redis_pool->Shutdown();
         );
 
         loop.Loop();
+        gateway.StopOnlineMaintenance();
         gateway.StopPrivateReplayAdmission();
         if (group_fanout_coordinator) {
             group_fanout_coordinator->Stop();

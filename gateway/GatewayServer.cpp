@@ -17,6 +17,7 @@
 #include "common/protocol/GroupMessageDeliveryProtocol.h"
 #include "gateway/DeliveryIdentity.h"
 #include "gateway/PresenceOrderingKey.h"
+#include "gateway/OnlineStatusMaintenance.h"
 #include "gateway/PrivateReceiverAck.h"
 #include "gateway/GatewayPeerTransportManager.h"
 #include "common/protocol/ClientChatProtocol.h"
@@ -1668,6 +1669,7 @@ void GatewayServer::StopPrivateReplayAdmission() {
 }
 
 void GatewayServer::Stop() {
+    StopOnlineMaintenance();
     StopPrivateReplayAdmission();
     server_.Stop();
 
@@ -2040,6 +2042,44 @@ void GatewayServer::SetPresenceExecutor(
         << ", fallback_foreground="
         << (presence_executor_ == nullptr && business_executor_ != nullptr)
     );
+}
+
+bool GatewayServer::StartOnlineMaintenanceBatching(std::size_t max_pending) {
+    if (online_maintenance_ || !HasOnlineStatusCache() || !HasPresenceExecutor()) return false;
+    OnlineStatusMaintenance::Options options;
+    options.max_pending = max_pending;
+    auto maintenance = std::make_unique<OnlineStatusMaintenance>(options,
+        [cache = online_status_cache_](const std::vector<OnlineStatusRefreshRequest>& requests) {
+            return cache->RefreshOnlineIfMatchBatch(requests);
+        });
+    if (!maintenance->Start()) return false;
+    online_maintenance_ = std::move(maintenance);
+    LOG_WARN("gateway online maintenance batching enabled"
+        << ", workers=4, max_batch=16, flush_delay_ms=5, max_pending=" << max_pending);
+    return true;
+}
+
+void GatewayServer::StopOnlineMaintenance() {
+    if (!online_maintenance_) return;
+    online_maintenance_->Stop();
+    if (online_maintenance_reported_) return;
+    online_maintenance_reported_ = true;
+    const auto stats = online_maintenance_->GetStats();
+    LOG_WARN("gateway online maintenance batching drained"
+        << ", accepted=" << stats.accepted << ", terminals=" << stats.Terminals()
+        << ", pending=" << stats.pending << ", completed=" << stats.completed
+        << ", cancelled_before_io=" << stats.cancelled_before_io
+        << ", cancelled_before_callback=" << stats.cancelled_before_callback
+        << ", deadline_before_io=" << stats.deadline_before_io
+        << ", worker_exception=" << stats.worker_exception
+        << ", completion_exception=" << stats.completion_exception
+        << ", rejected_overload=" << stats.rejected_overload
+        << ", rejected_shutdown=" << stats.rejected_shutdown
+        << ", batch_calls=" << stats.batch_calls << ", batch_items=" << stats.batch_items
+        << ", max_batch=" << stats.max_observed_batch << ", peak_pending=" << stats.peak_pending
+        << ", refreshed=" << stats.refreshed << ", missing=" << stats.missing
+        << ", mismatch=" << stats.mismatch << ", invalid_record=" << stats.invalid_record
+        << ", redis_error=" << stats.redis_error);
 }
 
 void GatewayServer::SetReplayExecutor(
@@ -11739,6 +11779,50 @@ void GatewayServer::HandleHeartbeat(
 
     const UserId user_id =
         session_snapshot->user_id;
+
+    if (online_maintenance_) {
+        const auto received = BusinessClock::now();
+        OnlineStatusMaintenance::Job job;
+        job.request = {user_id, options_.gateway_id, connection->Name(),
+                       options_.online_status_ttl_seconds};
+        job.deadline = received + std::chrono::milliseconds{10000};
+        job.still_valid = [this, connection, snapshot = *session_snapshot] {
+            return connection->IsConnected() && session_manager_.IsCurrent(
+                snapshot.user_id, snapshot.epoch, connection);
+        };
+        job.finished = [this, connection, snapshot = *session_snapshot,
+                        seq = packet.seq, received](const RefreshOnlineIfMatchResult& result) {
+            if (result.status == RefreshOnlineIfMatchStatus::kNotFound) {
+                // Never restore on independent batch workers. Preserve the
+                // original deadline and user ordering with must-run cleanup.
+                const auto status = SubmitSessionBusinessTask(
+                    PresenceExecutor(), &session_manager_, connection, snapshot, seq,
+                    received, "gateway.presence.restore", BusinessCancellationPolicy::kCancelable,
+                    PresenceUserOrderingKey(snapshot.user_id),
+                    [this, connection, user_id = snapshot.user_id](
+                        const BusinessExecutor::ExecutionContext& context) -> BusinessExecutor::Completion {
+                        if (!context.CancellationRequested())
+                            RefreshUserOnlineIfMatch(user_id, connection);
+                        return {};
+                    });
+                if (status != BusinessSubmitStatus::kAccepted)
+                    LOG_WARN("gateway missing presence restore not admitted"
+                        << ", user_id=" << snapshot.user_id
+                        << ", status=" << BusinessSubmitStatusToString(status));
+            } else if (!result.Refreshed() &&
+                       result.status != RefreshOnlineIfMatchStatus::kMismatch) {
+                LOG_WARN("gateway batched presence refresh failed"
+                    << ", user_id=" << snapshot.user_id
+                    << ", status=" << RefreshOnlineIfMatchStatusToString(result.status)
+                    << ", error=" << result.error_message);
+            }
+        };
+        const auto status = online_maintenance_->TrySubmit(std::move(job));
+        if (status != OnlineStatusMaintenance::SubmitStatus::kAccepted)
+            LOG_WARN("gateway batched presence refresh not admitted"
+                << ", user_id=" << user_id << ", status=" << static_cast<int>(status));
+        return;
+    }
 
     const BusinessSubmitStatus status =
         SubmitSessionBusinessTask(
