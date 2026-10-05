@@ -621,3 +621,10 @@ Linux6.8官方 https://raw.githubusercontent.com/torvalds/linux/v6.8/tools/perf/
 
 
 诊断source首次应用在所有路径写入之前，被远端严格AST检查拒绝：v58导出目录列表生成缺少一个引号。没有产品代码/源文件/编译/容器变化；空的首source阶段保留并写明确失败审计，不覆盖。修复列表、对两个helper都执行AST检查后，fresh attempt2 source stage再提交。此为诊断打包缺陷，不是业务性能证据。
+
+
+### 2026-10-05：精确时钟异常成本已实测，继续区分指令原因
+
+`67b43c6` 的隔离诊断实际PASS，容器50c6f7（UID1000，E/P/I/B/A零，nnp1/seccomp2）、320k调用全成功，19服务/config/内核安全设置保持。MONOTONIC四轮批均wall为8253.29/4201.80/3789.06/3743.26ns，REALTIME4925.45/7956.17/6090.02/4452.72ns，直接syscall14819.69/10131.38/8330.24/9832.50ns，COARSE4.57/4.93/4.38/4.53ns。不是单调用P99或带载表现。公开self vDSO8192字节SHA29465e48a8210bdd3f6d54223c3d5349d01503bedf5a3c10bf4a4a02a9264302，0x765为RDTSCP，热点0x768紧接其后的NOP；平面IP采样可能有skid，不能仅凭NOP断言其自身消耗或分配全部请求延迟。TSC路径公开Linux源码使用rdtsc_ordered；https://raw.githubusercontent.com/torvalds/linux/v6.8/arch/x86/include/asm/vdso/gettimeofday.h ，候选序列RDTSC/LFENCE+RDTSC/RDTSCP由特征决定：https://raw.githubusercontent.com/torvalds/linux/v6.8/arch/x86/include/asm/msr.h 。当前WHP/ULM存在，但无成对宿主模式测试，尚不能宣布唯一原因。
+
+按150消息/s，ChatRequestPhaseTrace每条约10次精确时钟，即便4us也只约0.006CPU核；排除仅关闭该诊断就解决42%用户CPU的未经证实推断。RPC期限/入队/活跃/观测也有精确时钟，当前采样无调用链，调用频率归属仍OPEN。后续own诊断CPUID检查TSC/SSE2/RDTSCP后比较三条用户态指令与四API模式，4轮各20k调用，共560k；原public vDSO SHA也核对相同。原始TSC只是成本对照，不替代安全的monotonic期限或性能量测。fresh source/工具/编译/容器受审计，新probe本source提交时NOT_RUN，无产品代码/VM启动/安全/应用变化。v57主机下载及1388manifest哈希通过，v58实际导出1408文件、SHAe6534ef70ff5d329b88157c9640c8f44da4a03c516afc7a3d8985bd610f2a71f。所有功能10k–50k目标继续OPEN。
