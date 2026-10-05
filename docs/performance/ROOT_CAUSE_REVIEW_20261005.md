@@ -698,3 +698,12 @@ f51b4f6已提交产品修正；lazy-logging-regression-20261005实际PASS，ELF6
 3f5b971 attempt2完整重编译44个eager对象、七个ELF并通过130业务unit（trace17/application53/crash28/receiver10/boundary22），随后封装Gateway FAIL。build日志SHA efbc0f6ec2b53e2d7ee404e2824969abd05bf691233ef441efa7219daa139748明确显示FROM sha256:a8b7被BuildKit解析为docker.io/library/sha256仓库，未创建候选镜像。该失败和旧Dockerfile/ELF/archive/log都保留。只读再次核对源和全部借用输入SHA保持。
 
 fresh attempt3引用真实已存在本地tag（Gateway codex-online-maintenance-gateway-v1、Message codex-private-begin-insert-read-batch-v1），build前后均核对a8b7/be8物理ID，不拉取或更换基础镜像。为避免重复已成功编译，先验证attempt2源/flags/archive SHA和44项编译计划与当前完全一致，冻结其自有eager产物SHA再复用，重跑130业务unit。冻结发生在原失败后/复用前，不伪称是原编译前已记录SHA。新stage保存复用审计及fresh image context/Dockerfile，完全不覆盖attempt2目录；eager镜像标记真实build revision3f5，lazy标记本轮head。lazy44对象/七ELF独立编译、130同样unit、四镜像及UID1000加载/缺配置退出守卫继续。source提交时attempt3 NOT_RUN，正式19/config/SQL/apps均保持；仍需真实跨功能与匹配10k150才能评估本次业务收益，所有功能10k–50k极致目标未达标。
+
+
+### 2026-10-05：四个日志对照服务镜像通过，进入真实链路验证
+
+db6c0ea attempt3 PASS，每variant44TU/130unit，四image/八UID1000loader与受控缺配置probe通过，复用eager所有产物SHA与借用/source输入保持，正式19/config保持。eager Gateway image4a28a73e/ELFf655f900、Message image83db801b/ELF5997e07d；lazy Gateway image0d9d904b/ELF95bbc5af、Message image419aef5e/ELF7b9edcae。完整SHA在summary/completed-images与所有审计记录，eager build3f5b971/lazy db6c0ea，产品除日志宏及示例future外的源码保持相同。诊断输出源码已每秒最多8条且经完整LOG_WARN构造，不支持逐字段stderr导致长尾的猜测；不关闭trace混淆比较。
+
+本轮七文件预审计后准备实际链路工具。只有空闲两GWs+Message切换，所有原env值（含SQL batch1/trace1、maintenance1/worker16）、Cmd/User/WorkingDir、挂载/资源/安全/网络/日志设置逐项相同，其余16 IDs/images/start和全configSHA、durability1/1/1/0/0保持。原始inspect/env/log/Compose config与override均0700private，不导出。原像a8b7/be8/原env回滚保留并在切换验证失败时恢复；只受控recreate3服务，不清理文件/容器/数据。先两组相同正常跨功能actor（独立只读确认的519800–519950非相邻offline空关系对）验证friend/private/unread/group/file链。再10k/150s/60s/9000计划ABBA，login100/s、原offer/timeout/heartbeat/wire/SQL条件完全不变，所有FAIL保存。观察同样58s cgroup/guest/SQLdigest窗口并额外两次公开task-ID集合，无栈/内存/参数/env读取，只帮助区分稳定worker/替换，不当作精确线程创建计数。所有用户应用保留；不会在压力窗口编译源码。本source提交时部署/actor/新pressure NOT_RUN，不提前声称项目P99下降；所有功能10k–50k极致目标仍未完成。
+
+本地生成器首次精确缩进预检FAIL（预计3空格、实际2空格），在endpoint/functional/export/docs写入前被拦截；原generator及audit保留，fresh v2按原源修正并AST通过，尚无guest/runtime影响。公开taskID诊断不读栈/内存/env；不能唯一发现child时省略该项，不用额外权限替代，也不让可选诊断阻止核心对照。
