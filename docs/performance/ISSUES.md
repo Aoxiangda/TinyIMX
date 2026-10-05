@@ -805,3 +805,14 @@ f036ee5 `redis-command-timeout-original-probe-20261005`实际完成：AUTH/SELEC
 默认关闭，只有exact TINYIMX_ONLINE_MAINTENANCE_BATCH_ENABLE=1开启；Bootstrap loop结束先Stop维护并join所有worker/callback，再drainpresence/cache，Gateway.Stop/析构幂等补偿。Stop不声称绝对30sec；Redis3sec仍只是I/Oidle，部分响应/全局截止未证明。新增realcache生命周期受控测试包含capacity/inflight/ready上限、shutdownadmission、cancel/deadline/exception隔离、批量关联和计数；独立编译完整GatewayServer+gateway_demo及exact restoredExecutor、新Cache、finiteidleConnection覆盖cached对象，避免rejectedfair旧library，原SDKlibs/ELF不覆盖、不CMakebuildMessage84candidate。
 
 提交前上述新测试及完整Gateway编译NOT_RUN，仍须现场会话回归和匹配150/s压力评估。静态本地准备attempt1使用不存在KickOldConnection作边界而失败，仅已审计header写入；原generator/failure/部分headerSHA保留，按真实PushOfflineMessages边界修正并从preimage确定性生成，未发生guest写/编译/运行失败。单组件ABBA此前nativeCPU-7.45/8.75%、Rediswhole-0.237/0.240cores是真实受控收益，freshness P99升至约8ms；不是privateACK/全功能/50k容量验收。本轮无部署、19身份/config/health不变，Message原ddc/b24/c119 User38 MCPbc85、SQLdurability1/1/1/0/0保持。所有apps保留，不清理删文件，不改VM/security/NIC，不重复已否定盲调参。所有raw/失败/代码Git保存，继续验证及迭代。
+
+
+### 2026-10-05：真实合批生命周期224与完整网关构建通过，准备镜像/端到端验证
+
+38f41a9 actualmaintenance/cache pool1/4各112合224全部PASS：pending覆盖inflight/input/ready且上限8，overload与shutdown立即拒绝，beforeIO取消/deadline/probeexception、afterIO取消/callbackexception隔离，每accepted恰一终态；四heldworker受控full16两group结果关联和owner保留，typed mismatch10/refreshed26/36completed，backendthrow与cardinality不符不影响后续任务。fullgroup测试collector500ms只是受控排队，不是性能测量，正常capacity用default5ms。完整Gateway/demo自有编译链接PASS，ELF c2894a21cf308ad35ef665c603d17b1a2577c9216aa9e74856772befa99d640f、原cached库/ELF/19configs完全保持；own33fcExecutor/deefCache/506Connection前置，未build/deployMessage84。
+
+v30导出在生成archive/audit前失败：fullGateway link.map33533003bytes超过generic20MiB；ELF33951840正确先排除，不涉及源码/224检查/构建失败。全map/raw仍保存。新v31仅已知该自有map路径允许64MiB，其余nonELF仍20MiB，密钥精确RAM扫描及SHA保留；v30归档不存在，不能声称已下载。失败及解决保留本地audit/online-maintenance-export-v30-failure-before-v31.json。
+
+本轮10路径仅工具/文档预审计：封装only38Gateway ELF到原1d8 base新tag、UID1000 no-net/no-cap只读loader/missingconfig控制；先原10k/150/s60秒9000 baseline，候选部署仅两GW增加exactbatch_enable=1且保存privateinspect/log、原env/rollback指令，其他17/config/worker16/recovery/fanout/SQLdurability1/1/1/0/0保持。回滚先capture候选log，capture失败仍回滚，恢复原1d8及flag缺省；保留全部候选/rows/log，不prune/delete。原matched压力工具精确改GW身份，新run batch150A1/B1/B2/A2，worker5d6bd183及原Messagec119固定，activewindow readonlydigest/wholecgroup+gueststat/PSI、all9000完整attempt/positive/wire/SQL/HB相等gates、每个FAIL保存。源helpers提交前全NOT_RUN。
+
+现场已有功能链用新519880/882/884/886四个synthetic身份，执行前确认socialpair为空，正常friend/private/read/group/file+wire/durable/checksum，仅样本回归非TLS/MCP/AI/offline/fault/50k全验收。后续TTL缺失/旧连接下线/跨GW替换会话测试另审计。3secI/Oidle非wholecmd/全局停机绝对deadline，不从组件少命令推断端到端极致。若端到端不能重复改善则还原并准确分析剩余瓶颈；不盲重复callback/32worker/groupcommitdelay/skiphealthyPing。所有apps/game/Python保留，不清内存删文件/改VM/security/NIC，源迭代Git和原raw完整留存。全10k50k所有功能极致尚未达到，持续推进。
