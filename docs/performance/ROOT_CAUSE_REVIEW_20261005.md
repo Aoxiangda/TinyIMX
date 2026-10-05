@@ -420,3 +420,14 @@ v34实际已导出294文件，SHA218b982f8b164f49fa95ff934c2b646462075556f22eedf
 同既有原型16clients/300/s/20s/6000×ABBA、Sync1CQ MIN1/MAX2精确一致，127.0.0.1:0自分配端口、cached生成proto/grpc库、一台owncompiler，新stage隔离object/ELF，不链接任何productimplementationarchives/no真实DBRedisAI/用户，all19/配置保持且>2GiB/noactivecapacity。输出CPUuser/system/上下文切换和每条caller/handler/handlerCPU/extra/lateness/raw，全失败保留；不使用traced性能或把线程减少当性能结论。CPU是同进程client+server、额外wall含固定workerqueue，不等于真实MessageexclusiveCPU。normal机制不证明production取消/过载/SQLdeadline/故障/持久化/全关停契约，AsyncContext无done通知时不调用IsCancelled；产品路径仍原Sync保持。
 
 CQ机制尚NOT_RUN，只在实测CPU/延迟同时值得时才考虑生产具体实现，并需要领域/生命周期/同负载端到端复核。若无改善停止这个方向但继续其他准确瓶颈，不重复盲加worker或callback路线。v36显式保存本source/probe完整或失败及上一retained/join记录，原归档不覆盖，私有数据/ELF排除和RAMsecret/SHA守卫保持。全功能10k50k极致仍未达到，继续迭代。
+
+
+### 2026-10-05：真CQ+blockingworker负收益已记录，先验证SQL多往返机制
+
+3469f73真实CQ四轮6000各/24ksynthetics全部正确。Sync A1/A2 CPU0.517045/0.500381核、callerP9922.828491/22.707419ms、matchedextraP992.460499/2.381103ms，423/438handlerTIDs；CQ B1/B2 CPU0.568523/0.581996核、callerP9922.850198/22.954109ms、extra2.543100/2.598802ms，16handlerTIDs，voluntaryctx82863/82905 vs64718/64613。CQ每轮accepted=submitted=completed=finish6000、allocated=deleted6001/oneunboundacceptcanceled/live/pending0/peak7，无漏对象/反例/异常，但CPU更高且尾延迟未改善。拒绝这个CQ+blockingworker方案进入产品，不把固定线程少当性能、不泛化所有异步策略无效。所有raw源码/编译/账目/失败限制保全；v36已352文件SHAe3c1e0c249c3d9466f5330d94677cce0b741e75cf7b920322e1f45f5ced08982，本机下载尚NOT_RUN。
+
+只读SQLpreflight实际8.0.40，durable1/1/1/0/0，原连接已经CLIENT_MULTI_STATEMENTS，原两表无trigger，private有两FK→im_users；原Query只读首结果而Execute会消费多结果，不能直接用原Query拼接SQL而遗留结果/忽略错误。官方多结果契约 https://dev.mysql.com/doc/c-api/8.0/en/c-api-multiple-queries.html 要求逐个结果消费和区分next_result=-1/0/>0。本轮8路径先审计，只新增native成本probe和记录，不改产品driver/API/CMake/运行代码。提出待验证机制：PING+precheck+BEGIN维持，同INSERT/identitySELECT/outboxINSERTSELECT/COMMIT四条SQL一次packet vs四次（含PING每条新消息7→4native请求），无skipPING/commitdelay/弱化ACK。
+
+在单独两张absent且fixed命名codex_sql_rtt_messages_20261005/codex_sql_rtt_outbox_20261005上做真实durableInnoDB提交；原表LIKE复制列/索引/check/charset，LIKE遗漏FK所以只在ownmessage表加两个ownnamed同RESTRICT/CASCADE FK→原已验证synthetic700001..710000用户，原用户/消息/outbox/schema数据不改、normalprojector/relay不会读own表。DDL之前单独审计所有语句/源SHA/原schema/index/无trigger/own名不存在/10000用户名status1，然后3ownDDL分别再写audit；任何失败保留partial，不DROP/DELETE/TRUNCATE/重建。配置密码只读RAM，不写配置/环境/密钥。
+
+16专属native连接同原clientflag/utf8mb4/5sI/O，300/s20s6000×ABBA，24k own消息+24k ownoutbox全部提交保存、全字段/JSON/uniqueMID/CID/计数/事务结束验证，所有raw单条CPU/阶段/迟发及SQLerrno保全。Native-Docker线路不是product路线，processCPU是caller，wholeMySQLcgroup含background/连接setup/只读audit，不作exclusiveCPU推断。业务完整性、领域EventCodec、并发幂等/注入错误/identitytampering/提交不确定恢复还需要产品后续特定回归；component正常成功不等于生产协议/全10k50k。完整比较前NOT_RUN，无preset收益结论。all19/config/currenta8candidate/noactivecapacity/>2GiB/>1GiBdisk守卫，原索引/durability前后保护；一编译器ownELF/noSDK，无任何production archives链接。v37显式source/preflight/probe所有complete或failed/ownDDL记录，原档案保持。继续针对实测瓶颈，所有功能极致尚未达到。
