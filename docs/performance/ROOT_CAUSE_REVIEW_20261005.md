@@ -438,3 +438,12 @@ CQ机制尚NOT_RUN，只在实测CPU/延迟同时值得时才考虑生产具体�
 becd组件正常ABBA各6000真实durable own表事务。Single A1/A2 caller mean6.993567/6.965908ms、P9912.320544/12.148644ms、client CPU0.471217/0.467212核、MySQL wholecgroup1.213829/1.212815核；fourSQL batch B1/B2 mean6.014814/6.169501ms、P9910.398923/11.185632ms、client0.411941/0.424788核、MySQL1.048054/1.069916核。PING/precheck/BEGIN保持，native7→4，对照一致24k消息和24koutbox保留，failure0；MySQL cgroup包含背景/连接setup，native线路非RPC，不外推全负载P99。v37实际426文件已封存SHAa769f17f9bc17ec1c84dd0cac56ca1a2c563a2133df9b7a51ff6ac2422b8e66d。
 
 审查发现上一成本probe在combinedCOMMIT后才校验C++记录，正常路径虽正确但不能作为产品API：错误记录必须在outbox/COMMIT前拒绝。拒绝直接移植四SQLbatch，原源码/结果保留。新7路径审计只新增safe组件；同6SQL/PING/precheck两控制均先校验全部record和insert_id再单独outboxINSERT/COMMIT。只把START TRANSACTION+INSERT+identitySELECT3语句单包，native7→5。使用既有两own表，schema/index/FK/24k旧行和无新CIDprefix先核对，不DDL/delete/原消息写。4固定轮300/s20s6000共追加24kown消息/outbox，记录新总数48k，不覆盖旧行。两negative fixture（identity projection故意错recipient、中间SQL1054）均需校验拒绝/rollback后0行/同connection SELECT1可用，测量前counter重置。组件仍不证明全生产EventCodec/幂等竞争/提交不确定/故障恢复，后续产品需逐项回归；本轮未执行前不预设收益。原durability1/1/1/0/0、所有19容器/config/其它应用保持。代码/每条raw/失败/审计新阶段独立Git及v38保全。
+
+
+### 2026-10-05：安全事务前半段实测通过，产品默认OFF候选
+
+6cb safe组件ABBA各6000：singleA1/A2 mean7.466654/7.338825ms，P9914.603638/13.306077ms，clientCPU0.479838/0.482842，wholeMySQL1.268399/1.285254；safeB1/B2 mean7.101917/6.846974ms，P9912.756773/12.587563ms，client0.464834/0.454095，wholeMySQL1.227017/1.187353。两候选尾延迟及CPU均低于两个控制，但不外推native组件为端到端收益。新增24k消息+24kownoutbox全配对/零失败，合计48k/48k保留。各轮两negative：错误recipient投影及第三SQL1054→提交前拒绝/rollback0行/同连接SELECT1可用，八次PASS；中间失败不是完整故障或提交不确定认证。
+
+新的14路径源审计实现默认OFF TINYIMX_PRIVATE_BEGIN_INSERT_READ_BATCH_ENABLE=1：只合并START TRANSACTION+INSERT+完整记录SELECT，完整C++原BuildMessagesFromResult与same_identity验证后才原领域EventCodec/outbox/COMMIT。PING/precheck/唯一键竞争/释放lease后recovery、outbox失败rollback、commit outcome ambiguous recovery保持原逻辑。专用driver逐一消费恰3results，记录BEGIN/INSERTpartialack；server statementerror留可回滚事务，client/未知protocol关闭自身无COMMIT session，绝不假成功或盲重试。新增combined phase独立标记，不把组合时间归因单独INSERT。原路径默认OFF保留。
+
+准确核对Git发现84拒绝的guarded ReceiverConfirm实际在Adapter/ApplicationService/Port/Adapter.h；MessageRepository.cpp本身与ddc无差异。先从ddc原Git对象SHA核对恢复这四文件，再仅给Adapter加新persist分支，保留旧实验完整Git历史。未将错误文件名当作恢复依据。所有19运行容器/私有config未改，产品新源码尚未部署或验收；独立真实SQL回归/transportfault/端到端控制后才决定是否保留。原MySQL8.0.40/1/1/1/0/0/index13维持，游戏及其它应用保留。

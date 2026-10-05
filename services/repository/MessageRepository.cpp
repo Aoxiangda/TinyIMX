@@ -2810,6 +2810,106 @@ SavePrivateMessageResult MessageRepository::SavePrivateMessageOnConnection(
     return result;
 }
 
+BeginSavePrivateMessageResult MessageRepository::BeginSavePrivateMessageOnConnection(
+    MySqlConnection* connection,
+    std::uint64_t from_user_id,
+    std::uint64_t to_user_id,
+    const std::string& content,
+    DeliveryStatus delivery_status,
+    PrivateMessageType message_type,
+    const std::string& client_message_id
+) {
+    BeginSavePrivateMessageResult result;
+
+    if (from_user_id == 0 || to_user_id == 0 || from_user_id == to_user_id) {
+        result.save.status = MessageMutationStatus::kInvalidArgument;
+        result.save.message = "message repository transactional save failed: invalid user id";
+        return result;
+    }
+
+    if (client_message_id.size() > 64) {
+        result.save.status = MessageMutationStatus::kInvalidArgument;
+        result.save.message = "message repository transactional save failed: client_message_id too long";
+        return result;
+    }
+
+    const auto message_type_value = static_cast<std::uint32_t>(message_type);
+    if (message_type_value < static_cast<std::uint32_t>(PrivateMessageType::kText) ||
+        message_type_value > static_cast<std::uint32_t>(PrivateMessageType::kFile)) {
+        result.save.status = MessageMutationStatus::kInvalidArgument;
+        result.save.message = "message repository transactional save failed: invalid message type";
+        return result;
+    }
+
+    const auto delivery_status_value = static_cast<std::uint32_t>(delivery_status);
+    if (delivery_status_value > static_cast<std::uint32_t>(DeliveryStatus::kFailed)) {
+        result.save.status = MessageMutationStatus::kInvalidArgument;
+        result.save.message = "message repository transactional save failed: invalid delivery status";
+        return result;
+    }
+
+    if (connection == nullptr || !connection->IsConnected()) {
+        result.save.status = MessageMutationStatus::kStorageError;
+        result.save.message = "message repository transactional save failed: connection unavailable";
+        return result;
+    }
+
+    const std::string escaped_content = connection->EscapeString(content);
+    std::string client_message_sql = "NULL";
+    if (!client_message_id.empty()) {
+        client_message_sql = "'" + connection->EscapeString(client_message_id) + "'";
+    }
+
+    const std::string sql =
+        "INSERT INTO im_private_messages ("
+        "client_message_id, from_user_id, to_user_id, message_type, content, delivery_status"
+        ") VALUES (" +
+        client_message_sql + ", " +
+        std::to_string(from_user_id) + ", " +
+        std::to_string(to_user_id) + ", " +
+        std::to_string(message_type_value) + ", '" +
+        escaped_content + "', " +
+        std::to_string(delivery_status_value) + ")";
+
+    MySqlBeginInsertQueryResult batch;
+    connection->BeginInsertAndQuery(sql,
+        "SELECT message_id, IFNULL(client_message_id, ''), from_user_id, to_user_id, "
+        "message_type, content, delivery_status, created_at, "
+        "IFNULL(delivered_at, ''), IFNULL(read_at, '') "
+        "FROM im_private_messages WHERE message_id = LAST_INSERT_ID() LIMIT 1", &batch);
+    result.began = batch.begin_succeeded;
+    if (!batch.insert_succeeded || batch.affected_rows != 1 || batch.insert_id == 0) {
+        result.save.status = MessageMutationStatus::kStorageError;
+        result.save.message = connection->LastError().empty()
+            ? "private message batch insert failed: invalid insert result"
+            : connection->LastError();
+        return result;
+    }
+    result.save.status = MessageMutationStatus::kSucceeded;
+    result.save.message_id = batch.insert_id;
+    result.save.message = "private message saved on caller transaction";
+    if (!batch.query_succeeded) {
+        result.created.status = MessageQueryStatus::kStorageError;
+        result.created.message = connection->LastError();
+        return result;
+    }
+    // Use the exact original full-record parser, including type/status/time.
+    const auto built = BuildMessagesFromResult(batch.query_result);
+    if (!built.Succeeded() || built.records.size() != 1 ||
+        built.records.front().message_id != batch.insert_id) {
+        result.created.status = built.Succeeded()
+            ? MessageQueryStatus::kInvalidRecord : built.status;
+        result.created.message = built.message.empty()
+            ? "private message batch find failed: invalid record identity" : built.message;
+        return result;
+    }
+    result.created.status = MessageQueryStatus::kSucceeded;
+    result.created.found = true;
+    result.created.record = built.records.front();
+    result.created.message = "private message found";
+    return result;
+}
+
 FindPrivateMessageResult MessageRepository::FindPrivateMessageByIdOnConnection(
     MySqlConnection* connection,
     std::uint64_t message_id

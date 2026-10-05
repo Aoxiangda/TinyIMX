@@ -5,14 +5,22 @@
 
 #include "common/db/MySqlConnection.h"
 #include "common/db/MySqlConnectionPool.h"
-#include "common/logging/LogMacros.h"
 #include "services/message/application/MessageEventFactory.h"
 #include "services/outbox/OutboxRepository.h"
 
 #include <utility>
+#include <cstdlib>
 
 namespace tinyimx::message {
 namespace {
+
+bool PrivateBeginInsertReadBatchEnabled() noexcept {
+    static const bool enabled = [] {
+        const char* v = std::getenv("TINYIMX_PRIVATE_BEGIN_INSERT_READ_BATCH_ENABLE");
+        return v && v[0] == '1' && v[1] == '\0';
+    }();
+    return enabled;
+}
 
 MessageApplicationStatus MapStatus(
     tinyimx::MessageQueryStatus status
@@ -287,22 +295,42 @@ MessageRepositoryAdapter::PersistPrivateMessage(
         }
     }
 
-    if (!trace.Measure(Phase::Begin,[&]{return connection->BeginTransaction();})) {
-        output.status = MessageApplicationStatus::kStorageError;
-        output.message = "transactional private message begin failed: " +
-                         connection->LastError();
-        return output;
-    }
+    tinyimx::SavePrivateMessageResult save;
+    tinyimx::FindPrivateMessageResult created;
+    const bool batched = PrivateBeginInsertReadBatchEnabled();
+    if (batched) {
+        auto started = trace.Measure(Phase::BeginInsertRead, [&] {
+            return repository_->BeginSavePrivateMessageOnConnection(
+                connection.operator->(), from_user_id, to_user_id, content,
+                tinyimx::DeliveryStatus::kPending,
+                static_cast<tinyimx::PrivateMessageType>(message_type), client_message_id);
+        });
+        if (!started.began) {
+            output.status = MessageApplicationStatus::kStorageError;
+            output.message = "transactional private message begin failed: " + started.save.message;
+            return output;
+        }
+        save = std::move(started.save);
+        created = std::move(started.created);
+    } else {
+        if (!trace.Measure(Phase::Begin,[&]{return connection->BeginTransaction();})) {
+            output.status = MessageApplicationStatus::kStorageError;
+            output.message = "transactional private message begin failed: " +
+                             connection->LastError();
+            return output;
+        }
 
-    const auto save = trace.Measure(Phase::Insert,[&]{return repository_->SavePrivateMessageOnConnection(
-        connection.operator->(),
-        from_user_id,
-        to_user_id,
-        content,
-        tinyimx::DeliveryStatus::kPending,
-        static_cast<tinyimx::PrivateMessageType>(message_type),
-        client_message_id
-    );});
+        save = trace.Measure(Phase::Insert,[&]{return repository_->SavePrivateMessageOnConnection(
+            connection.operator->(),
+            from_user_id,
+            to_user_id,
+            content,
+            tinyimx::DeliveryStatus::kPending,
+            static_cast<tinyimx::PrivateMessageType>(message_type),
+            client_message_id
+        );});
+
+    }
 
     if (!save.Succeeded()) {
         const std::string insert_error = save.message;
@@ -337,10 +365,13 @@ MessageRepositoryAdapter::PersistPrivateMessage(
         return output;
     }
 
-    const auto created = trace.Measure(Phase::IdentityRead,[&]{return repository_->FindPrivateMessageByIdOnConnection(
-        connection.operator->(),
-        save.message_id
-    );});
+    if (!batched) {
+        created = trace.Measure(Phase::IdentityRead,[&]{return repository_->FindPrivateMessageByIdOnConnection(
+            connection.operator->(),
+            save.message_id
+        );});
+
+    }
 
     if (!created.Succeeded() || !created.Found() || !same_identity(created.record)) {
         if (connection->InTransaction()) {
@@ -930,87 +961,6 @@ PendingRecipientsResult MessageRepositoryAdapter::ListPendingRecipientsAfter(
     if (!result.Succeeded()) return output;
     output.recipient_user_ids = std::move(result.recipient_user_ids);
     output.has_more = result.has_more;
-    return output;
-}
-
-MessageRepositoryMutationResult
-MessageRepositoryAdapter::ConfirmReceiverForRecipient(
-    std::uint64_t message_id,
-    std::uint64_t receiver_user_id
-) {
-    MessageRepositoryMutationResult output;
-    if (message_id == 0 || receiver_user_id == 0) {
-        output.status = MessageApplicationStatus::kInvalidArgument;
-        output.message = "invalid ConfirmReceiver application request";
-        return output;
-    }
-    if (repository_ == nullptr || pool_ == nullptr) {
-        output.status = MessageApplicationStatus::kStorageError;
-        output.message = "message repository is unavailable";
-        return output;
-    }
-    // Keep the existing checkout Ping/reconnect policy. Ownership and the
-    // Pending transition are one atomic predicate, with typed-schema guards
-    // matching BuildMessagesFromResult's nonzero sender, type and creation.
-    auto connection = pool_->Acquire();
-    if (!connection || connection->InTransaction()) {
-        output.status = MessageApplicationStatus::kStorageError;
-        output.message = "receiver confirmation healthy connection unavailable";
-        return output;
-    }
-    const std::string sql =
-        "UPDATE im_private_messages SET delivery_status = 1, delivered_at = NOW() "
-        "WHERE message_id = " + std::to_string(message_id) +
-        " AND to_user_id = " + std::to_string(receiver_user_id) +
-        " AND delivery_status = 0 AND from_user_id <> 0 AND message_type BETWEEN " +
-        std::to_string(static_cast<std::uint32_t>(tinyimx::PrivateMessageType::kText)) +
-        " AND " +
-        std::to_string(static_cast<std::uint32_t>(tinyimx::PrivateMessageType::kFile)) +
-        " AND created_at IS NOT NULL";
-    if (!connection->Execute(sql)) {
-        // An UPDATE error can have an uncertain commit outcome. Do not retry
-        // here or convert a lost response into success.
-        output.status = MessageApplicationStatus::kStorageError;
-        output.message = connection->LastError();
-        return output;
-    }
-    const auto affected = connection->AffectedRows();
-    if (affected == 1) {
-        output.status = MessageApplicationStatus::kSucceeded;
-        output.affected_rows = affected;
-        output.message = "private messages marked receiver confirmed";
-        LOG_INFO("private messages marked receiver confirmed"
-                 << ", requested_count=" << 1 << ", affected_rows=" << affected);
-        return output;
-    }
-    if (affected != 0) {
-        output.status = MessageApplicationStatus::kInvalidRecord;
-        output.message = "receiver confirmation affected unexpected row count";
-        return output;
-    }
-
-    // No transition: preserve full-record parsing and the original ordering
-    // of missing/corrupt/ownership/terminal-state classification on this lease.
-    auto record = repository_->FindPrivateMessageByIdOnConnection(
-        &*connection, message_id);
-    MessageRepositoryGetResult lookup;
-    lookup.status = MapStatus(record.status);
-    lookup.found = record.found;
-    lookup.message = std::move(record.message);
-    if (record.Succeeded() && record.found) {
-        if (!ValidDeliveryStatus(record.record.delivery_status)) {
-            lookup.status = MessageApplicationStatus::kInvalidRecord;
-            lookup.found = false;
-            lookup.message = "message repository returned invalid delivery status";
-        } else lookup.record = ToView(std::move(record.record));
-    }
-    auto terminal = ReceiverConfirmationTerminalResult(
-        std::move(lookup), receiver_user_id);
-    if (terminal) return std::move(*terminal);
-    // A still-Pending valid row after zero affected rows is inconsistent with
-    // the guarded statement. Never report it as durable or blindly retry.
-    output.status = MessageApplicationStatus::kStorageError;
-    output.message = "receiver confirmation did not transition pending record";
     return output;
 }
 

@@ -27,6 +27,17 @@ namespace tinyimx {
         }
     };
 
+    // Partial acknowledgements survive server statement errors. Never includes
+    // an outbox write or COMMIT: the caller must validate query_result first.
+    struct MySqlBeginInsertQueryResult {
+        bool begin_succeeded{false};
+        bool insert_succeeded{false};
+        bool query_succeeded{false};
+        std::uint64_t insert_id{0};
+        std::uint64_t affected_rows{0};
+        MySqlQueryResult query_result;
+    };
+
     class MySqlConnection {
         public:
             MySqlConnection();
@@ -46,6 +57,12 @@ namespace tinyimx {
             bool Execute(const std::string& sql);
 
             bool Query(const std::string& sql, MySqlQueryResult* result);
+
+            // Takes trusted INSERT/SELECT statements, never raw user SQL.
+            // Fixed three-result protocol, at most one row; rejects active transaction.
+            bool BeginInsertAndQuery(const std::string& insert_sql,
+                                     const std::string& query_sql,
+                                     MySqlBeginInsertQueryResult* result);
 
             bool BeginTransaction();
 

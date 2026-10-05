@@ -213,6 +213,122 @@ bool MySqlConnection::Execute(const std::string& sql) {
     return true;
 }
 
+bool MySqlConnection::BeginInsertAndQuery(
+    const std::string& insert_sql,
+    const std::string& query_sql,
+    MySqlBeginInsertQueryResult* result
+) {
+    if (result == nullptr) {
+        SetError("mysql begin insert query failed: result is null");
+        return false;
+    }
+    *result = {};
+    if (!IsConnected() || transaction_active_ || insert_sql.empty() || query_sql.empty()) {
+        SetError("mysql begin insert query failed: unavailable connection or active transaction or empty SQL");
+        return false;
+    }
+    // A protocol/client failure may leave results unread. Closing this session
+    // rolls back the uncommitted write at the server; never send COMMIT or
+    // attempt ROLLBACK into a stream whose result boundary is unknown.
+    const auto discard_session = [&]() {
+        transaction_active_ = false;
+        Close();
+    };
+    const auto statement_error = [&](const char* phase) {
+        SetMysqlError(phase);
+        if (::mysql_errno(mysql_) >= 2000) discard_session();
+    };
+    const std::string sql = "START TRANSACTION;" + insert_sql + ";" + query_sql;
+    if (::mysql_real_query(mysql_, sql.data(), sql.size()) != 0) {
+        SetMysqlError("mysql begin insert query first result failed");
+        // No acknowledged BEGIN. A lost response still cannot become durable,
+        // since this packet never contains COMMIT. Retire uncertain sessions.
+        discard_session();
+        return false;
+    }
+    try {
+        for (std::size_t statement = 0; statement < 3; ++statement) {
+            std::unique_ptr<MYSQL_RES, decltype(&::mysql_free_result)>
+                rows(::mysql_store_result(mysql_), ::mysql_free_result);
+            if (statement < 2) {
+                if (rows || ::mysql_field_count(mysql_) != 0) {
+                    rows.reset();
+                    SetError("mysql begin insert query failed: unexpected write result");
+                    discard_session();
+                    return false;
+                }
+                if (statement == 0) {
+                    if (!(mysql_->server_status & SERVER_STATUS_IN_TRANS)) {
+                        SetError("mysql begin insert query failed: BEGIN not active");
+                        discard_session();
+                        return false;
+                    }
+                    result->begin_succeeded = true;
+                    transaction_active_ = true;
+                } else {
+                    const auto affected = ::mysql_affected_rows(mysql_);
+                    result->affected_rows = affected == static_cast<my_ulonglong>(-1)
+                        ? 0 : static_cast<std::uint64_t>(affected);
+                    result->insert_id = ::mysql_insert_id(mysql_);
+                    result->insert_succeeded = true;
+                }
+            } else {
+                if (!rows || ::mysql_num_rows(rows.get()) > 1 ||
+                    ::mysql_num_fields(rows.get()) > 64) {
+                    rows.reset();
+                    SetError("mysql begin insert query failed: unexpected query result");
+                    discard_session();
+                    return false;
+                }
+                const auto count = ::mysql_num_fields(rows.get());
+                const auto fields = ::mysql_fetch_fields(rows.get());
+                for (unsigned i = 0; i < count; ++i)
+                    result->query_result.fields.emplace_back(fields[i].name);
+                MYSQL_ROW row = nullptr;
+                while ((row = ::mysql_fetch_row(rows.get()))) {
+                    const auto lengths = ::mysql_fetch_lengths(rows.get());
+                    std::vector<std::string> values;
+                    values.reserve(count);
+                    for (unsigned i = 0; i < count; ++i)
+                        values.emplace_back(row[i] ? std::string(row[i], lengths[i]) : "");
+                    result->query_result.rows.push_back(std::move(values));
+                }
+                if (::mysql_errno(mysql_)) {
+                    rows.reset();
+                    SetMysqlError("mysql begin insert query fetch failed");
+                    discard_session();
+                    return false;
+                }
+            }
+            rows.reset();
+            const auto next = ::mysql_next_result(mysql_);
+            if (next > 0) {
+                statement_error("mysql begin insert query next result failed");
+                return false;
+            }
+            if ((statement < 2 && next != 0) || (statement == 2 && next != -1)) {
+                SetError("mysql begin insert query failed: expected exactly three results");
+                discard_session();
+                return false;
+            }
+        }
+        if (!(mysql_->server_status & SERVER_STATUS_IN_TRANS)) {
+            SetError("mysql begin insert query failed: transaction no longer active");
+            discard_session();
+            return false;
+        }
+        result->query_succeeded = true;
+        last_insert_id_ = result->insert_id;
+        affected_rows_ = result->affected_rows;
+        last_error_.clear();
+        return true;
+    } catch (...) {
+        // Includes allocation exceptions while materializing the one row.
+        discard_session();
+        throw;
+    }
+}
+
 bool MySqlConnection::Query(
     const std::string& sql,
     MySqlQueryResult* result

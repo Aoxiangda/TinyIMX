@@ -631,8 +631,39 @@ MessageApplicationService::ConfirmReceiver(
         return output;
     }
 
-    auto mutation = repository_->ConfirmReceiverForRecipient(
-        message_id, receiver_user_id);
+    auto lookup = repository_->GetPrivateMessage(message_id);
+    if (!lookup.Succeeded()) {
+        output.status = lookup.status;
+        output.message = std::move(lookup.message);
+        return output;
+    }
+    if (!lookup.found) {
+        output.status = MessageApplicationStatus::kNotFound;
+        output.message = "private message not found";
+        return output;
+    }
+    if (lookup.record.to_user_id != receiver_user_id) {
+        output.status = MessageApplicationStatus::kPermissionDenied;
+        output.message = "receiver does not own private message";
+        return output;
+    }
+
+    switch (lookup.record.delivery_state) {
+        case MessageDeliveryState::kPending:
+            break;
+        case MessageDeliveryState::kReceiverConfirmed:
+        case MessageDeliveryState::kRead:
+            output.status = MessageApplicationStatus::kSucceeded;
+            output.affected_rows = 0;
+            output.message = "receiver confirmation already durable";
+            return output;
+        case MessageDeliveryState::kFailed:
+            output.status = MessageApplicationStatus::kFailedPrecondition;
+            output.message = "failed message cannot be receiver-confirmed";
+            return output;
+    }
+
+    auto mutation = repository_->ConfirmReceiver(message_id);
     output.status = mutation.status;
     output.affected_rows = mutation.affected_rows;
     output.message = std::move(mutation.message);

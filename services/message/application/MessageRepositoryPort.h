@@ -4,9 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace tinyimx::message {
@@ -128,24 +126,6 @@ public:
         std::uint64_t message_id
     ) = 0;
 
-    // Adapters may perform this validated read/mutation on one healthy lease.
-    // The compatibility path retains ownership and monotonic-state checks.
-    [[nodiscard]] virtual MessageRepositoryMutationResult ConfirmReceiverForRecipient(
-        std::uint64_t message_id,
-        std::uint64_t receiver_user_id
-    ) {
-        if (message_id == 0 || receiver_user_id == 0) {
-            MessageRepositoryMutationResult out;
-            out.status = MessageApplicationStatus::kInvalidArgument;
-            out.message = "invalid ConfirmReceiver application request";
-            return out;
-        }
-        auto terminal = ReceiverConfirmationTerminalResult(
-            GetPrivateMessage(message_id), receiver_user_id);
-        if (terminal) return std::move(*terminal);
-        return ConfirmReceiver(message_id);
-    }
-
     [[nodiscard]] virtual MessageRepositoryMutationResult ConfirmReceiverBatch(
         const std::vector<std::uint64_t>& message_ids
     ) = 0;
@@ -154,46 +134,6 @@ public:
         std::uint64_t reader_user_id,
         std::uint64_t peer_user_id
     ) = 0;
-
-protected:
-    [[nodiscard]] static std::optional<MessageRepositoryMutationResult>
-    ReceiverConfirmationTerminalResult(
-        MessageRepositoryGetResult lookup,
-        std::uint64_t receiver_user_id
-    ) {
-        MessageRepositoryMutationResult out;
-        if (!lookup.Succeeded()) {
-            out.status = lookup.status;
-            out.message = std::move(lookup.message);
-            return out;
-        }
-        if (!lookup.found) {
-            out.status = MessageApplicationStatus::kNotFound;
-            out.message = "private message not found";
-            return out;
-        }
-        if (lookup.record.to_user_id != receiver_user_id) {
-            out.status = MessageApplicationStatus::kPermissionDenied;
-            out.message = "receiver does not own private message";
-            return out;
-        }
-        switch (lookup.record.delivery_state) {
-            case MessageDeliveryState::kPending:
-                return std::nullopt;
-            case MessageDeliveryState::kReceiverConfirmed:
-            case MessageDeliveryState::kRead:
-                out.status = MessageApplicationStatus::kSucceeded;
-                out.message = "receiver confirmation already durable";
-                return out;
-            case MessageDeliveryState::kFailed:
-                out.status = MessageApplicationStatus::kFailedPrecondition;
-                out.message = "failed message cannot be receiver-confirmed";
-                return out;
-        }
-        out.status = MessageApplicationStatus::kInvalidRecord;
-        out.message = "message repository returned invalid delivery status";
-        return out;
-    }
 };
 
 }  // namespace tinyimx::message

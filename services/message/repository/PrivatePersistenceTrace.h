@@ -24,15 +24,15 @@ private:std::atomic<std::uint64_t> state_{0};
 // Numeric diagnostics only. Never changes SQL, retries, deadlines or admission.
 class PrivatePersistenceTrace final {
 public:
-    enum class Phase:std::size_t {Precheck,Acquire,Begin,Insert,IdentityRead,OutboxInsert,Commit,RecoveryRead,Rollback,Count};
+    enum class Phase:std::size_t {Precheck,Acquire,Begin,Insert,IdentityRead,OutboxInsert,Commit,RecoveryRead,Rollback,BeginInsertRead,Count};
     static constexpr auto kPhases=static_cast<std::size_t>(Phase::Count);
     struct Snapshot {
         std::uint64_t from=0,to=0,message_id=0;
         std::int64_t started_us=0,total_us=0;
         std::uint64_t tid=0;
         std::int64_t cpu_us=-1;
-        std::array<std::int64_t,kPhases> phase_us{{-1,-1,-1,-1,-1,-1,-1,-1,-1}};
-        std::array<std::int64_t,kPhases> phase_cpu_us{{-1,-1,-1,-1,-1,-1,-1,-1,-1}};
+        std::array<std::int64_t,kPhases> phase_us{{-1,-1,-1,-1,-1,-1,-1,-1,-1,-1}};
+        std::array<std::int64_t,kPhases> phase_cpu_us{{-1,-1,-1,-1,-1,-1,-1,-1,-1,-1}};
         int status=0,outcome=0;bool threw=false;
     };
     using Now=std::int64_t(*)() noexcept;
@@ -84,6 +84,7 @@ private:
             <<" precheck_us="<<s.phase_us[0]<<" acquire_us="<<s.phase_us[1]<<" begin_us="<<s.phase_us[2]<<" insert_us="<<s.phase_us[3]
             <<" identity_read_us="<<s.phase_us[4]<<" outbox_insert_us="<<s.phase_us[5]<<" commit_us="<<s.phase_us[6]
             <<" recovery_read_us="<<s.phase_us[7]<<" rollback_us="<<s.phase_us[8]
+            <<" begin_insert_read_us="<<s.phase_us[9]<<" begin_insert_read_cpu_us="<<s.phase_cpu_us[9]
             <<" acquire_cpu_us="<<s.phase_cpu_us[1]<<" precheck_cpu_us="<<s.phase_cpu_us[0]
             <<" begin_cpu_us="<<s.phase_cpu_us[2]<<" insert_cpu_us="<<s.phase_cpu_us[3]
             <<" identity_read_cpu_us="<<s.phase_cpu_us[4]<<" outbox_insert_cpu_us="<<s.phase_cpu_us[5]

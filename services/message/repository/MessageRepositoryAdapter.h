@@ -138,11 +138,6 @@ public:
         std::uint64_t message_id
     ) override;
 
-    [[nodiscard]] MessageRepositoryMutationResult ConfirmReceiverForRecipient(
-        std::uint64_t message_id,
-        std::uint64_t receiver_user_id
-    ) override;
-
     [[nodiscard]] MessageRepositoryMutationResult ConfirmReceiverBatch(
         const std::vector<std::uint64_t>& message_ids
     ) override;

@@ -277,6 +277,12 @@ struct SavePrivateMessageResult {
 
 
 
+struct BeginSavePrivateMessageResult {
+    bool began{false};
+    SavePrivateMessageResult save;
+    FindPrivateMessageResult created;
+};
+
 struct GroupMessageRecord {
     std::uint64_t message_id{0};
     std::string client_message_id;
@@ -642,6 +648,18 @@ public:
         DeliveryStatus delivery_status,
         PrivateMessageType message_type = PrivateMessageType::kText,
         const std::string& client_message_id = ""
+    );
+
+    // Starts a transaction and writes/reads the new row in one SQL packet.
+    // Caller must validate created before outbox/COMMIT and rollback errors.
+    BeginSavePrivateMessageResult BeginSavePrivateMessageOnConnection(
+        MySqlConnection* connection,
+        std::uint64_t from_user_id,
+        std::uint64_t to_user_id,
+        const std::string& content,
+        DeliveryStatus delivery_status,
+        PrivateMessageType message_type,
+        const std::string& client_message_id
     );
 
     FindPrivateMessageResult FindPrivateMessageByIdOnConnection(
