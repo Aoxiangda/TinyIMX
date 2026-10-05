@@ -1077,3 +1077,13 @@ Linux6.8官方 https://raw.githubusercontent.com/torvalds/linux/v6.8/tools/perf/
 `9aa93e7` 实际复制两个Gateway各六个public ELF/DSO，12文件全部size/ELFmagic/owner/targetSHA/copySHA/buildID验证，真正c289与运行RPATH库一致；两个隔离UID1000/zeroCAP报告exit0、各426/430KiB生成。parentraw及19身份配置保持。阶段最终FAIL仅为nativeperf输出格式：显式四列外依然自动追加第5列IPC占位 `- -`，严格4列解析因此拒绝，没有丢弃不认识的数据或制造CPU结论。
 
 新工具只读取这些已经成功的报告与哈希清单，明确严格接受5列且IPC只能两个 `-`（不解释为硬件指标），类型解析前四列，并核对headerSamples620/625、Lost0、187/167符号行、总样本exact以及总权重舍入。显式按CPU权重排序后输出热点，避免字段排序影响top；长符号只移除显示padding，完整值保留到freshanalysis/all-symbol-rows，不截断原始证据。没有重新复制、报告容器、采样或压力，所有输入包括12ELF在前后继续SHA保护。新离线解析本source提交时NOT_RUN；取得可信实际函数后才进行下一精准修改。vDSO未解析offset保留未知，Messagecapture仍不完整，所有fullfeature目标未达。
+
+
+### 2026-10-05：Gateway可信热点与独立时钟成本诊断
+
+物理ELF解析 `private-cpu-symbol-analysis-20261005` 已PASS：GatewayA/B样本620/625、Lost0，vDSO偏移0x768占44.35%/42.08%用户CPU，其余主要send/syscall/recv与同步；CycleClock::Now显式函数占2.26%/0.8%。该分析取代旧procroot错误函数名，用户态平面采样不能代表内核CPU、等待时间或请求P99；带采样压力1306.6ms不能作为无采样验收。Message采样失败255原因仍OPEN。
+
+下一诊断只新建own C程序与隔离UID1000零CAP/无网络/只读/defaultseccomp容器，四轮各模式20k次：实际运行镜像libc的MONOTONIC、REALTIME、直接syscall MONOTONIC以及COARSE对照；输出批均wall/user/system成本，不伪装成单调用P99。仅复制诊断自身AT_SYSINFO_EHDR与自身maps严格对应的公开kernel vDSO ELF，验证1–16页/64KiB/ELF与段节边界后流式保存private目录，readelf/objdump核对0x768指令。没有读取目标进程内存/用户数据，没有时钟源/宿主安全/业务期限修改。COARSE不用于产品计时或压测门槛。本source提交时probe NOT_RUN，需实际代码与测量结果再决定优化；所有功能10k–50k目标仍未达。
+
+
+诊断source首次应用在所有路径写入之前，被远端严格AST检查拒绝：v58导出目录列表生成缺少一个引号。没有产品代码/源文件/编译/容器变化；空的首source阶段保留并写明确失败审计，不覆盖。修复列表、对两个helper都执行AST检查后，fresh attempt2 source stage再提交。此为诊断打包缺陷，不是业务性能证据。
