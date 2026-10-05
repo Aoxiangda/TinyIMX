@@ -107,7 +107,8 @@ void TestExceptionTasks(const tinyimx::Config& config) {
                 std::cout << "[ThreadPoolDemo] ok_future = "
                   << ok_future.get() << std::endl;
         */
-        LOG_INFO("ok_future=" << ok_future.get());
+        const int ok_value = ok_future.get();
+        LOG_INFO("ok_future=" << ok_value);
 
     } catch (const std::exception& e) {
         std::cout << "[ThreadPoolDemo] unexpected ok_future exception: "

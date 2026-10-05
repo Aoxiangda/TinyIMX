@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace tinyimx {
@@ -33,6 +34,21 @@ public:
              const char* file,
              int line,
              const std::string& message);
+
+    // Logging operands must not perform required business operations: a
+    // filtered record deliberately leaves its message factory unevaluated.
+    template <typename MessageFactory>
+    void LogLazy(LogLevel level,
+                 SourceLocation source,
+                 MessageFactory&& make_message) {
+        if (!ShouldLog(level)) {
+            filtered_log_count_.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        // Keep Log's level check: configuration can change while formatting.
+        Log(level, source, std::forward<MessageFactory>(make_message)());
+    }
 
     bool IsInitialized() const;
     LogLevel MinLevel() const;

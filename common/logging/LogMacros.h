@@ -6,12 +6,14 @@
 
 #define TINYIMX_LOG(level, message)                                      \
     do {                                                                 \
-        std::ostringstream tinyimx_log_stream;                           \
-        tinyimx_log_stream << message;                                   \
-        tinyimx::Logger::Instance().Log(                                 \
-            level,                                                       \
+        tinyimx::Logger::Instance().LogLazy(                             \
+            (level),                                                     \
             tinyimx::SourceLocation{__FILE__, __LINE__, __func__},        \
-            tinyimx_log_stream.str());                                   \
+            [&]() {                                                      \
+                std::ostringstream tinyimx_log_stream;                   \
+                tinyimx_log_stream << message;                           \
+                return tinyimx_log_stream.str();                         \
+            });                                                          \
     } while (0)
 
 #define LOG_TRACE(message) TINYIMX_LOG(tinyimx::LogLevel::kTrace, message)

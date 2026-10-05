@@ -670,3 +670,12 @@ fresh attempt3先做zeroCAP/no-net/readonly独立stat容器，唯一bind公开ca
 下一诊断重心是已有61次preciseclock/echo与~0.43core300/s的RPC组件开销。fresh ownCPP沿用实际gRPC1.76/当前缓存proto与syncCQ1MIN1MAX2，native16client，0ms和20ms handler两场景，分别TCP/UnixABBA4×3000全字段synthetic结果。只在自己的ELF链接bind/connect包装器核对物理family与127loopback/固定私有socket路径，保持realcall/errno。所有新容器零CAP/UID1000/nnp/seccomp2/readonly/no-net，仅自己的caseoutput RW；Unix socket只能在fresh且预检不存在的case目录由框架创建/清理。全部正式19容器/配置/SQL durability/宿主应用保持，不把synthetic组件结果当作全功能/10k50k验收。
 
 另一个源代码审查发现是LOG宏先构造ostringstream再进入Logger过滤，禁用日志也计算message表达式；潜在浪费尚未量化，未以此替代真实CPU证据，也未修改产品。应用器白名单第一次克隆漏了underscore helper名，在任何源文件或审计目录写入前被严格白名单拒绝；原applier/包保留，fresh v2由manifest精确白名单通过，已保存local审计。
+
+
+### 2026-10-05：纠正诊断偏移，按等级延迟构造日志候选
+
+30452a5 的隔离传输诊断实际完成：公开 upperdir Unix socket connect=-1/errno111(ECONNREFUSED)，没有认证或 SQL；overlay 原 socket dev87 与 bind dev2053、inode同3932320，仅stat相同不等于同一可连接对象，禁止部署此路径。RPC8组共24000合成结果全正确，CPU1/no-net own容器里0ms TCP P99 6.328/4.674ms、Unix23.090/30.035；20ms TCP45.902/46.082、Unix65.475/72.784，未发现收益。此实验存在单核配额，不能将它解释为真实部署瓶颈或Unix普遍较差。正式Message/GatewayA/B/MySQL实际cpu.max=max 100000且nr_periods/nr_throttled/throttled_usec均0，没有生产CFS配额限流。v65已保存并校验1577文件，tar SHA f35b78d06d6b2fe4f09b53329403fa5fb2212186d0b5023e5bc37c644916284b。近几轮集中修复诊断工具，没有新的真实产品性能突破；必须停止用组件测试替代业务收益。
+
+源码审计发现LOG宏总先构造ostringstream/计算操作数，Logger随后才过滤。752条源码调用词法清单和唯一函数调用清单只读保存；15条可疑名称实际是纯status转字符串。另发现examples/thread_pool_demo的ok_future.get()确有消费/等待副作用，移出LOG保留原语义。其余操作数为状态/地址/错误/getter/集合大小/只读Stats与诊断时钟，未发现必要业务修改。词法工具不是任意C++纯函数证明，后续新增日志仍需把业务操作放在外部。
+
+本候选修改Logger.h的LogLazy模板与LOG宏，在等级过滤时跳过factory并恰好累计一次filtered；放行后仍调用原Log二次过滤，以处理格式化期间等级改变，源位置在factory外构造，保留输出/Fatal刷新/直接Log API/失败计数。等级、期限、事务、密码验证、数据和正式配置不变。原生回归检查输出/源函数、全部等级、factory异常、等级在factory中改变、未初始化、8线程8000计数、future消费、单次level求值；同ELF复现旧eager与新lazy，0/512B格式8组ABBA各100000条，只比较均值CPU与wall。该source提交时NOT_RUN。原生通过之后仍需真实产品重建、功能回归和同负载10k150端到端对照；不得提前宣布135ms长尾突破，所有功能10k–50k目标仍OPEN。
