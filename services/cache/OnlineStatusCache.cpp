@@ -90,6 +90,34 @@ constexpr const char* kRefreshOnlineIfMatchScript = R"lua(
     return 1
 )lua";
 
+const std::string& RefreshOnlineBatchScript() {
+    // Build once from the original single-key script, so ownership and TTL
+    // checks cannot drift between the two paths.
+    static const std::string script = [] {
+        std::string body{kRefreshOnlineIfMatchScript};
+        const std::vector<std::pair<std::string, std::string>> replacements{
+            {"KEYS[1]", "key"}, {"ARGV[1]", "gateway"},
+            {"ARGV[2]", "connection"}, {"ARGV[3]", "ttl"}
+        };
+        for (const auto& replacement : replacements) {
+            std::size_t position = 0;
+            while ((position = body.find(replacement.first, position)) !=
+                   std::string::npos) {
+                body.replace(position, replacement.first.size(),
+                             replacement.second);
+                position += replacement.second.size();
+            }
+        }
+        return "local function refresh_one(key,gateway,connection,ttl)\n" + body +
+            "\nend\nlocal results={}\nfor i=1,#KEYS do\n"
+            "local ok,result=pcall(refresh_one,KEYS[i],ARGV[3*i-2],"
+            "ARGV[3*i-1],ARGV[3*i])\n"
+            "if ok then results[i]=tostring(result) "
+            "else results[i]='redis_error' end\nend\nreturn results";
+    }();
+    return script;
+}
+
 }  // namespace
 
 OnlineStatusCache::OnlineStatusCache(RedisConnectionPool* pool,
@@ -629,6 +657,91 @@ OnlineStatusCache::RefreshOnlineIfMatch(
 
             return result;
     }
+}
+
+std::vector<RefreshOnlineIfMatchResult>
+OnlineStatusCache::RefreshOnlineIfMatchBatch(
+    const std::vector<OnlineStatusRefreshRequest>& requests
+) {
+    std::vector<RefreshOnlineIfMatchResult> results(requests.size());
+    if (requests.empty()) return results;
+    if (requests.size() > kMaxRefreshBatchSize) {
+        for (auto& result : results) {
+            result.status = RefreshOnlineIfMatchStatus::kInvalidArgument;
+            result.error_message = "online refresh batch exceeds maximum size16";
+        }
+        return results;
+    }
+
+    std::vector<std::size_t> indices;
+    std::vector<std::string> keys;
+    std::vector<std::string> arguments;
+    indices.reserve(requests.size());
+    keys.reserve(requests.size());
+    arguments.reserve(requests.size() * 3);
+    for (std::size_t i = 0; i < requests.size(); ++i) {
+        const auto& request = requests[i];
+        const char* invalid = nullptr;
+        if (request.user_id == 0) invalid = "invalid user_id";
+        else if (request.gateway_id.empty()) invalid = "gateway_id is empty";
+        else if (request.connection_name.empty()) invalid = "connection_name is empty";
+        else if (request.ttl_seconds <= 0) invalid = "invalid ttl_seconds";
+        if (invalid) {
+            results[i].status = RefreshOnlineIfMatchStatus::kInvalidArgument;
+            results[i].error_message =
+                std::string("online status conditional refresh failed: ") + invalid;
+            continue;
+        }
+        indices.push_back(i);
+        keys.push_back(BuildKey(request.user_id));
+        arguments.insert(arguments.end(), {request.gateway_id,
+            request.connection_name, std::to_string(request.ttl_seconds)});
+    }
+    if (indices.empty()) return results;
+
+    const auto fail_valid = [&results, &indices](const std::string& reason) {
+        for (const auto index : indices) {
+            results[index].status = RefreshOnlineIfMatchStatus::kRedisError;
+            results[index].error_message = reason;
+        }
+    };
+    if (pool_ == nullptr) {
+        fail_valid("online status conditional refresh failed: redis pool is null");
+        return results;
+    }
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        fail_valid("online status conditional refresh failed: acquire redis connection failed");
+        return results;
+    }
+    const auto response = connection->EvalStringArray(
+        RefreshOnlineBatchScript(), keys, arguments);
+    if (!response || response->size() != indices.size()) {
+        fail_valid(connection->LastError().empty()
+            ? "online status conditional refresh failed: invalid batch EVAL reply"
+            : connection->LastError());
+        return results;
+    }
+    for (std::size_t item = 0; item < indices.size(); ++item) {
+        auto& result = results[indices[item]];
+        const auto& code = response->at(item);
+        if (code == "0") result.status = RefreshOnlineIfMatchStatus::kNotFound;
+        else if (code == "1") result.status = RefreshOnlineIfMatchStatus::kRefreshed;
+        else if (code == "2") result.status = RefreshOnlineIfMatchStatus::kMismatch;
+        else if (code == "3") {
+            result.status = RefreshOnlineIfMatchStatus::kInvalidRecord;
+            result.error_message = "online status conditional refresh failed: stored record is invalid";
+        } else if (code == "4") {
+            result.status = RefreshOnlineIfMatchStatus::kInvalidArgument;
+            result.error_message = "online status conditional refresh failed: script rejected ttl_seconds";
+        } else {
+            result.status = RefreshOnlineIfMatchStatus::kRedisError;
+            result.error_message = code == "5"
+                ? "online status conditional refresh failed: EXPIRE returned unexpected result"
+                : "online status conditional refresh failed: per-key Redis script error";
+        }
+    }
+    return results;
 }
 
 GetOnlineStatusResult OnlineStatusCache::GetOnlineStatus(

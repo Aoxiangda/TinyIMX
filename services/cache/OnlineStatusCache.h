@@ -3,8 +3,10 @@
 #include "common/cache/RedisConnectionPool.h"
 
 #include <cstdint>
+#include <cstddef>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace tinyimx {
 
@@ -93,6 +95,13 @@ struct RefreshOnlineIfMatchResult {
     }
 };
 
+struct OnlineStatusRefreshRequest {
+    std::uint64_t user_id{0};
+    std::string gateway_id;
+    std::string connection_name;
+    int ttl_seconds{0};
+};
+
 enum class SetOfflineIfMatchStatus {
     kDeleted = 0,
     kNotFound,
@@ -160,6 +169,14 @@ public:
         const std::string& gateway_id,
         const std::string& connection_name,
         int ttl_seconds
+    );
+
+    // Bounded maintenance primitive for the configured standalone Redis.
+    // Results retain input order. Invalid items and per-key Redis errors do
+    // not discard valid peers. An oversized batch is rejected before I/O.
+    static constexpr std::size_t kMaxRefreshBatchSize = 16;
+    std::vector<RefreshOnlineIfMatchResult> RefreshOnlineIfMatchBatch(
+        const std::vector<OnlineStatusRefreshRequest>& requests
     );
 
     GetOnlineStatusResult GetOnlineStatus(

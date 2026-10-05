@@ -737,3 +737,16 @@ Gateway原版慢chat日志327条、candidate299，均失败0；原chat dispatch�
 随后single-A1/batch-B1/batch-B2/single-A2，各667/s20秒、13340全部计划槽open-loop，同8worker/两pool8，batch两collector/最多16key/最长5ms合并。两512有界队列溢出即保留失败，不丢样本；要求planned/attempted/issued/completed完全一致、错误0、逐ID/状态1/时间顺序核对。CPU包括collectors，native到Docker与产品container路径不同；Redis cgroup含背景/.5s屏障/结果序列化，不能当独占业务CPU。编译链接180秒、prepare60秒、各case90秒，仅PID-starttime-cmdline-PGID匹配的本任务子进程组可在失败后终止；所有日志/live/partialraw/failure阶段保留。19运行ID/image/start、私有配置SHA逐项保持，SQL未触及，原持久化1/1/1/0/0不变。
 
 执行前结果明确 `NOT_RUN`，不得称生产批量候选或全功能压测通过；命令减少之外，还需CPU、迟到/5ms维护新鲜度与全人口错误证明。如果机制有效再做生产生命周期/所有权交叉测试并审计正确运行基线，不直接构建源码中已拒绝Gateway fair调度。运行仍原Gateway33fc/1d8、Message ddc7/b24/c119/CIDcbac，User38、MCPbc85；源码guarded确认84与当前Git不等于运行版本。v23归档24文件SHA88f9c20c3d930d05323330493a241e3b0a7ee2c48729e8e6079c9b654f2f3290，已本地逐文件验证；v24预置仅完整组件证据才导出，排除秘密配置/env/私有日志/ELF并RAM秘密扫描。审查时在打包前修复漏standard include、临时vector迭代器错误以及RedisConfig.enable必须读取真实配置；无执行或产品变更。曾只读猜错services/gateway路径，真实gateway/由rg文件清单确认，不是产品失败。持续迭代，所有功能10k50k极致要求仍未达到。
+
+
+### 2026-10-05：在线维护机制有重复成本收益，新增有界缓存API前置测试
+
+c87b9b5实际执行 `online-maintenance-component-probe-20261005`：84项检查全部通过；ABBA原/批/批/原各13340计划、attempted、issued、completed、逐ID结果1完全一致，错误0，全19/config保持。原A1/A2 EVAL与健康lease各13340，batchB1/B2各6622，最大批3；原nativeCPU0.362273/0.368229核、batch0.335281/0.336015（包括两collector）下降约7.45%/8.75%。全Redis cgroup原0.528632/0.600619、batch0.291491/0.361036核，两组对照分别下降0.23714/0.23958核；该cgroup包含背景/.5sbarrier/序列化，不能称独占业务CPU。原enqueue→result P992.611634/2.919340，batch8.001407/8.092809ms；scheduled→result P992.854266/3.255612→8.302184/8.445341，5ms合并增加异步维护新鲜度等待。只有native独立测试键，没有真实10kPong/消息混合压力，不等同完整性能验收，也不外推50k结果。
+
+v24归档87文件/88条目 SHAa7af2aed2df360cd2495d0d4329a83d1e2e7faade9356bd8a8f317d2ce2603a2，全87逐文件SHA本地通过，含53360全部原始请求与语义/CPU/进程/编译审计。全服务/资源/应用仍原样，无内存清理必要。下一阶段不重复容量压测，先把有证据机制实现成缓存API，保证功能衔接再接入Gateway。
+
+只读基线snapshot确认Gateway/相关cache/example相对运行33fc仅BusinessExecutor.cpp有已拒绝6521 fair调度差异；本次仅恢复该源码精确原SHA3b707e2e5a63cd7671a92c977ea75fc7fcaad29de1c90e92e41bcb8f9017cb22，Git父版本/审计preimage仍保留，没有构建部署它。新增 `OnlineStatusRefreshRequest` 与 `RefreshOnlineIfMatchBatch` 最大16，输入顺序返回、逐项原校验（非法项不触及Redis），全非法/空不Acquire，超过16整批invalid且无I/O；合法子集仅一次原健康Acquire/PING和EVAL。Lua包装一次从原single body生成（原SHA12b8...不改），每key pcall隔离wrongtype，原owner网关+连接/GET/JSON/EXPIRE和逐项typed状态、TTL/原字节保留。当前Redisstandalone范围明确，不声称提供RedisCluster跨slot批量能力，不放宽好友/持久化/超时或加入盲重试。
+
+API真实Redis测试CPP与helper分别ownpool1/4，用全新固定prefix codex:online-maintenance-batch-api-20261005:p1/p4，最多120自有键TTL300/专用1秒过期/正常120刷新，显式替换自有夹具，禁止生产键/DEL/FLUSH/CONFIG/SQL。18类原单条与批量逐项状态/TTL/字节对比、wrongtype后有效项、空/1/16/17边界、同用户混合所有者顺序、替换后旧owner不得续期、null/uninit/只关闭本任务池及invalid项、4并发调用100个三项mixed batches/全部lease归还。每检查保存JSON，failure/编译/log/partial原样留存；编译ownAPI.o+test.o/link各180s，cases90s仅本任务PID身份匹配组可终止。结果在提交时明确 `NOT_RUN`，没有全局Redis故障或产品Gateway生命周期测试；不把真实API functional与之前prototype84混称。
+
+接入审查发现原网关kNotFound会验证当前local session并自恢复，必须保留；不能把批量NotFound直接丢弃而制造在线路由丢失。还需执行时epoch+connection当前性、立即Pong、错所有者/下线交叉、queue上限/结果终态、停机排空后销毁pool。拒绝让四个presence调用线程同步等5ms形成max4批，因为50k用户时吞吐会受工作线程数量限制；后续只考虑独立有界异步批量调度及实际生命周期测试。当前API尚未在Gateway使用，运行仍33fc/1d8、Message原ddc/b24/c119、User38、MCPbc85。所有功能极致及20k50k要求仍未达到，继续按证据迭代。
