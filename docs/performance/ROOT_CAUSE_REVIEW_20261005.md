@@ -722,6 +722,22 @@ logging150A1在82.50s中止，仅7804登录、1 business_deadline_exceeded；成
 
 logging150O1用原a8b7/be8及原全部配置，在68.62s仅6357登录后auth_timeout，消息计划/发送/ACK均0。三组均未进入消息窗口，不能归因新日志代码、不能给出宏收益或当前ACKP99。当前主机37样本CPU24–66%、available5118–5370MiB，34样本分页读非零、max32015pages/s；是整机数据，不能指认VMware或游戏，也不能以早先瞬时0分页声称全程无分页。
 
-新原镜像控制首入口因CRLF在set失败，Python/负载未启动；只对三个自有新工具详细预审计/备份后规范到逐字节等于Git blob的LF，逻辑源码未改，修复stage保留。第一份登录汇总regex多重转义造成WARN空且结尾写字面反斜线n，不能当完整有效JSON。原stage保留，新attempt2修正转义并要求真实A1capturedWARN>9000作为输入解析核验，所有新包必须LF二进制写入。工具错误不计产品性能改进。
+新原镜像控制首入口因CRLF在set失败，Python/负载未启动；只对三个自有新工具详细预审计/备份后规范到逐字节等于Git blob的LF，逻辑源码未改，修复stage保留。第一份登录汇总WARN为空，结果不完整；后来实际json.loads验证它是有效JSON，先前关于结尾字面转义导致无效JSON的推断错误，已纠正。原stage保留，新attempt2修正转义并要求真实A1capturedWARN>9000作为输入解析核验，所有新包必须LF二进制写入。工具错误不计产品性能改进。
 
 为区分当前密码计算、SQL查找与RPC处理器内外等待，复用已通过36业务checks的1ff07881认证数值诊断image（ELF62d2e300/build374f280），临时只重建idle User，完整HostConfig/mount/Cmd/环境验证，只加trace1，密码算法/100000迭代/用户pool8/其他18/config/durability保持。只读数字采样uid/tid/阶段wall与threadCPU每秒最多8条，不记录密码、密钥或用户内容。10k login100/s hold30s与原3s期限不变，ownPID/startticks/argv/PGID600s守卫，observer读取真正service child并核对同cgroup，公开TID集合不是精确线程创建率。无build期间资源干扰，任何失败也恢复原User38dca与全部原env map，保存替换前原始私有日志。该source提交时诊断NOT_RUN，不是产品性能优化，也不预设唯一根因。所有功能10k–50k目标仍未达到。
+
+
+### 2026-10-05：当前认证379配对样本表明计算之外的等待显著，仍未突破
+
+authcurrent10kdiag真实FAIL：97.15s完成9122登录后auth_timeout，未allonline/未hold窗口，消息计划0；758数值trace形成379无歧义同uid/tid时间包含配对。成功且有界抽样不是完整请求总体。密码wall均值45.454ms/CPU15.163ms，同样本差值均值约30.291ms；lookup wall5.571/CPU0.625ms；repo wall51.410/CPU15.916ms；handler wall52.071/CPU16.141ms。密码样本P99 wall165.705/CPU22.249ms，不能不同分位直接相减。客户端成功登录P99上界2407.0ms与这些阶段样本不是同一总体，不能用2407减186声称精确队列等待。单样本uid707984密码151.715ms、threadCPU17.493ms说明该段大量时间不在本线程运行；可包含调度/锁/缺页等，尚未唯一归因。
+
+21resource样本、19个爬坡区间guest busy均值91.598%，available最低8456356KiB；User1.830核（user1.592/system0.238），GWA0.501/GWB0.505核，所有这三target throttled_usec delta0，实际serviceThreads最大39/62/62。observer最大22.25ms，本阶段按实际child/cgroup统计；不能把旧docker-init的1线程作server线程。原先auth诊断guest82.5%、密码wall18.09/CPU13.20是历史不同运行对照，不是本次严格同机因果ABBA。全19 dockerCPU百分比另是不同采样窗，约6.01核，guest余量包含发生器/宿主daemon/kernel，不能直接全算作发生器。
+
+已恢复User38dca/ELFae1b6f67、CID5319ccda，全部原env map/HostConfig/mount/Cmd、other18/config保持；traceflag移除，private original/diagnostic logs保留。当前3服务仍原a8b7/be8且SQLbatch1。日志代码f51b4f6有语义/功能正确性证据，但本次无可接受端到端收益，不将宏几十倍加速称项目提升。CPU等待与功能回放衔接已观察，具体队列/调度/锁/宿主分页还需证据；不能靠删文件、降低密码强度、减少功能、延长期限宣称解决。
+
+第二个日志parser在真实A1WARN>9000预检失败，未创建分析stage；只读实际日志与UTC窗口核对表明Docker9位fraction时间戳不被guest Python3.10 fromisoformat接受，全部跳过。原源码/Git/首次有效但WARN空的JSON及工具失败保持；fresh attempt3先明确truncate到6位UTC微秒，再执行真实计数与有效JSON核验，避免空结果当PASS。工具修复不是性能优化。
+
+已审计启动原Stopped WSL Ubuntu20.04，只读发现glibc2.31/20逻辑CPU、无g++/clang++/Boost开发头；尚未安装SDK、移动客户端或产生外部压测数据。该环境也共享物理主机，不能声称独立硬件。先证明发生器实际CPU和可复用运行时，再决定如何把发生器与服务测量分开；现有worker已epoll+heartbeat优先队列，不存在每tick全连接扫描的证据。所有功能10k–50k极致目标仍未达到，本轮为瓶颈诊断/恢复/记录，非新代码性能突破。
+
+
+记录校正：当前outcome首次提交预检在“first summary应是invalidJSON”断言失败，源文件尚未写入、Git仍08d0b07、运行服务保持。该断言证明第一份JSON有效，先前无效JSON结论未经核验且错误。实际问题是纳秒时间戳被Python3.10跳过导致WARN空；不再混同JSON格式与内容正确性。原失败stage/包/源码保留，新attempt2保存这项纠正并继续已验证的时间戳修复；不把工具修复当性能收益。
