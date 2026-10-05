@@ -31,10 +31,14 @@ extern "C" MYSQL* __wrap_mysql_real_connect(MYSQL* handle,const char* host,const
     const int saved=errno;
     if(result) {
         sockaddr_storage address{};socklen_t size=sizeof(address);
-        if(::getsockname(static_cast<int>(mysql_get_socket(result)),reinterpret_cast<sockaddr*>(&address),&size))++bad_family;
+        if(::getsockname(result->net.fd,reinterpret_cast<sockaddr*>(&address),&size))++bad_family;
         else if(address.ss_family==AF_UNIX && local)++unix_connects;
         else if(address.ss_family==AF_INET && !local)++tcp_connects;
         else ++bad_family;
+        // Exact installed Oracle SDK also used by the verified owned fault fixture.
+        // Public connection description independently checks the transport type.
+        const char* description=mysql_get_host_info(result);
+        if(!description || !std::strstr(description,local?"UNIX socket":"TCP/IP"))++bad_family;
         if(mysql_get_ssl_cipher(result)!=nullptr)++tls_connects;
     }
     errno=saved;return result;

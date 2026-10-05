@@ -642,3 +642,8 @@ Linux6.8官方 https://raw.githubusercontent.com/torvalds/linux/v6.8/tools/perf/
 `4a9494b` 的own clockcounter五组全部PASS，共15000合成echo，overflow/fallback均0，original ELF/DSO SHA保持。直接3000条共21002时钟调用，grpcB1/B2共183880/183833（约61.29/61.28次/echo），主要now_impl121543/121566、cppsteady53207/53139；direct cppsteady15002。该全进程计数包括启动/关闭以及client+server，不等于Gateway/Message实测调用量。正常A1/计数B1/B2/正常A2过程CPU0.4411/0.4368/0.4256/0.5044核，简单调用P99 22.606/22.377/22.677/23.511ms；没有凭计数工具较低P99宣布性能收益。RPC会放大精确时钟频率，但无法独自解释真实135ms长尾；不能只关私聊trace、用coarse改期限或重启禁用RDTSCP。
 
 原真实ABBA Message内核0.48–0.51核/MySQL0.575–0.588核、guestCPU PSI约60%，内存PSI很低，下一检查本地MySQL TCP内核路径。只读preflight确定MySQL cc86c/d58a/init2425、backend network；public socket /var/run/mysqld/mysqld.sock mode777/uid999/gid999/inode3932320，durability1/1/1/0/0。新ownCPP仅通过test ELF --wrap_mysql_real_connect强制TCP或socket，getsockname验物理AF、TLS协商数明确保存；原健康PING/SELECT1/utf8/认证选项保持。四fresh隔离容器在同be8镜像、相同CPU1/256MiB/16连接，ABBA各3000次，唯一public socket inode只读bind、privateconfig只读、onlyfresh ownoutput可写；没有生产配置/SQL表/服务重启。该inode诊断bind在MySQL重启后会失效，不能直接当稳健部署方案。先测成本，后续若有效再实现可选产品transport并完整故障/事务/跨功能验证。本source提交时NOT_RUN；所有10k–50k功能极致验收仍OPEN。
+
+
+### 2026-10-05：Unix对照首次编译失败与实际SDK兼容修复
+
+`6e40e0b` 的firststage仅compile FAIL：Oracle nativeclient不存在mysql_get_socket，原privatecompilelog SHA78fd5d4dd56fe785e9da6508967f7f0a7b67ceb4764ed06a674415e372bad946、failuremarker/原runner保留；尚无新ELF或诊断容器，没有SQL对照结果，19/config不变。修正own diagnostic读取当前SDK MYSQL::net.fd（已有真正PASS的mysql_owned_postcommit_fault使用相同字段），只getsockname而不关闭/故障socket。额外用官方public mysql_get_host_info描述交叉检查TCP/IP或UNIX socket：https://dev.mysql.com/doc/c-api/8.0/en/mysql-get-host-info.html ，不导出原字符串。保持真实AF proof，不改用只检查配置值或替换客户端库。fresh attempt2编译/stage/CID输出均独立，原失败不覆盖；新工具本source提交时NOT_RUN。产品CPP/配置/MySQL持久化/安全/应用与所有目标OPEN保持。
