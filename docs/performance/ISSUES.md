@@ -726,3 +726,14 @@ Gateway原版慢chat日志327条、candidate299，均失败0；原chat dispatch�
 日志当前Gateway/Message/Social均warn，console=true/file=true/async=false/file每条flush=false；User info但活动User仅0.023核。Logger代码同步锁/console endl存在，TINYIMX_LOG确有过滤前ostringstream构造，但正常INFO实际写入在上述服务已关闭，异步日志改造不是已证实主要瓶颈；不能直接调更低级别或根据源码就宣称根因。v22本地44条目/43文件SHA全部验证，归档a44d03d3ac977d267d0ac900ddb38256f0728281e46905439e88f10a4ddb2f47；Gateway数值3文件单独哈希下载核验，仓储与GatewayWindows数值join源工具与结果均单独留存并原样复制至guest新stage，Python执行环境为原Windows任务tools目录，Git forensic copy不在guest执行。
 
 只读解析失败与修正也记录：第一helper错把peer context user_id当recipient，嵌入Python35行AssertionError，第一stage只有审计无成功数值报告，原脚本/stage不覆盖。运行33fc的SubmitMustRunConnectionBusinessTask不赋user/epoch，BusinessRequestContext默认0，HandleGatewayForwardChat使用该helper且ScopedBusinessDispatchContext(connection,0,0)；只读分类sourceSHA4a8fed3bbc7decc120eb287d9022ba0023c7ab3c52d551d019e3fa0c786eb5da、类型SHAabe8fc9ff0181e5a91cd8234a316d9ac13eac894e6413efa9c11b5809b743228。新attempt2保留MID绑定正ACK台账；chat sender/原seq/正epoch，peer内部user=epoch=0/正seq，产品身份校验没有改。分类命令一次自动审查超时未启动，仅一次同意重试成功；这是超时而不是安全拒绝，没有approval阻塞。全部19/config/运行原版及MCP好修复仍保持、整体目标未达，继续有证据地迭代。
+
+
+### 2026-10-05：隔离在线维护原型的审计与执行前状态
+
+只读预检 `online-maintenance-mechanism-preflight-20261005` 完成于7e93560：实际Redis7.4.11、standalone cluster_enabled0、noeviction、maxmemory0/maxclients10000，连接25/阻塞0/used107636592B。真实native目标172.18.0.13，两个Gateway Redis pool8，运行33fc的owner条件刷新Lua与当前源码一致，SHA12b8fcb43720694347e0a781d9c7ed6adcff43bdb34c37e750cf2c38e26246b1。原池Acquire仍健康PING，没有跳过；两组相同4worker仅是受控逻辑Gateway模型，不把组件等同完整10k心跳。主机可用约5.5GiB，无需清理；其他应用、游戏、Python保持。
+
+本次只添加诊断CPP，使用既有redis_pool_demo编译flags与link精确SHA和项目静态库SHA，仅编译自有object/ELF，不构建或部署任何产品服务。固定自有Redis前缀codex:online-maintenance-probe-20261005:，15类x2模式合法所有者/缺失/旧网关/旧连接/损坏JSON/scalar/null/缺少所有者/零负非法TTL/wrongtype/替换所有者/unicode/已过期，逐项状态+TTL+原字节预计84检查。原Lua完整同体包装，批量每key独立pcall，wrongtype错误只对应该key，其他结果继续；尚非故障网络/产品取消与停机正确性验证。功能通过后才创建10000全新自有键TTL300，不引用生产键、没有DEL/FLUSH/CONFIG。正常所有者EXPIRE120，失败不改记录/TTL，所有夹具自然到期；不能任意删除历史证据或清理内存。
+
+随后single-A1/batch-B1/batch-B2/single-A2，各667/s20秒、13340全部计划槽open-loop，同8worker/两pool8，batch两collector/最多16key/最长5ms合并。两512有界队列溢出即保留失败，不丢样本；要求planned/attempted/issued/completed完全一致、错误0、逐ID/状态1/时间顺序核对。CPU包括collectors，native到Docker与产品container路径不同；Redis cgroup含背景/.5s屏障/结果序列化，不能当独占业务CPU。编译链接180秒、prepare60秒、各case90秒，仅PID-starttime-cmdline-PGID匹配的本任务子进程组可在失败后终止；所有日志/live/partialraw/failure阶段保留。19运行ID/image/start、私有配置SHA逐项保持，SQL未触及，原持久化1/1/1/0/0不变。
+
+执行前结果明确 `NOT_RUN`，不得称生产批量候选或全功能压测通过；命令减少之外，还需CPU、迟到/5ms维护新鲜度与全人口错误证明。如果机制有效再做生产生命周期/所有权交叉测试并审计正确运行基线，不直接构建源码中已拒绝Gateway fair调度。运行仍原Gateway33fc/1d8、Message ddc7/b24/c119/CIDcbac，User38、MCPbc85；源码guarded确认84与当前Git不等于运行版本。v23归档24文件SHA88f9c20c3d930d05323330493a241e3b0a7ee2c48729e8e6079c9b654f2f3290，已本地逐文件验证；v24预置仅完整组件证据才导出，排除秘密配置/env/私有日志/ELF并RAM秘密扫描。审查时在打包前修复漏standard include、临时vector迭代器错误以及RedisConfig.enable必须读取真实配置；无执行或产品变更。曾只读猜错services/gateway路径，真实gateway/由rg文件清单确认，不是产品失败。持续迭代，所有功能10k50k极致要求仍未达到。
