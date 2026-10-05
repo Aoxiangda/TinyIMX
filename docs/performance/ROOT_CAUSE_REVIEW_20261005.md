@@ -707,3 +707,12 @@ db6c0ea attempt3 PASS，每variant44TU/130unit，四image/八UID1000loader与受
 本轮七文件预审计后准备实际链路工具。只有空闲两GWs+Message切换，所有原env值（含SQL batch1/trace1、maintenance1/worker16）、Cmd/User/WorkingDir、挂载/资源/安全/网络/日志设置逐项相同，其余16 IDs/images/start和全configSHA、durability1/1/1/0/0保持。原始inspect/env/log/Compose config与override均0700private，不导出。原像a8b7/be8/原env回滚保留并在切换验证失败时恢复；只受控recreate3服务，不清理文件/容器/数据。先两组相同正常跨功能actor（独立只读确认的519800–519950非相邻offline空关系对）验证friend/private/unread/group/file链。再10k/150s/60s/9000计划ABBA，login100/s、原offer/timeout/heartbeat/wire/SQL条件完全不变，所有FAIL保存。观察同样58s cgroup/guest/SQLdigest窗口并额外两次公开task-ID集合，无栈/内存/参数/env读取，只帮助区分稳定worker/替换，不当作精确线程创建计数。所有用户应用保留；不会在压力窗口编译源码。本source提交时部署/actor/新pressure NOT_RUN，不提前声称项目P99下降；所有功能10k–50k极致目标仍未完成。
 
 本地生成器首次精确缩进预检FAIL（预计3空格、实际2空格），在endpoint/functional/export/docs写入前被拦截；原generator及audit保留，fresh v2按原源修正并AST通过，尚无guest/runtime影响。公开taskID诊断不读栈/内存/env；不能唯一发现child时省略该项，不用额外权限替代，也不让可选诊断阻止核心对照。
+
+
+### 2026-10-05：日志两变体真实功能通过，但10k控制在登录阶段失败
+
+f56042f真实部署eager与lazy各完成49操作/35断言，friend→private授权、持久化/幂等/receiver ACK/unread/read、group权限/分页/扇出ACK/owner转移、file跨owner拒绝/取消/续传/字节校验通过。低并发延迟只是逐操作样本，不是全功能容量P99。原生23语义+8计时检查及每variant130业务unit不能代替真实负载验收。
+
+logging150A1在82.50s中止，仅7804登录、1 business_deadline_exceeded；成功登录均值497.83ms/P99上界2314.1ms/max3016.719ms。logging150B1在96.41s中止，仅9190登录、1 auth_timeout。两组消息计划/发送/ACK均0，不能比较ACKP99或给出日志收益百分比，也不继续无效B2/A2。A1网关WARN约9600条主要为private/group离线回放admission拒绝；CPU PSI avg10最高81.13，memory PSI0、guest available约8GiB。回放/认证/心跳的共享资源压力是观察事实，唯一根因尚未得到控制证明。主机随后可用约5GiB且瞬时分页0，这不能反推A1时的分页或资源因果。
+
+已通过原审计rollback恢复a8b7 Gateway/be8 Message和原全部env（SQL batch1/maintenance1/worker16/trace1）；other16/config/durability1/1/1/0/0保持，两组原私有日志在切换前保存。新增一次原sealed image logging150O1控制，固定10k/150/60s/9000计划、login100/s、原期限/HB/真实wire与SQL守卫，区分重编译运行版本与当前共同资源变化；原像对照不能单独隔离全部compiler/cache/cold state/host差异。该提交时original控制/汇总NOT_RUN，不改产品CPP、不清理内存、不宣称突破。全功能10k–50k目标仍未达标。
