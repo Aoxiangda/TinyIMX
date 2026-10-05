@@ -448,3 +448,10 @@ becd组件正常ABBA各6000真实durable own表事务。Single A1/A2 caller mean
 新的14路径源审计实现默认OFF TINYIMX_PRIVATE_BEGIN_INSERT_READ_BATCH_ENABLE=1：只合并START TRANSACTION+INSERT+完整记录SELECT，完整C++原BuildMessagesFromResult与same_identity验证后才原领域EventCodec/outbox/COMMIT。PING/precheck/唯一键竞争/释放lease后recovery、outbox失败rollback、commit outcome ambiguous recovery保持原逻辑。专用driver逐一消费恰3results，记录BEGIN/INSERTpartialack；server statementerror留可回滚事务，client/未知protocol关闭自身无COMMIT session，绝不假成功或盲重试。新增combined phase独立标记，不把组合时间归因单独INSERT。原路径默认OFF保留。
 
 准确核对Git发现84拒绝的guarded ReceiverConfirm实际在Adapter/ApplicationService/Port/Adapter.h；MessageRepository.cpp本身与ddc无差异。先从ddc原Git对象SHA核对恢复这四文件，再仅给Adapter加新persist分支，保留旧实验完整Git历史。未将错误文件名当作恢复依据。所有19运行容器/私有config未改，产品新源码尚未部署或验收；独立真实SQL回归/transportfault/端到端控制后才决定是否保留。原MySQL8.0.40/1/1/1/0/0/index13维持，游戏及其它应用保留。
+
+
+### 2026-10-05：新候选独立构建与真实SQL回归流程，执行前审计
+
+ed90提交产品默认OFF候选及真实fault测试，运行仍a8Gateway/b24Message不变。新增7路径工具审计。独立构建只新stage的四own对象Driver/MessageRepository/Adapter/ApplicationService和8个测试ELF，用真实缓存flags，own符号在SDK/产品archives之前。借用全部archive逐个SHA前后相等，既有cache/CMake/产品ELF完全不写。原trace/应用/CrashWindow/receiverACK/chatACK五unit，加真实outbox集成/unread聚合/新增batchfault；单编译器180s守卫及unit60s真实SQL90s，所有PID/start/argv/PGID记录且只停本任务子进程。
+
+四个absent ownschema codex_private_batch_20261005_off_p1/off_p4/on_p1/on_p4，DDL之前原SHOWCREATE元数据/FK仅指各schema ownUsers、两own用户10001/10002、计划SHA审计；无生产rowcopy/grant/index/DDL配置变化。实际领域event/并发幂等4thread/pool1回收/outbox失败回滚/接收确认和read对照flag0/1。Pool1附加新driver partialACK、1054/1062、额外result关闭session、包含引号/分号/中文content、正确解析但错type和malformedtime必须outbox之前拒绝。session TEMP shadow只在ownschema，关闭自身连接自然释放；没有DROP/DELETE/TRUNCATE/reset指令，所有durable成功测试行和schema保留。private root配置0600只存runtime-private，不显示/导出。COMMIT真实响应丢失专用case已有但需独立只拦自身连接的transportfault审计后执行，当前NOT_RUN，不能称提交不确定认证通过。本轮执行前BUILD/SQL均NOT_RUN，不伪造结果。v39新增所有stage complete或failed、原源码基线及sourceaudit显式保全。全功能10k50k未验收，端到端比较尚待正确性回归。
