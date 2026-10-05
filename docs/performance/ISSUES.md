@@ -750,3 +750,14 @@ v24归档87文件/88条目 SHAa7af2aed2df360cd2495d0d4329a83d1e2e7faade9356bd8a8
 API真实Redis测试CPP与helper分别ownpool1/4，用全新固定prefix codex:online-maintenance-batch-api-20261005:p1/p4，最多120自有键TTL300/专用1秒过期/正常120刷新，显式替换自有夹具，禁止生产键/DEL/FLUSH/CONFIG/SQL。18类原单条与批量逐项状态/TTL/字节对比、wrongtype后有效项、空/1/16/17边界、同用户混合所有者顺序、替换后旧owner不得续期、null/uninit/只关闭本任务池及invalid项、4并发调用100个三项mixed batches/全部lease归还。每检查保存JSON，failure/编译/log/partial原样留存；编译ownAPI.o+test.o/link各180s，cases90s仅本任务PID身份匹配组可终止。结果在提交时明确 `NOT_RUN`，没有全局Redis故障或产品Gateway生命周期测试；不把真实API functional与之前prototype84混称。
 
 接入审查发现原网关kNotFound会验证当前local session并自恢复，必须保留；不能把批量NotFound直接丢弃而制造在线路由丢失。还需执行时epoch+connection当前性、立即Pong、错所有者/下线交叉、queue上限/结果终态、停机排空后销毁pool。拒绝让四个presence调用线程同步等5ms形成max4批，因为50k用户时吞吐会受工作线程数量限制；后续只考虑独立有界异步批量调度及实际生命周期测试。当前API尚未在Gateway使用，运行仍33fc/1d8、Message原ddc/b24/c119、User38、MCPbc85。所有功能极致及20k50k要求仍未达到，继续按证据迭代。
+
+
+### 2026-10-05：批量缓存API350检查通过，先验证命令无响应的停机边界
+
+cca0e3b实际 `online-maintenance-batch-api-20261005`：ownpool1/4各175检查全部PASS，共350；两组原single18与batch18逐项对比、TTL/原字节/所有权及fault结果保留，size0/1/16/17、wrongtype后的合法项、重复用户旧/正确owner顺序、替换后旧owner、null/uninit/只关闭自有pool、4并发100个mixed3item batch/全lease归还都通过。原运行19身份/config/健康核对完全一致；API自有编译object/ELF留存，没有构建或部署Gateway。v25归档41文件/42条目 SHA35524c79c6a3de63e399515ae229071ceb9e819fde280748a1a356800994cce8，全41逐文件SHA本地通过。此前prototype84与实际API350是不同检查，不能混称全功能或Pong/50k验收。
+
+继续审查异步合批生命周期发现代码仅redisConnectWithTimeout3s，实际安装Hiredis1.3.0 header区分command_timeout并提供redisSetTimeout；同版本官方primary源码 https://github.com/redis/hiredis/blob/v1.3.0/hiredis.c 中redisConnectWithTimeout只设置connect_timeout、redisSetTimeout设置blocking socket读写边界。当前SDK读取原RedisConnection源码与运行33fc精确一致。本次先诊断，不因源码没有调用setter就直接声称实际无限等待，更不把故障停机边界当正常175ms根因。
+
+新诊断CPP只连接任务自有127.0.0.1 OS分配高端口模拟端点，禁止6379/11434，不读取真实凭证或连接productionRedis。AUTH固定public-owned-auth-fixture属于公开测试字串，SELECT1/PING/EVAL return1无生产键。每类healthy先正常+OK/PONG/:1证明协议/客户端路径，随后ownpeer在收到正确command后故意4.25秒无响应，再仅关闭自有peer释放客户端。记录原进程是否在连接3秒之外仍未完成及全部Native/服务端单调时间；预期red4次bound violation，编译前结果明确 `NOT_RUN`，要真实复现后再单独审计修复。共8顺序case，1native child/1serverthread/listener/peer，编译link180s、每case20s安全guard，仅PID身份匹配的自有组可在失败时终止。审查先修正finally关闭次序：释放peer/关闭listener后，必要时终止自有child再等待serverthread，避免异常时阻塞接收让threadjoin抢先失败。没有执行失败或产品改动。
+
+后续若证实缺少command边界，有限I/O超时属于故障正确性前置，不延长客户端3秒期限、不跳过healthyPING、不盲重试。再验证所有原API350及健康AUTH/SELECT/PING/EVAL，保留red/green原始证据与Git后才接入bounded async collector/workers、即时Pong/current epoch/connection/旧会话取消/停机排空。另有kNotFound→current local check→SetOnline的两阶段恢复窗口需自有交叉用例验证，不能在批量中省略自恢复，也不能臆造已复现的真实远端替换故障。所有运行仍GWs33fc/1d8、Message原ddc/b24/c119、User38、MCPbc85，源码executor已恢复运行版、cacheAPI尚未使用；全应用/game/Python保留，无全局清理。完整所有功能10k50k极致目标仍未达到，继续按证据迭代。
