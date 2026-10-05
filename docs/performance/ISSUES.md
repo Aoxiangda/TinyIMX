@@ -956,3 +956,12 @@ b32独立重链五unit实测trace17/app53/crash28/receiverACK10/chatACK22共130P
 dc36真实v2 OFFpool1 domain55PASS/0FAIL（实际SELECT记录保留）及unread聚合14PASS/0FAIL；新driver第1..14检查全部PASS：三results转义/transaction、nested拒绝、1062partialBEGIN、1054partialINSERT/rollback0行、额外结果retire+原PING重连、真实adapter含引号分号中文重复同MID。随后ownsession CREATE TEMPORARY im_private_messages LIKE im_private_messages实际1066 Not unique table/alias；harness没有failfast继续ALTER ENUM，existingowncopy第6行转换1265截断（之前业务回归故意放坏type），继续后续ALTERcreated_at改变了ownv2-offp1复制表，并产生错误fixture的own正常durable行/outbox。配置C++前缀硬守卫仅ownschema，所有运行/privateconfig一致；保存真实私有错误allowlist（密码先扫描不输出）与实际ownschema状态，不能把这些夹具错误说产品batch失败，也不能假说仅TEMP变化。旧own表不修复/删除/重建以保留失败。
 
 新7路径审计只改faulttest，显式10列ownTEMP InnoDB含from/CID UNIQUE和ENUM('2','1')，避开同名selfLIKE；创建或ALTER夹具失败立即return，不能再继续修改普通copy或写业务fixture。第一driverTEMP创建也failfast。C++原Parse/same_identity仍需真实wrongparsedtype与NULLcreated_at提交前拒绝、0消息/outbox不增两case通过。产品source unchanged，130unit、其它七sealedELF、三persist对象/正确App对象同SHA，仅新main编译/relink，four new v3 schema先absent/DDL审计；旧首轮和v2已创建offp1各3表/旧badcopy和durable行都保留，其余planned names不伪称已创建。v45保存所有失败及v3源/构建/SQLstage。完整四控制未结束前SQL仍不能PASS，COMMITresponse故障/端到端10k50k未验收；所有原durability/index/19/config和其它应用保持。
+
+
+### 2026-10-05：事务批处理真实回归完成与提交后恢复边界
+
+`64bee34` 的四个全新隔离 MySQL 测试库已完成：OFF/ON × pool1/pool4 的领域回归各55项；两个pool1另有未读聚合各14项、驱动及身份验证各21项，合计290项实际SQL检查通过、0失败。加上130项已封存且二进制未变化的单元回归，共420项通过。生产表元数据、19个容器及私有配置未变；持久化参数保持1/1/1/0/0。此前所有预检、编译、断言和临时表构造失败保留，不覆盖结果或删除测试库。v45归档已下载，SHA256 `2d1ec1ed82b90267f26e19ad4bce67068a1b8d165b55e2d32da76adca0f23eff`，842个文件逐一核验。
+
+下一隔离验证仅为原生测试ELF链接 `--wrap=mysql_commit`：真正提交成功之后验证本测试连接的TCP对端并shutdown自己的socket，然后一次返回客户端失败；检查稳定CID恢复、恰好一条真实领域outbox、相同MID重试与pool1连接归还。使用原v3两个自有pool1库，各最多增加一对新消息/事件，新的0600私有日志/config独立保存，旧阶段证据不追加。测试标签明确为“提交后客户端失败”，不将已收到成功响应的包装器模拟声称为实际网络COMMIT响应丢包。没有生产故障钩子、TLS改动、全局断连或SQL删除。
+
+目前该提交后故障检查尚未执行，候选MessageService尚未部署；420项正确性及小型SQL组件成本收益均不能证明端到端P99改善或全部功能50k达标。通过之后先构建明确来源的候选镜像，保持已验证Gateway批处理和相同负载进行端到端对照，再决定保留或回退，避免以减少SQL次数替代性能证据。

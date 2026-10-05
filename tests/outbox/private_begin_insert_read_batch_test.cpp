@@ -33,13 +33,13 @@ int main(int argc,char** argv){
     using Status=tinyimx::message::MessageApplicationStatus;
     using Outcome=tinyimx::message::PersistPrivateMessageOutcome;
     if(argc==3){
-        if(std::string(argv[2])!="commit-drop")return 2;
+        if(std::string(argv[2])!="post-commit-fault")return 2;
         const auto cid=Unique("batch-commit-drop-");
         const auto recovered=adapter.PersistPrivateMessage(10001,10002,cid,1,"owned response-loss fixture");
         Check(recovered.Completed()&&recovered.outcome==Outcome::kReused&&recovered.message_id>0,
-              "Lost COMMIT response recovers durable message by CID");
+              "Post-commit client failure recovers durable message by CID");
         Check(Scalar(pool,"SELECT COUNT(*) FROM im_event_outbox WHERE event_id='message.created.v1:"+std::to_string(recovered.message_id)+"'")=="1",
-              "Lost COMMIT response leaves exactly one durable domain outbox");
+              "Post-commit client failure leaves exactly one durable domain outbox");
         const auto retry=adapter.PersistPrivateMessage(10001,10002,cid,1,"owned response-loss fixture");
         Check(retry.Completed()&&retry.outcome==Outcome::kReused&&retry.message_id==recovered.message_id,
               "Retry after uncertain COMMIT converges to same durable MID");
