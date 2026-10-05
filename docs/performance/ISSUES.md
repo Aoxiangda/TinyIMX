@@ -1182,3 +1182,12 @@ f56042f真实部署eager与lazy各完成49操作/35断言，friend→private授�
 logging150A1在82.50s中止，仅7804登录、1 business_deadline_exceeded；成功登录均值497.83ms/P99上界2314.1ms/max3016.719ms。logging150B1在96.41s中止，仅9190登录、1 auth_timeout。两组消息计划/发送/ACK均0，不能比较ACKP99或给出日志收益百分比，也不继续无效B2/A2。A1网关WARN约9600条主要为private/group离线回放admission拒绝；CPU PSI avg10最高81.13，memory PSI0、guest available约8GiB。回放/认证/心跳的共享资源压力是观察事实，唯一根因尚未得到控制证明。主机随后可用约5GiB且瞬时分页0，这不能反推A1时的分页或资源因果。
 
 已通过原审计rollback恢复a8b7 Gateway/be8 Message和原全部env（SQL batch1/maintenance1/worker16/trace1）；other16/config/durability1/1/1/0/0保持，两组原私有日志在切换前保存。新增一次原sealed image logging150O1控制，固定10k/150/60s/9000计划、login100/s、原期限/HB/真实wire与SQL守卫，区分重编译运行版本与当前共同资源变化；原像对照不能单独隔离全部compiler/cache/cold state/host差异。该提交时original控制/汇总NOT_RUN，不改产品CPP、不清理内存、不宣称突破。全功能10k–50k目标仍未达标。
+
+
+### 2026-10-05：原镜像也在登录爬坡失败，转向当前认证阶段证据
+
+logging150O1用原a8b7/be8及原全部配置，在68.62s仅6357登录后auth_timeout，消息计划/发送/ACK均0。三组均未进入消息窗口，不能归因新日志代码、不能给出宏收益或当前ACKP99。当前主机37样本CPU24–66%、available5118–5370MiB，34样本分页读非零、max32015pages/s；是整机数据，不能指认VMware或游戏，也不能以早先瞬时0分页声称全程无分页。
+
+新原镜像控制首入口因CRLF在set失败，Python/负载未启动；只对三个自有新工具详细预审计/备份后规范到逐字节等于Git blob的LF，逻辑源码未改，修复stage保留。第一份登录汇总regex多重转义造成WARN空且结尾写字面反斜线n，不能当完整有效JSON。原stage保留，新attempt2修正转义并要求真实A1capturedWARN>9000作为输入解析核验，所有新包必须LF二进制写入。工具错误不计产品性能改进。
+
+为区分当前密码计算、SQL查找与RPC处理器内外等待，复用已通过36业务checks的1ff07881认证数值诊断image（ELF62d2e300/build374f280），临时只重建idle User，完整HostConfig/mount/Cmd/环境验证，只加trace1，密码算法/100000迭代/用户pool8/其他18/config/durability保持。只读数字采样uid/tid/阶段wall与threadCPU每秒最多8条，不记录密码、密钥或用户内容。10k login100/s hold30s与原3s期限不变，ownPID/startticks/argv/PGID600s守卫，observer读取真正service child并核对同cgroup，公开TID集合不是精确线程创建率。无build期间资源干扰，任何失败也恢复原User38dca与全部原env map，保存替换前原始私有日志。该source提交时诊断NOT_RUN，不是产品性能优化，也不预设唯一根因。所有功能10k–50k目标仍未达到。
