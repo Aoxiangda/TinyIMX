@@ -654,3 +654,10 @@ Linux6.8官方 https://raw.githubusercontent.com/torvalds/linux/v6.8/tools/perf/
 `2e31603` own diagnosticCPP实际compile/link成功，ELF/object/555审计均保存。首TCP容器8f16e057/statecreated/PID0/exit128，runc绑定 `/proc/2425/root/var/run/mysqld/mysqld.sock` EINVAL，程序从未执行；stdout空，stderrSHAc0daedc58acca05d083c71c77bcb55e8d7562019a2d84582538d95c0799859a8，无SQL结果。该FAIL是mount路径问题，不是TCP/Unix/MySQL性能或认证测量失败。Docker只读inspect为overlayfs/GraphDriver null，仅mysql-data挂载；没有猜upperdir/rootfs或暴露整个数据库卷。MySQL容器内部readlink-f socket为 `/run/mysqld/mysqld.sock`，因此去除 `/var/run` 绝对symlink后的canonical来源 `/proc/2425/root/run/mysqld/mysqld.sock`。
 
 fresh attempt3先做zeroCAP/no-net/readonly独立stat容器，唯一bind公开canonical socket，必须type/mode/owner/inode与原MySQLstat完全相同才能进入SQL对照。复用attempt2实际成功ELF/object，CPP/flags/allcachedlibs/sourceSHA一致，既不再编译，也不更改555权限；原failed容器、ELF和日志保留。四freshTCP/socket容器与原ABBA准则保持，45sec自身CID超时守卫，全部产品/配置/durability/apps不变。canonical挂载预检与新SQL本source提交时NOT_RUN；仅inodebind诊断方案不声称生产重启韧性或目标验收。
+
+
+### 2026-10-05：canonical socket仍失败；按实际mount元数据定位来源
+
+`cd2715f` attempt3的no-net/zeroCAP/stat容器6bdffcfb在OCI阶段仍EINVAL，statecreated/PID0/exit128，未执行stat、更无SQL。已推翻“只去掉/var/run symlink即可”的假设，前一版审计原样保留。两次source均通过proc/PID/root进入MySQL的mount namespace。实际只读mountinfo确认MySQL namespace4026533105、SSH4026531841；Linux6.8 `fs/namespace.c::__do_loopback`对不属于caller namespace的来源挂载返回EINVAL，与现象吻合（机制解释，不伪称已内核trace定位）。初次readlink /proc/1/ns/mnt受不同UID限制，改为/proc/self成功；只读失败保留。
+
+来源依据：https://raw.githubusercontent.com/torvalds/linux/v6.8/fs/namespace.c 。MySQL实际根overlay挂载元数据给出upperdir `/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/458/fs`；fresh attempt4仅绑定该实际upperdir下 `/run/mysqld/mysqld.sock` 单一公开socket，不猜GraphDriver路径，不映射数据库卷或整个root/upperdir。先独立stat要求socket777/999/999/inode3932320与原MySQL完全一致，再允许只读4×3000PING+SELECT1。复用attempt2已编译ELF与object，SHA/555/源码/库不变。首次启动失败容器与所有报告保留。新socket验证和SQL对照本提交时NOT_RUN，全部正式服务/配置/宿主应用不变。
