@@ -661,6 +661,10 @@ MessageApplicationService::ConfirmReceiver(
             output.status = MessageApplicationStatus::kFailedPrecondition;
             output.message = "failed message cannot be receiver-confirmed";
             return output;
+        default:
+            output.status = MessageApplicationStatus::kInvalidRecord;
+            output.message = "message repository returned invalid delivery status";
+            return output;
     }
 
     auto mutation = repository_->ConfirmReceiver(message_id);

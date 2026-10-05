@@ -469,3 +469,10 @@ ed90提交产品默认OFF候选及真实fault测试，运行仍a8Gateway/b24Mess
 ### 2026-10-05：新增fault测试Config接口编译错误精确修正，复用七个完成ELF
 
 317 attempt3余下六个existingtest和初始已完成对象全部链接成功，总共七个existing ELF。最后新fault main编译明确报Config无Instance，项目Config为普通对象；是新增测试误用API而不是业务编译失败。保存完整compiler原错误和failedstage，不覆盖。新7路径审计仅测试一行改tinyimx::Config config; 无common/services变化。final stage先证明自317仅这一个test源码变化、七个ownELF/四product对象/借用SDK和tracker SHA，再复制7sealed ELF到freshpath（保留原件），仅编译新main并复用实际已有outbox link命令替换main/output。执行五unit后才PASS，四ownschema SQL检查仍独立未运行；无重复整体编译/SDK安装/生产SQL或运行变动。v42明确加finalsource/build/SQL及三失败保全；尚未执行不填结果，所有性能/全功能验收仍OPEN。
+
+
+### 2026-10-05：真实unit发现恢复旧路径带回非法状态缺口，单因定位修正
+
+503 final新fault main编译和链接成功，trace17PASS，应用unit出现InvalidStateFailsClosed/LookupFailureDoesNotMutate两失败。准确源码/test核对：ddc旧ConfirmReceiver switch没有default，enum99落到repository Confirm而confirm_calls变1；后一断言共享counter被前次非法mutation污染，lookup错误本身的earlyreturn正确。因此是一处缺失default，不是两个不同SQL/查询故障。旧guarded实验helper原有非法状态拒绝，恢复整文件时同时恢复了这个旧缺口。承认并保全真实失败日志，不删测试、不把批SQL当罪因或重启重测掩盖。
+
+新7路径审计仅App switch default返回InvalidRecord，不SQL/lease/retry/API/vtable改变，仍原read-first确认，不启用被拒绝的guardedUPDATE性能策略。只重编译App一对象，三个persistproduct对象+八testmain/所有借用SDK逐个SHA前后相等，旧四个失败阶段及每个completed产物保留，freshconfirm-fixstage重链8ELF。全部五unit后才PASS，四ownschema真实SQL之前仍未执行。v43显式保存fixsource/build/SQL和所有旧fail，原运行b24/全部19/config不变；当前不能声称极致全功能验收或COMMITresponse故障验证通过。
