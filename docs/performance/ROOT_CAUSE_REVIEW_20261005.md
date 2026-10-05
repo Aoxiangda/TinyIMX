@@ -557,3 +557,12 @@ record输出binary pipe由guest进程直接保存fresh0700私有目录/0600文�
 后续专用自有launcher在隔离容器启动瞬间只给PERFMON/SETUID/SETGID/SETPCAP；先清ambient、将所有bounding cap除PERFMON外全部删除，再empty supplementarygroups、切固定UID/GID1000，effective/permitted/inheritable仅PERFMON，ambient仅PERFMON，清keepcaps。严格核验五个cap集合均 `0000004000000000`、resuid/resgid全1000、supplementary0、nnp1/seccomp2，再exec固定nativeperf record。所有启动能力从最终五个集合消失且不可恢复，失败任何一步均在采样前abort。没有SYS_PTRACE/SYS_ADMIN/globalsetcap/sysctl/unconfined或hostPID共享，容器readonly/no-net/defaultseccomp/128MiB/CPU1/pids64保留。这个自检仍仅一线程一秒工具自身，未附加产品服务。
 
 启动器用单独ownstage ELF编译，180s自有compiler PID/start/argv/PGID界限，旧cache/products均不覆盖。采样49Hzuser-onlyflatIP不采栈/regs/memory/kernel，binarypipe私有保存，报告zeroCAP/stdin。所有stoppedprobe和失败raw保留，额外caps只在launcher初始化、没有产品权限变化。新bootstrap本source提交时NOT_RUN；通过后实际targetmaps/符号/采样窗口仍需单独准确审计。全功能极致仍未实现，持续推进真实瓶颈剖析。
+
+
+### 2026-10-05：启动器被文件权限拒绝，独立修复测试工具
+
+`35ec1da` 自检在OCI exec前失败exit126/Statecreated/Pid0，原诊断ELF由umask077生成mode0700、guest1000所有，隔离UID0仅四个规定caps没有DACoverride，因此对该ELF无执行权限。未执行launcher，也未附加服务；不是内核采样策略失败。原compile/source/probe/private.stderr/failed.json保持，19服务/配置/sysctl不变。所有先前自检正确结果也保持。
+
+新attempt2只在全新0700stage编译同源码，然后审计新ELF绝对路径、SHA、无symlink、原mode及新mode0555；仅给该刚创建自有诊断ELF只读可执行权限，没有任意chmod其他文件或新增DAC能力。旧stage/probe/ELF0700保留，不覆盖。其余UID1000/finalPERFMON五集合/defaultseccomp/no-net/readonly/nnp/128MiB/CPU1/pids64/49Hz1秒自测与独立cap零报告全部保持。新probe名明确attempt2，OCI未执行时记录实际State/Error而非空断言。新自检在本提交时NOT_RUN；先修工具再剖析，不把工具失败解释为产品瓶颈。
+
+v50本机1227文件逐SHA已通过，归档SHA `d151c75541b8a5bedb2adbd3e06540996801e32701a7ae536ce7bad7186d5d1a`。全功能10k50k极致未达，继续。
