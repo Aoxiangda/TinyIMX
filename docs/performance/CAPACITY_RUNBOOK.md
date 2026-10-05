@@ -296,3 +296,14 @@ cca0e3b实际 `online-maintenance-batch-api-20261005`：ownpool1/4各175检查�
 新诊断CPP只连接任务自有127.0.0.1 OS分配高端口模拟端点，禁止6379/11434，不读取真实凭证或连接productionRedis。AUTH固定public-owned-auth-fixture属于公开测试字串，SELECT1/PING/EVAL return1无生产键。每类healthy先正常+OK/PONG/:1证明协议/客户端路径，随后ownpeer在收到正确command后故意4.25秒无响应，再仅关闭自有peer释放客户端。记录原进程是否在连接3秒之外仍未完成及全部Native/服务端单调时间；预期red4次bound violation，编译前结果明确 `NOT_RUN`，要真实复现后再单独审计修复。共8顺序case，1native child/1serverthread/listener/peer，编译link180s、每case20s安全guard，仅PID身份匹配的自有组可在失败时终止。审查先修正finally关闭次序：释放peer/关闭listener后，必要时终止自有child再等待serverthread，避免异常时阻塞接收让threadjoin抢先失败。没有执行失败或产品改动。
 
 后续若证实缺少command边界，有限I/O超时属于故障正确性前置，不延长客户端3秒期限、不跳过healthyPING、不盲重试。再验证所有原API350及健康AUTH/SELECT/PING/EVAL，保留red/green原始证据与Git后才接入bounded async collector/workers、即时Pong/current epoch/connection/旧会话取消/停机排空。另有kNotFound→current local check→SetOnline的两阶段恢复窗口需自有交叉用例验证，不能在批量中省略自恢复，也不能臆造已复现的真实远端替换故障。所有运行仍GWs33fc/1d8、Message原ddc/b24/c119、User38、MCPbc85，源码executor已恢复运行版、cacheAPI尚未使用；全应用/game/Python保留，无全局清理。完整所有功能10k50k极致目标仍未达到，继续按证据迭代。
+
+
+### 2026-10-05：原Redis命令无响应缺少边界已复现，修复单次I/O空等上限
+
+f036ee5 `redis-command-timeout-original-probe-20261005`实际完成：AUTH/SELECT/PING/EVAL四healthy正常成功，四无响应全部在4.25秒屏障仍未退出，关闭自有peer后才失败。原Ping4.252310381/Auth4.252681309/Select4.251610326/Eval4.252164753秒，错误均Server closed the connection；AUTH/SELECT连接建立完成但初始化命令最终失败，PING/EVAL原Connect成功。自己的loopback源/peer/command接收与释放单调时刻/InstalledHiredis1.3.0/cachedlibSHA全部保存；没有真实Redis访问、生产故障/配置或键写入。v26归档70文件/71条目 SHA96fdcc172dc16464c3fe99b86b39b62dcf908fe1d4394fb4e869721bffde2d58，本地70逐文件SHA通过。源码判断由实际cachedSDK行为支持，但不能解释正常负载175ms全部尾延迟。
+
+本轮只在成功建立socket后、AUTH/SELECT之前调用redisSetTimeout(context_,原timeval3s)，失败关闭context并返回false。仍保留redisConnectWithTimeout3s、原健康PING/重连/返回值/协议与解析、原客户端/RPC期限，没有延长门槛或重试。Hiredis1.3.0 setter配置blocking socket单次读写空等上限；不是整个命令绝对期限，分段回复drip、发送缓冲阻塞和全局停机deadline尚未实证，不得把3秒直接当全操作上限。官方同版本说明 https://github.com/redis/hiredis/blob/v1.3.0/hiredis.c 。当前仅源码候选、没有产品部署。
+
+新fixedstage编译自有RedisConnection.o置于原cachedlibs前解析class符号，所有原SDK/cached产品ELF不覆盖；同一个已提交surrogate probe源码重建，四healthy和四无响应严格要求idle失败且连接不可用、2.7..4.25秒、peer关闭之前已返回，避免把EOF误算timeout。随后exact350实际APIharness仅固定namespace/stage字符串替换到新自有regressionCPP，原测试源码不变且原/生成SHA保存；编译ownAPI/test/Connection objects后用新prefix codex:redis-command-timeout-api-regression-20261005:p1/p4，pool1/4各175+100并发mixed batch，最多120newownedkeys/TTL300/1expiry/正常120/自有replace。Privateconfig仅RAM，禁止生产key/DEL/FLUSH/CONFIG/SQL，全部19/健康/config保持。所有编译/partial/logs/failure/PID-身份审计保留，执行前green+reg明确NOT_RUN。
+
+异步Gateway合批尚待开发与正确性测试：有界input/ready/outstanding人口、执行时会话epoch+connection、Pong即时、result终态计数、队列deadline与取消、kNotFound安全恢复、关闭后排空及cache/pool销毁顺序；不能根据socketidle setter就声称全局停止保证。所有游戏/Python/其他应用保留，无内存清理必要。Gateway源码executor已经恢复运行33fc，cachebatchAPI350已证实但运行仍未使用；运行GWs1d8/33fc、Message原b24/ddc/c119、User38、MCPbc85，持久化1/1/1/0/0未触及。所有功能10k50k极致目标继续推进，当前未达到。

@@ -72,6 +72,15 @@ bool RedisConnection::Connect(
         return false;
     }
 
+    // Connect timeout alone does not bound blocking command I/O. Configure
+    // the same three-second read/write idle timeout before AUTH and SELECT.
+    // This is a socket I/O bound, not an absolute whole-command deadline.
+    if (redisSetTimeout(context_, timeout) != REDIS_OK) {
+        SetRedisError("redis command timeout setup failed");
+        Close();
+        return false;
+    }
+
     /*
      * context已经成功建立，此时必须先允许Command()工作。
      *
