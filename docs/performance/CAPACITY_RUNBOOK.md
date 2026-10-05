@@ -507,3 +507,12 @@ dc36真实v2 OFFpool1 domain55PASS/0FAIL（实际SELECT记录保留）及unread�
 `413c74d` 原生隔离故障回归实际完成：批处理OFF/ON各4项通过、0失败，各观察到且仅观察到一次真实提交成功后的本测试TCP shutdown及客户端失败返回。稳定CID恢复为Reused，重试同MID，真实领域outbox恰好1条；两个自有v3 pool1库各仅新增1消息/1事件（各最终13消息17事件）。生产DDL、持久化1/1/1/0/0、借用构建文件哈希、19容器和配置完全一致。回归ELF SHA `e5ea481995fdb34710138e7bd989947e14bb7b10480bce68cf2be3f0d24a852f`。这8项验证提交后客户端故障与自身断连的恢复，不证明真实COMMIT响应在网络中丢失。
 
 当前性能候选尚未部署。独立完整服务构建将前置已验证ed90驱动/仓库/适配器与b32应用对象，另用实际tinyimx_db/tinyimx_message_grpc/message_service_demo参数编译当前连接池、ServiceImpl、与原DDC相同的demo主程序；全程不重新配置CMake、不覆盖旧缓存ELF或库。ServiceImpl只有默认关闭的存储计时，连接池只有默认关闭的获取计时，相关头文件和主程序与DDC相同；原同步RPC、先读后确认以及健康PING保持。完整链接检查来源并确认故障包装器完全未链接，再由固定b24基础镜像生成新的唯一候选标签，UID1000/no-net/readonly/no-cap loader及missingconfig控制，保留停止探针和所有产物。该步骤仅构建镜像，端到端对照仍NOT_RUN，不能据428项正确性宣称极致性能。
+
+
+### 2026-10-05：完整事务批处理候选镜像通过，准备同二进制端到端对照
+
+`d37dcfe` 完整自有MessageService编译/链接与唯一镜像封存完成，镜像 `sha256:be8b5ddea1a874ce017b0e8dfda1c3ac4e5c0f5b8fa938041aae1a4aaba0a060`、ELF `2548733766409d282d30f6ffbbbe47f9c12b5d4fa3cacfdcc3d3e47f72582699`。实际前置ed90驱动/仓库/适配器和b32应用，加当前独立编译连接池/ServiceImpl/demo；linkmap确认七对象来源，批处理符号存在，mysql_commit故障包装器完全缺失。UID1000只读/no-net/no-cap ldd-r与预期missingconfig exit1通过；旧cache ELF/库/对象、19容器与配置保持，仍未部署。
+
+接下来仅在已有业务会话与自有压测worker均不活跃时重建MessageService；详细审计保留原inspect/log/私有proposed Compose。同一镜像OFF0→ON1→OFF0，对照只改变一个flag，原RPC/超时、pool16、trace1、健康PING及SQL持久化1/1/1/0/0保持，已验证Gatewaya8 batch1和其余18服务身份固定。异常自动恢复原b24与flag缺省，日志/所有rows/文件/候选/探针保留，不prune/reset。原版编译与新二进制有共同计时及正确性修复差异，因此主ABBA必须用同ELF开关，避免将重编译副作用归为批处理收益。
+
+OFF/ON先各运行好友→私聊/重复/已读→群权限/扇出/重复→文件授权/取消/字节校验的真实功能链，参与者从原自有synthetic范围只读选择offline且双向关系/请求为空的非相邻pair，原actor再次检查身份再执行。压力用相同worker `5d6bd183`、10k在线150/s60s9000消息：sqlbatch150A1/B1/B2/A2，保留完整attempt/positive/wire/SQL/heartbeat及两个P99门槛、相同窗口digest/cgroup/guestPSI。每次结果先分析；完整性失败立即回退，稳定性能差异才决定保留，不能以SQL命令减少或428项正确性替代尾延迟证据。所有测试在本提交时NOT_RUN；全功能50k极致未达成，继续准确诊断。
