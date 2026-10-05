@@ -307,3 +307,14 @@ f036ee5 `redis-command-timeout-original-probe-20261005`实际完成：AUTH/SELEC
 新fixedstage编译自有RedisConnection.o置于原cachedlibs前解析class符号，所有原SDK/cached产品ELF不覆盖；同一个已提交surrogate probe源码重建，四healthy和四无响应严格要求idle失败且连接不可用、2.7..4.25秒、peer关闭之前已返回，避免把EOF误算timeout。随后exact350实际APIharness仅固定namespace/stage字符串替换到新自有regressionCPP，原测试源码不变且原/生成SHA保存；编译ownAPI/test/Connection objects后用新prefix codex:redis-command-timeout-api-regression-20261005:p1/p4，pool1/4各175+100并发mixed batch，最多120newownedkeys/TTL300/1expiry/正常120/自有replace。Privateconfig仅RAM，禁止生产key/DEL/FLUSH/CONFIG/SQL，全部19/健康/config保持。所有编译/partial/logs/failure/PID-身份审计保留，执行前green+reg明确NOT_RUN。
 
 异步Gateway合批尚待开发与正确性测试：有界input/ready/outstanding人口、执行时会话epoch+connection、Pong即时、result终态计数、队列deadline与取消、kNotFound安全恢复、关闭后排空及cache/pool销毁顺序；不能根据socketidle setter就声称全局停止保证。所有游戏/Python/其他应用保留，无内存清理必要。Gateway源码executor已经恢复运行33fc，cachebatchAPI350已证实但运行仍未使用；运行GWs1d8/33fc、Message原b24/ddc/c119、User38、MCPbc85，持久化1/1/1/0/0未触及。所有功能10k50k极致目标继续推进，当前未达到。
+
+
+### 2026-10-05：命令idle修复验证完成，复现在线自恢复的交叉窗口
+
+5063423实际 `redis-command-timeout-fixed-probe-20261005`全部通过：四healthy AUTH/SELECT/PING/EVAL成功；四无响应在ownpeer释放前自行idle失败，Ping3.051162740/Auth3.020139256/Select3.043109987/Eval3.008081565秒，错误err1/Resource temporarily unavailable，连接不可用，不能误算peer EOF导致结束。随后新prefix350原API回归各pool175全部PASS、各100并发mixedbatches、全部lease归还；原/生成harness只stage/prefix替换，原测试源码没有改。所有19身份/config/health保持，尚未部署候选。v27归档99文件/100条目 SHA615a7220afc5b3aae56382ea7d68dd9d90d330a7edafd945b076dbd4bf0fa5b1，全99本地逐文件SHA通过。3秒是单次blockingI/O空等，不是wholecommand/RPC/partialdrip/全局停机绝对期限，TXstall/drip尚未验证，没有正常175ms根因或完整容量宣称。
+
+后续Gateway异步合批审查查实原HandleHeartbeat传ordering_key std::nullopt；原gateway.presence.offline设置user/epoch/kMustRun但没有ordering_key。因此不能假定既有presence四worker会把同一用户刷新/下线严格串行；SubmitSessionBusinessTask仅复制传入optional key，没有隐式排序。缺失记录恢复是Lua返回NotFound→检查local current→SetUserOnline→unconditional SETEX，检查与写入不是同一原子操作。
+
+本次仅新增诊断，使用已350验证的actualcacheAPI.o与finiteidleConnection.o，objects SHA冻结、cache/header source与编译输入SHA核对，原SDK/cachedELF不覆盖。独立namespace codex:online-restore-interleave-probe-20261005:60001..60004四个全新自有键，TTLs120/300。四个确定性交叉case：缺失直接恢复control；localcheck后remote owner先SetOnline、旧SetOnline再写；localcheck后模拟unbind/current=false及ownmissingOfflineCleanup、旧SetOnline再写；原restore先写remote再写的反序control。Expectedred两窗口、healthy两控制，逐个记录typed结果/完整自有record/操作顺序；明确local-current是模型boolean，不操作或声称验证真实TCP/Gateway会话、不估计线上竞态频率或性能。ownSetOfflineIfMatch只对原missing夹具返回NotFound，不执行删除；没有生产key/直接DEL/FLUSH/CONFIG/SQL/login/服务修改。
+
+执行前结果明确NOT_RUN。若复现，应单独审计missing-only原子Lua避免覆盖并发新owner，且给恢复与下线设置共同的user ordering/fence，保留oldconn/epoch取消和kMustRun清理；单独SETNX不能解决“cleanup之后旧恢复重新创建”的本地生命周期窗口。异步刷新不得在独立batch线程直接blind自恢复，应把恢复交回有会话取消和用户排序的presence域，再验证断线/替换/重连/队列deadline/shutdown计数。后续有界input/ready/maxoutstanding/worker collector和即时Pong仍未实现，没有极致全功能性能验收。生产仍GWs33fc/1d8、Message原ddc/b24/c119、User38、MCPbc85，所有apps/game/Python保持，无资源清理或VM/security/NIC修改。继续按证据迭代。
