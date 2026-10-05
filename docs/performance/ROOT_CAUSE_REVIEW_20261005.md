@@ -515,3 +515,25 @@ dc36真实v2 OFFpool1 domain55PASS/0FAIL（实际SELECT记录保留）及unread�
 接下来仅在已有业务会话与自有压测worker均不活跃时重建MessageService；详细审计保留原inspect/log/私有proposed Compose。同一镜像OFF0→ON1→OFF0，对照只改变一个flag，原RPC/超时、pool16、trace1、健康PING及SQL持久化1/1/1/0/0保持，已验证Gatewaya8 batch1和其余18服务身份固定。异常自动恢复原b24与flag缺省，日志/所有rows/文件/候选/探针保留，不prune/reset。原版编译与新二进制有共同计时及正确性修复差异，因此主ABBA必须用同ELF开关，避免将重编译副作用归为批处理收益。
 
 OFF/ON先各运行好友→私聊/重复/已读→群权限/扇出/重复→文件授权/取消/字节校验的真实功能链，参与者从原自有synthetic范围只读选择offline且双向关系/请求为空的非相邻pair，原actor再次检查身份再执行。压力用相同worker `5d6bd183`、10k在线150/s60s9000消息：sqlbatch150A1/B1/B2/A2，保留完整attempt/positive/wire/SQL/heartbeat及两个P99门槛、相同窗口digest/cgroup/guestPSI。每次结果先分析；完整性失败立即回退，稳定性能差异才决定保留，不能以SQL命令减少或428项正确性替代尾延迟证据。所有测试在本提交时NOT_RUN；全功能50k极致未达成，继续准确诊断。
+
+
+### 2026-10-05：同二进制完整 ABBA 的收益与未达标边界
+
+`e1f6243` 同一完整 Message ELF `2548733766409d282d30f6ffbbbe47f9c12b5d4fa3cacfdcc3d3e47f72582699`，只切换 `TINYIMX_PRIVATE_BEGIN_INSERT_READ_BATCH_ENABLE`，Gatewaya8/batch1/workers16及其余18容器、配置、pool16、健康PING、持久化1/1/1/0/0保持。四轮10k在线、150条/s、60s的原始结果：
+
+|轮次|开关|ACK P99 ms|计划发送至ACK P99 ms|100ms内ACK|真实持久化/线上投递/接收ACK|
+|---|---|---:|---:|---:|---:|
+|sqlbatch150A1|OFF|156.7|158.0|8345|9000/9000/9000|
+|sqlbatch150B1|ON|135.0|135.9|8638|9000/9000/9000|
+|sqlbatch150B2|ON|132.3|134.0|8616|9000/9000/9000|
+|sqlbatch150A2|OFF|164.5|168.6|8242|9000/9000/9000|
+
+每轮attempt/positive/queued receiverACK/SQL核对9000，negative/skipped/late/disconnect全部0，10k登录和实际heartbeat drain等式通过。四轮private_exit均2：两个延迟门槛全部FAIL。两个ON均优于两个OFF；邻接对照A1→B1下降13.85%、A2→B2下降19.57%，这是共享主机本负载的可重复部分收益，不是全速率/全部功能固定收益，也不平均P99。ON作为后续已验证起点保留，不宣称100ms或50k极致已达成。
+
+OFF/ON真实功能链各49操作、35断言及4heartbeat通过，包括好友接受/拒绝、私聊重复/历史/已读、群权限/静音拒绝/扇出/重复/成员及角色变化、文件授权/取消/实际二进制断点续传与下载checksum。闲时单次延迟不能当每功能P99；原生及单元428项正确性通过，仍不代表完整混合压力/TLS/离线/故障/soak/MCP/AI认证。v48完整原始1185文件已本机逐SHA核验，归档SHA `4e6faf32ee47194fedcdcc873a34de5423ea1bc6e156c044650111cb9e2841a6`；v46/v47没有执行，不补造结果。
+
+窗口实际Message CPU0.910–0.937核、MySQL1.456–1.493核、两GW合计1.292–1.322核，19容器总5.172–5.234核；guest busy83.21–84.26%、system29.88–30.94%，CPU PSI some59.37–60.20%，context switches约3.70–3.74万/s、tasks约305–308/s。memory PSI some最高0.018%、IO some2.13–2.41%，目前无内存瓶颈证据，不清理用户应用或缓存。CPU等待强但不能把这些总体指标归为某个C++函数、主机安全功能或唯一根因。
+
+SQL digest COMMIT平均wall6.25–6.92ms，接收确认UPDATE7.76–8.39ms，包含并发等待并非CPU或总体P99。ON的byMID完整记录SELECT约13150另加LAST_INSERT_ID完整记录SELECT8724，合计21874，OFF约21977：身份验证没有删除，不能只比较byMID单个digest误称查询减半。批处理仅减少BEGIN/INSERT/READ通信7→5，所有完整记录校验仍在outbox与COMMIT之前。权限源码实际一个Social RPC/一个双向关系SELECT；路由Redis+本地discovery snapshot，避免错误假设多UserRPC或每条Zookeeper请求。
+
+观察快照与慢ACK重叠A1/B1/B2/A2仅49/42/6/16，慢ACK诊断计数654/362/383/758；剔除重叠后的纯诊断P99仍156.20/131.91/132.47/167.99ms。这不是官方指标替代或删样本许可，说明快照重叠不足以解释大部分尾延迟。新增fresh分析保留完整failed gates、9000消息配对、直算同MID阶段和偏置边界；稀疏slow样本不代表全体。后续先获取真实CPU函数与同消息等待证据再改代码，不重复盲加worker、弱化持久化/PBKDF2/健康PING或以组件PASS结束任务。分析及保留helper在本source提交时NOT_RUN，运行后独立保存结果。
