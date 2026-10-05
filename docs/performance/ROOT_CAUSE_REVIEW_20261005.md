@@ -363,3 +363,12 @@ baseline batch150A1实际完成、privateexit2/FAIL：10klogin、9000attempt/pos
 7路径预审计新增真实twoGW session actor，existing synthetic519890/519892 readonlySQL精确验证username/status及在线key初始missing；仅自有会话正常login/HB/close和全recordCAS EXPIRE1（每次mutation前独立audit）强制过期，privateRedis密码onlyRAM、无DEL/SQL直接写/其他key/全局设置。验证missingrestore、同GW替换/旧EOF、新owner不受旧cleanup影响、跨GW接管后旧HB/旧close不覆盖新owner、新ownerclose/inflightmaintenance和expiredownsession32HBclose不复活；主动关闭burst只报告clientwrites不伪称serveraccepted，offline watch10samples/1sec明确限制，不估算竞态频率或全负载P99。Probe原始body/owner/PTTL/wire/seq以及失败完整保存，90sec ownPID/starttime/argv/PGID守护，无其他应用停机/清理。
 
 提交前liveactor/现成功能链/候选150性能NOT_RUN，继续功能门控后再测匹配负载。新v32仅明确完成/失败自有stages，冻结所有raw与源工具；既有Messageddc/b24/c119、User38、MCPbc85保持。3secI/Oidle非absolutewholecmd/globalshutdown proof；全10k50k所有功能极致未达到，持续凭端到端CPU/SQL/latency证据迭代，不盲重复旧被否定方向。所有apps/game/Python保留，无任意删除、VM/security/NIC变化。
+
+
+### 2026-10-05：真实双GW36检查PASS，功能链0操作fixture碰撞修正为只读选择新pair
+
+daf296c真实online-maintenance-session-control实际36检查PASS、18个Pong样本：ownTTL CAS过期后missing恢复原conn，sameGW替换旧EOF/newconn保护，crossGW接管后旧8HB及旧close保留新owner，newownerHB后close最终missing/10samples1sec不重建，第二ownUID TTL过期后32clientHBwrite立即close最终missing/10samples。主动断开burst没有伪称serveraccepted，实际2UID功能交叉样本不等于竞态频率或完整压力P99。全部19/config完全保持，无其他账号缓存/SQL写/全局配置操作。
+
+batchfunc1原功能链在built-inpreflight因已有socialpair记录而停止，operations_completed=0，无login/friend/group/file变更，原失败result/trace/log完整保留。这是fixture选择碰撞，不是业务实现失败或性能退化。只读在reserved519800..519950范围检查exactusername/status、所有双向relation/request和RedisEXISTS0，验证新pairs519800/519803、519801/519804，未执行SQL/Redis写或重置。7路径audit新增freshbatchfunc2/functional attempt2包装，原cross_feature_actor不改且执行前再次同样fixture验证；仅正常公共API创建own新记录/explicitown featuredisband/cancel，所有history/files保持。ownactor300sec PID/starttime/argv/PGID保护，fileRPC子进程继承自有group，最后runtime/config核对。候选38/a8两GW保持，其他17未变化。
+
+新v33明确保存batchfunc1的0操作preflight失败、36真实session与attempt2所有raw、原10k150A1 P99180.5/scheduled181.7FAIL和后来候选控制/rollback有则冻结；不覆盖任何旧结果。提交前attempt2和candidate150均NOT_RUN，功能门控通过后再匹配测量；极致所有功能10k50k未达，不把completedstate/小样本PASS当容量验收。Messageddc/b24/c119、User38/MCPbc85、SQLdurability1/1/1/0/0和所有apps/game/Python保持，无清理/删除/安全/VM/NIC更改，持续准确分析和Git迭代。
