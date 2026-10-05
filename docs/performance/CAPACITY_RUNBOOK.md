@@ -598,3 +598,10 @@ Linux6.8官方 https://raw.githubusercontent.com/torvalds/linux/v6.8/tools/perf/
 新工具只读当前两个固定Gateway的exe-backed maps，在freshstage/bundle为每个目标逐文件复制实际ELF与sharedlibrary，准确路径白名单、size/SHA/buildID/c289主ELF和原inode身份检查，每复制前独立audit、destinationabsent且withinroot、copy后流式SHA/ELFmagic/所有者核验。仅public可执行文件，无整个root/config/env/应用内存或用户数据；每文件<=1GiB、总<=2GiB，guest>2GiB/disk>3GiB。不覆盖旧stage、产品或cache，bundle0700且ELF排除export。
 
 报告改为真实物理只读目录 `/opt/codex-symbols`，不会canonicalize到 `/`；隔离PID、不再共享业务PID，UID1000/zeroCAP/defaultseccomp/nnp/no-net/readonly/lognone等原边界保持。明确 `overhead,sample,dso,symbol` 四字段与分号分隔，避免长模板符号导致巨大padding；重新解析必须保持全部620/625样本，未知vDSO比例诚实保留。无需重新压测或扩大权限，Messageexit255原因仍OPEN。新物理快照/报告在本source提交时NOT_RUN；先验证映射可靠后再选业务修改。全功能极致继续未达，准确迭代持续。
+
+
+### 2026-10-05：物理符号快照补全实际运行库目录
+
+`dfe80f6` 首次快照的保守白名单在任何文件复制或报告启动之前拒绝 `/opt/tinyimx/lib/libgcc_s.so.1`。实际只读exe-backed maps共有六文件：c289 Gateway主ELF、项目RPATH目录的libgcc/libstdc++、系统ld-linux/libc/libm；不是未知用户数据。独立失败审计已保存ExecutableWhitelistRejected/no ELF copies/19身份配置保持，旧stage/source/报告不覆盖。
+
+新attempt2只增加准确项目public artifact目录 `/opt/tinyimx/lib/` 的共享库basename白名单，其余文件大小/SHA/buildID/ELFmagic/所有者/绝对freshdest、guestRAM/disk、bundle0700、physicalsymfs、zeroCAP隔离报告与完整620/625样本检查保持。新stage/probe名字独立，加入失败marker确保所有后续错误保存；没有权限扩张、产品修改或新压力。旧错误符号报告依旧不可用于归因。新attempt2本source提交时NOT_RUN，继续先确保正确证据再优化。
