@@ -1054,3 +1054,12 @@ Linux6.8官方 https://raw.githubusercontent.com/torvalds/linux/v6.8/tools/perf/
 现有四轮未采样cgroup中Messageuser0.427–0.434/system0.483–0.506核，两GW各user0.302–0.339/system0.313–0.344核；用户空间采样只能覆盖其中部分，不能解释全部kernelCPU/调度等待。源码Message/Social RPC已经缓存channel/stub，不能假设每请求CreateChannel并做无效改动。
 
 新工具只在freshrecovery阶段解析两个实际成功Gatewayraw，UID1000/zeroCAP报告读取准确targetroot符号、所有parentraw/sourceSHA校验并保留。报告按全部符号行统计samplecount与unknown符号比例，先验证可用性再选择下一代码优化；没有新负载、重启、编译、权限或产品修改。Message失败保持明确false，不将部分报告称全部CPU剖析完成。新recovery在本source提交时NOT_RUN。全功能极致未达，继续准确分析。
+
+
+### 2026-10-05：捕获符号映射错误，拒绝错误函数归因并修复
+
+`ab11ee5` 从已有raw恢复GWa620/GWb625 userCPU样本，raw完整、无新负载。但报告出现纯私聊没有触发的FriendRequest与nss密码解析等函数，表明符号可信度不合格。根因已核实：实际 `readlink -f /proc/7/root` 为 `/`，Linux6.8官方 https://raw.githubusercontent.com/torvalds/linux/v6.8/tools/perf/util/symbol.c 中symbol__init realpath(symfs)，若等于 `/` 就重设symfs空串。魔法procroot路径被清空，报告静默使用profiler基础镜像的旧Gateway和只读注入的native旧glibc，地址偏移匹配错误。前一source关于procroot准确DSO的意图没有实际成立；所有旧报告保留，但其函数名和据此的业务归因明确不可用，没有据此修改产品或移除权限校验。两Gateway约42–44% `[vdso]+0x768` 只是未解析代码位置，不提前称某个计时函数。
+
+新工具只读当前两个固定Gateway的exe-backed maps，在freshstage/bundle为每个目标逐文件复制实际ELF与sharedlibrary，准确路径白名单、size/SHA/buildID/c289主ELF和原inode身份检查，每复制前独立audit、destinationabsent且withinroot、copy后流式SHA/ELFmagic/所有者核验。仅public可执行文件，无整个root/config/env/应用内存或用户数据；每文件<=1GiB、总<=2GiB，guest>2GiB/disk>3GiB。不覆盖旧stage、产品或cache，bundle0700且ELF排除export。
+
+报告改为真实物理只读目录 `/opt/codex-symbols`，不会canonicalize到 `/`；隔离PID、不再共享业务PID，UID1000/zeroCAP/defaultseccomp/nnp/no-net/readonly/lognone等原边界保持。明确 `overhead,sample,dso,symbol` 四字段与分号分隔，避免长模板符号导致巨大padding；重新解析必须保持全部620/625样本，未知vDSO比例诚实保留。无需重新压测或扩大权限，Messageexit255原因仍OPEN。新物理快照/报告在本source提交时NOT_RUN；先验证映射可靠后再选业务修改。全功能极致继续未达，准确迭代持续。
