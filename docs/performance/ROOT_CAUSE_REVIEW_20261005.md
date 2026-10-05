@@ -647,3 +647,10 @@ Linux6.8官方 https://raw.githubusercontent.com/torvalds/linux/v6.8/tools/perf/
 ### 2026-10-05：Unix对照首次编译失败与实际SDK兼容修复
 
 `6e40e0b` 的firststage仅compile FAIL：Oracle nativeclient不存在mysql_get_socket，原privatecompilelog SHA78fd5d4dd56fe785e9da6508967f7f0a7b67ceb4764ed06a674415e372bad946、failuremarker/原runner保留；尚无新ELF或诊断容器，没有SQL对照结果，19/config不变。修正own diagnostic读取当前SDK MYSQL::net.fd（已有真正PASS的mysql_owned_postcommit_fault使用相同字段），只getsockname而不关闭/故障socket。额外用官方public mysql_get_host_info描述交叉检查TCP/IP或UNIX socket：https://dev.mysql.com/doc/c-api/8.0/en/mysql-get-host-info.html ，不导出原字符串。保持真实AF proof，不改用只检查配置值或替换客户端库。fresh attempt2编译/stage/CID输出均独立，原失败不覆盖；新工具本source提交时NOT_RUN。产品CPP/配置/MySQL持久化/安全/应用与所有目标OPEN保持。
+
+
+### 2026-10-05：Unix首次启动失败，canonical公开socket挂载预检
+
+`2e31603` own diagnosticCPP实际compile/link成功，ELF/object/555审计均保存。首TCP容器8f16e057/statecreated/PID0/exit128，runc绑定 `/proc/2425/root/var/run/mysqld/mysqld.sock` EINVAL，程序从未执行；stdout空，stderrSHAc0daedc58acca05d083c71c77bcb55e8d7562019a2d84582538d95c0799859a8，无SQL结果。该FAIL是mount路径问题，不是TCP/Unix/MySQL性能或认证测量失败。Docker只读inspect为overlayfs/GraphDriver null，仅mysql-data挂载；没有猜upperdir/rootfs或暴露整个数据库卷。MySQL容器内部readlink-f socket为 `/run/mysqld/mysqld.sock`，因此去除 `/var/run` 绝对symlink后的canonical来源 `/proc/2425/root/run/mysqld/mysqld.sock`。
+
+fresh attempt3先做zeroCAP/no-net/readonly独立stat容器，唯一bind公开canonical socket，必须type/mode/owner/inode与原MySQLstat完全相同才能进入SQL对照。复用attempt2实际成功ELF/object，CPP/flags/allcachedlibs/sourceSHA一致，既不再编译，也不更改555权限；原failed容器、ELF和日志保留。四freshTCP/socket容器与原ABBA准则保持，45sec自身CID超时守卫，全部产品/配置/durability/apps不变。canonical挂载预检与新SQL本source提交时NOT_RUN；仅inodebind诊断方案不声称生产重启韧性或目标验收。
