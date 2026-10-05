@@ -875,3 +875,14 @@ b911b2b的分析/私有日志保全/停机持续stream工具实际执行成功�
 现有Gateway慢样本>=100ms/rate8与repo>=10ms/rate8是不同偏置人群。A1 chat249/repo488只共享MID23；B1 chat29/repo488交集0；B2 chat47/repo486交集2。Gateway慢样本persistRPC均值79.838/91.007/79.832ms，仅说明已抓到的慢请求中该段突出，不能减去不同仓储人群18.765/16.297/15.433ms而宣称transport占比，更不能用waitshare当CPU。新增strict sameMID/UID/seq/绝对时间配对helper，按每条send→repo start→repo end→ACK分解并检查容差；rpc-minus-repo明确包括应用、响应、传输、调度等，不是纯gRPCCPU。交集不足限制本轮因果分解，下一步针对性补证据或隔离机制，而非盲worker/callback/commitdelay矩阵。配对helper尚NOT_RUN，在新commit后执行并另保存实际结果。
 
 v34实际已导出294文件，SHA218b982f8b164f49fa95ff934c2b646462075556f22eedfb09c3e667a03a0f64，完整四轮raw和failedfixture/functional/source/phase/drain恢复在内；排除privateconfig/env/fullLogs/ELF并RAM扫描，local下载/逐SHA解包待执行，不能提前宣称本机验证。v35新增本source/配对/有效候选保留stage的显式完整或失败守卫，旧归档保持。持续迭代目标未达，不以组件PASS或helpercompleted替代业务延迟验收。
+
+
+### 2026-10-05：保留ABBA验证候选，隔离验证真正CompletionQueue而非重复callback路线
+
+163d86d提交实际完整ABBA与仍FAIL边界后，strictsameMID配对实际完成：A1仅23交集，ACKmean147.960ms=repo前71.801+repo49.301+repo后26.858；RPC75.151中非repo25.850ms（应用/响应/传输/调度混合，不是pureCPU）。B1交集0，B2仅2，ACK124.811=54.247+54.002+16.563，RPC84.696/非repo30.694、commit15.533。全部从同一条消息直接算出，不减不同人群均值；选中的极少slowbiased请求不能代表9000总体或单一根因。候选retainedstage实际a8/c289 compiled38两GW健康，CID3f19b66/a4159ac，仅batchEnable1差异，other17/config原样。v34本机295entries/294SHA全部验证通过，旧rawfailure/重叠前后/停机证据完整保全。
+
+本轮7路径先审计，仅新增isolatedcompletionqueueprobe工具/文档，不改产品CPP/CMake/任何运行ELF，Messageguarded84仍未部署。根据保留的原Sync/Callback负收益及guest约290–296fork/thread每秒，提出待检验机制：真正AsyncService+CompletionQueue能否比Sync减少框架开销并降低尾延迟。参考官方 https://grpc.io/docs/languages/cpp/async/ ，2CQpollers只处理accept/finish标签、16固定worker做相同20ms睡眠+128byteecho，所有syntheticindex/字段逐条核对。每call双标签生命周期保持到Finishcompletion；未绑定accept的ok=false回收；serverShutdown→workerdrain→cqShutdown→pollerjoin，normalcaseaccepted/workercompleted/finished/对象回收账目严格核对。队列512是inflight+queued总数，不改deadlines/重试/SQL策略。
+
+同既有原型16clients/300/s/20s/6000×ABBA、Sync1CQ MIN1/MAX2精确一致，127.0.0.1:0自分配端口、cached生成proto/grpc库、一台owncompiler，新stage隔离object/ELF，不链接任何productimplementationarchives/no真实DBRedisAI/用户，all19/配置保持且>2GiB/noactivecapacity。输出CPUuser/system/上下文切换和每条caller/handler/handlerCPU/extra/lateness/raw，全失败保留；不使用traced性能或把线程减少当性能结论。CPU是同进程client+server、额外wall含固定workerqueue，不等于真实MessageexclusiveCPU。normal机制不证明production取消/过载/SQLdeadline/故障/持久化/全关停契约，AsyncContext无done通知时不调用IsCancelled；产品路径仍原Sync保持。
+
+CQ机制尚NOT_RUN，只在实测CPU/延迟同时值得时才考虑生产具体实现，并需要领域/生命周期/同负载端到端复核。若无改善停止这个方向但继续其他准确瓶颈，不重复盲加worker或callback路线。v36显式保存本source/probe完整或失败及上一retained/join记录，原归档不覆盖，私有数据/ELF排除和RAMsecret/SHA守卫保持。全功能10k50k极致仍未达到，继续迭代。
