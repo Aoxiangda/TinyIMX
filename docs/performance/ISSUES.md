@@ -930,3 +930,8 @@ ed90提交产品默认OFF候选及真实fault测试，运行仍a8Gateway/b24Mess
 ### 2026-10-05：四产品对象实际编译成功；无库测试链接工具修正
 
 9be attempt2四个新产品对象Driver/Repository/Adapter/ApplicationService和四个test main实际编译成功；前三个测试ELF已链接，但尚未执行unit。随后private_receiver_ack_tests无libtinyimx archive，寻找首次library的位置StopIteration。private_chat_ack_boundary_tests也仅main无库。是工具链接布局假设失败，非CPP编译或业务失败，全部8objects/3ELF/commands/raw/failed/runtime-before-after保留，真实SQL未开始。新attempt3使用next(iterator,len(link))明确支持无库目标；借用own先前编译对象先要求common/services/tests自9be无任何源码或头变化、每个对象SHA前后相同，再只读复用，不重复编译。仍保留extraTracker缓存object哈希及全部SDK不变，剩余main才编译，所有产物写freshstage。新工具source审计/版本+v41含两次失败及三次stage，产品源码ed90未改、运行无变化；unit/SQL尚需实际执行才可PASS，不删失败或掩盖为产品性能结论。
+
+
+### 2026-10-05：新增fault测试Config接口编译错误精确修正，复用七个完成ELF
+
+317 attempt3余下六个existingtest和初始已完成对象全部链接成功，总共七个existing ELF。最后新fault main编译明确报Config无Instance，项目Config为普通对象；是新增测试误用API而不是业务编译失败。保存完整compiler原错误和failedstage，不覆盖。新7路径审计仅测试一行改tinyimx::Config config; 无common/services变化。final stage先证明自317仅这一个test源码变化、七个ownELF/四product对象/借用SDK和tracker SHA，再复制7sealed ELF到freshpath（保留原件），仅编译新main并复用实际已有outbox link命令替换main/output。执行五unit后才PASS，四ownschema SQL检查仍独立未运行；无重复整体编译/SDK安装/生产SQL或运行变动。v42明确加finalsource/build/SQL及三失败保全；尚未执行不填结果，所有性能/全功能验收仍OPEN。

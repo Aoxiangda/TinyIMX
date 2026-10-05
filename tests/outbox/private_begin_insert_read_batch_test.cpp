@@ -21,7 +21,7 @@ std::string Scalar(tinyimx::MySqlConnectionPool& pool,const std::string& sql){
 }
 int main(int argc,char** argv){
     if(argc!=2&&argc!=3)return 2;
-    auto& config=tinyimx::Config::Instance();
+    tinyimx::Config config;
     if(!config.LoadFromFile(argv[1])||!config.MySql().enable)return 2;
     // All persistent test writes must be in a separately audited owned schema.
     if(config.MySql().database.rfind("codex_private_batch_20261005_",0)!=0||config.MySql().pool_size!=1)return 2;
