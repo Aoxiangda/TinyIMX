@@ -949,3 +949,10 @@ ed90提交产品默认OFF候选及真实fault测试，运行仍a8Gateway/b24Mess
 b32独立重链五unit实测trace17/app53/crash28/receiverACK10/chatACK22共130PASS、failure0，全部借用对象/headers/archive不变。原source恢复错误非法状态缺口已正确修正，仍read-first确认。随后真实SQL OFFpool1执行唯一失败断言“Pending normal path avoids SELECT before update”；其余实际domain幂等/outbox原子回滚/权限/缺失/坏记录/receiver/read/竞争行为全部PASS。旧断言来自84被否定的guardedfastUPDATE，是实现开销约束，与主动保留read-first策略不匹配，不是新batch故障（flagOFF）。保留旧testGit和failedraw，不能以它要求重新部署已拒绝优化。
 
 新7路径审计仅把该策略assert改为OBSERVE真实Com_select before/after（无法测量写unavailable，绝不假0），保留所有业务断言。只编译一个outboxmain/relink，七其他ELF/四product对象和所有借用库同SHA，130unit原始结果基于同sealedcode复用无需重跑。产品common/services未改。SQLv2四新名字codex_private_batch_20261005_v2_off_p1/off_p4/on_p1/on_p4，旧实际已创建off_p1库/成功事务/坏记录和outbox保留；旧另外3仅planned未创建，不伪称四库都存在。新轮所有ownschema先查absent/DDL计划再执行，不重建/清旧库。v44保全真实failedSQL、修正前测试和v2结果，未知COMMITresponse仍NOT_RUN；无新capacity或产品部署，all19/config/原1/1/1/0/0不变，全功能50k验收仍未达成。
+
+
+### 2026-10-05：真实fault first14PASS，临时selfLIKE1066及缺失failfast修正
+
+dc36真实v2 OFFpool1 domain55PASS/0FAIL（实际SELECT记录保留）及unread聚合14PASS/0FAIL；新driver第1..14检查全部PASS：三results转义/transaction、nested拒绝、1062partialBEGIN、1054partialINSERT/rollback0行、额外结果retire+原PING重连、真实adapter含引号分号中文重复同MID。随后ownsession CREATE TEMPORARY im_private_messages LIKE im_private_messages实际1066 Not unique table/alias；harness没有failfast继续ALTER ENUM，existingowncopy第6行转换1265截断（之前业务回归故意放坏type），继续后续ALTERcreated_at改变了ownv2-offp1复制表，并产生错误fixture的own正常durable行/outbox。配置C++前缀硬守卫仅ownschema，所有运行/privateconfig一致；保存真实私有错误allowlist（密码先扫描不输出）与实际ownschema状态，不能把这些夹具错误说产品batch失败，也不能假说仅TEMP变化。旧own表不修复/删除/重建以保留失败。
+
+新7路径审计只改faulttest，显式10列ownTEMP InnoDB含from/CID UNIQUE和ENUM('2','1')，避开同名selfLIKE；创建或ALTER夹具失败立即return，不能再继续修改普通copy或写业务fixture。第一driverTEMP创建也failfast。C++原Parse/same_identity仍需真实wrongparsedtype与NULLcreated_at提交前拒绝、0消息/outbox不增两case通过。产品source unchanged，130unit、其它七sealedELF、三persist对象/正确App对象同SHA，仅新main编译/relink，four new v3 schema先absent/DDL审计；旧首轮和v2已创建offp1各3表/旧badcopy和durable行都保留，其余planned names不伪称已创建。v45保存所有失败及v3源/构建/SQLstage。完整四控制未结束前SQL仍不能PASS，COMMITresponse故障/端到端10k50k未验收；所有原durability/index/19/config和其它应用保持。

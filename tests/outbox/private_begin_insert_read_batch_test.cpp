@@ -48,9 +48,9 @@ int main(int argc,char** argv){
     }
     {
         auto c=pool.Acquire();
-        Check(c&&c->Execute("CREATE TEMPORARY TABLE codex_private_batch_driver_rows(id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,cid VARCHAR(64) NOT NULL UNIQUE,content TEXT NOT NULL)"),
-              "Create only own connection temporary driver fixture");
-        if(!c)return 2;
+        const bool driver_fixture=c&&c->Execute("CREATE TEMPORARY TABLE codex_private_batch_driver_rows(id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,cid VARCHAR(64) NOT NULL UNIQUE,content TEXT NOT NULL)");
+        Check(driver_fixture,"Create only own connection temporary driver fixture");
+        if(!driver_fixture){c.Reset();pool.Shutdown();tinyimx::Logger::Instance().Shutdown();return 1;}
         tinyimx::MySqlBeginInsertQueryResult result;
         Check(!c->BeginInsertAndQuery("INSERT INTO codex_private_batch_driver_rows(cid,content) VALUES ('null','x')","SELECT 1",nullptr)&&!c->InTransaction(),
               "Null output rejects before transaction");
@@ -89,23 +89,34 @@ int main(int argc,char** argv){
     Check(repeated.Completed()&&repeated.outcome==Outcome::kReused&&repeated.message_id==created.message_id,
           "Escaped identity repeat reuses durable MID");
     const auto events=Scalar(pool,"SELECT COUNT(*) FROM im_event_outbox");
+    bool shadow_created=false;
     {
         auto c=pool.Acquire();
-        Check(c&&c->Execute("CREATE TEMPORARY TABLE im_private_messages LIKE im_private_messages"),
-              "Create own session shadow for before-outbox validation fault");
-        Check(c&&c->Execute("ALTER TABLE im_private_messages MODIFY message_type ENUM('2','1') NOT NULL"),
-              "Only temporary shadow has numeric INSERT reinterpretation fault");
+        // Self-LIKE fails1066. Define the owned session shadow explicitly;
+        // never ALTER a permanent table when fixture creation fails.
+        shadow_created=c&&c->Execute(
+            "CREATE TEMPORARY TABLE im_private_messages ("
+            "message_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,"
+            "client_message_id VARCHAR(64) NULL,from_user_id BIGINT UNSIGNED NOT NULL,"
+            "to_user_id BIGINT UNSIGNED NOT NULL,message_type ENUM('2','1') NOT NULL,"
+            "content LONGTEXT NOT NULL,delivery_status INT UNSIGNED NOT NULL DEFAULT 0,"
+            "created_at DATETIME NULL DEFAULT CURRENT_TIMESTAMP,delivered_at DATETIME NULL,"
+            "read_at DATETIME NULL,UNIQUE KEY own_client_id(from_user_id,client_message_id)) ENGINE=InnoDB");
     }
+    Check(shadow_created,"Create explicit own session shadow for before-outbox validation fault");
+    if(!shadow_created){pool.Shutdown();tinyimx::Logger::Instance().Shutdown();return 1;}
     const auto wrong=adapter.PersistPrivateMessage(10001,10002,Unique("batch-wrong-type-"),1,"owned shadow fixture");
     Check(!wrong.Completed()&&wrong.status==Status::kInvalidRecord,
           "Valid parsed different identity rejects before outbox or COMMIT");
     Check(Scalar(pool,"SELECT COUNT(*) FROM im_private_messages")=="0"&&Scalar(pool,"SELECT COUNT(*) FROM im_event_outbox")==events,
           "Identity mismatch leaves neither shadow message nor outbox event");
+    bool shadow_altered=false;
     {
         auto c=pool.Acquire();
-        Check(c&&c->Execute("ALTER TABLE im_private_messages MODIFY message_type TINYINT UNSIGNED NOT NULL, MODIFY created_at DATETIME NULL DEFAULT NULL"),
-              "Only temporary shadow supplies malformed creation time");
+        shadow_altered=c&&c->Execute("ALTER TABLE im_private_messages MODIFY message_type TINYINT UNSIGNED NOT NULL, MODIFY created_at DATETIME NULL DEFAULT NULL");
     }
+    Check(shadow_altered,"Only temporary shadow supplies malformed creation time");
+    if(!shadow_altered){pool.Shutdown();tinyimx::Logger::Instance().Shutdown();return 1;}
     const auto malformed=adapter.PersistPrivateMessage(10001,10002,Unique("batch-malformed-"),1,"owned malformed fixture");
     Check(!malformed.Completed()&&malformed.status==Status::kInvalidRecord,
           "Original full-record parser rejects malformed creation time before outbox");
