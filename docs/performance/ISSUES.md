@@ -1145,3 +1145,10 @@ fresh attempt3先做zeroCAP/no-net/readonly独立stat容器，唯一bind公开ca
 源码审计发现LOG宏总先构造ostringstream/计算操作数，Logger随后才过滤。752条源码调用词法清单和唯一函数调用清单只读保存；15条可疑名称实际是纯status转字符串。另发现examples/thread_pool_demo的ok_future.get()确有消费/等待副作用，移出LOG保留原语义。其余操作数为状态/地址/错误/getter/集合大小/只读Stats与诊断时钟，未发现必要业务修改。词法工具不是任意C++纯函数证明，后续新增日志仍需把业务操作放在外部。
 
 本候选修改Logger.h的LogLazy模板与LOG宏，在等级过滤时跳过factory并恰好累计一次filtered；放行后仍调用原Log二次过滤，以处理格式化期间等级改变，源位置在factory外构造，保留输出/Fatal刷新/直接Log API/失败计数。等级、期限、事务、密码验证、数据和正式配置不变。原生回归检查输出/源函数、全部等级、factory异常、等级在factory中改变、未初始化、8线程8000计数、future消费、单次level求值；同ELF复现旧eager与新lazy，0/512B格式8组ABBA各100000条，只比较均值CPU与wall。该source提交时NOT_RUN。原生通过之后仍需真实产品重建、功能回归和同负载10k150端到端对照；不得提前宣布135ms长尾突破，所有功能10k–50k目标仍OPEN。
+
+
+### 2026-10-05：日志延迟构造原生通过，准备实际服务同源码对照
+
+f51b4f6已提交产品修正；lazy-logging-regression-20261005实际PASS，ELF67b89ed433352d6bca91c9221117ee146f672357c5d6975c78c492b7694e3ba6、CIDf2542200保留。23语义检查、8组ABBA各100000丢弃日志全通过，总31checks。0B eagerCPU29.986/26.923ms、lazy0.850/0.863；512B eager34.398/25.462、lazy0.535/0.875ms。原函数/内容、直接API、Fatal即时flush、等级表达式一次、factory异常、factory中提高等级后的二次过滤、未初始化失败、8线程8000 filtered精确计数、future.get外置全部PASS。正式19/config保持，没有产品部署或业务P99收益证据。单条省约0.26–0.34微秒，实际请求总收益必须结合过滤频率与真实CPU/P99，禁止将几十倍宏加速声称为项目几十倍加速。
+
+现场公开配置显示Gateway/Message日志warn，Info/Debug/Trace确会过滤。实际服务链接缓存含过去已撤销候选，不能只重编译main或用旧archive宣布新优化已生效。本构建准备相同当前源码的eager-control与lazy两个变体：按现有.o.d审计全部日志头依赖，独立重编译每个受影响TU，并显式重编译当前原始MessageServiceServer/MessageApplicationService和两个main；每个受影响archive在自己的fresh目录复制后用唯一原member名替换，不覆盖原SDK/cache/ELF。control通过首位-I私有头目录载入精确30452a5旧LogMacros.h，其他源码/Logger ABI/flags/外部libs/基础image相同，实际-MD依赖核对header来源。Gateway以原a8b7基础image、Message以原be8为基础，各封装两个唯一tag、singlebinary COPY；同组五个原业务unit重编译/重链接运行并要求结果一致，每variant>=130checks。UID1000零CAP/no-net readonly loader/缺配置退出1各验证。编译单进程和内存/磁盘守卫，不停其他应用、不部署/改配置/改数据。source提交时新paired build NOT_RUN；之后必须真实跨功能与10k150匹配对照，没有达到所有10k–50k功能极致验收。
