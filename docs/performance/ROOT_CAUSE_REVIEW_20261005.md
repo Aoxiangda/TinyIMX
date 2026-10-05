@@ -686,3 +686,8 @@ fresh attempt3先做zeroCAP/no-net/readonly独立stat容器，唯一bind公开ca
 f51b4f6已提交产品修正；lazy-logging-regression-20261005实际PASS，ELF67b89ed433352d6bca91c9221117ee146f672357c5d6975c78c492b7694e3ba6、CIDf2542200保留。23语义检查、8组ABBA各100000丢弃日志全通过，总31checks。0B eagerCPU29.986/26.923ms、lazy0.850/0.863；512B eager34.398/25.462、lazy0.535/0.875ms。原函数/内容、直接API、Fatal即时flush、等级表达式一次、factory异常、factory中提高等级后的二次过滤、未初始化失败、8线程8000 filtered精确计数、future.get外置全部PASS。正式19/config保持，没有产品部署或业务P99收益证据。单条省约0.26–0.34微秒，实际请求总收益必须结合过滤频率与真实CPU/P99，禁止将几十倍宏加速声称为项目几十倍加速。
 
 现场公开配置显示Gateway/Message日志warn，Info/Debug/Trace确会过滤。实际服务链接缓存含过去已撤销候选，不能只重编译main或用旧archive宣布新优化已生效。本构建准备相同当前源码的eager-control与lazy两个变体：按现有.o.d审计全部日志头依赖，独立重编译每个受影响TU，并显式重编译当前原始MessageServiceServer/MessageApplicationService和两个main；每个受影响archive在自己的fresh目录复制后用唯一原member名替换，不覆盖原SDK/cache/ELF。control通过首位-I私有头目录载入精确30452a5旧LogMacros.h，其他源码/Logger ABI/flags/外部libs/基础image相同，实际-MD依赖核对header来源。Gateway以原a8b7基础image、Message以原be8为基础，各封装两个唯一tag、singlebinary COPY；同组五个原业务unit重编译/重链接运行并要求结果一致，每variant>=130checks。UID1000零CAP/no-net readonly loader/缺配置退出1各验证。编译单进程和内存/磁盘守卫，不停其他应用、不部署/改配置/改数据。source提交时新paired build NOT_RUN；之后必须真实跨功能与10k150匹配对照，没有达到所有10k–50k功能极致验收。
+
+
+### 2026-10-05：成对构建预检发现测试多对象，逐对象校准后重试
+
+8efa570 first helper在line36链接清单预检失败，尚未创建build stage、编译或镜像。private_receiver_ack_tests实际有test与gateway/ReceiverDeliveryTracker两条.cpp.o，不能沿用单main假设。只读确认全部七目标，其余六单对象、该测试双对象，路径都真实存在；原helper/Git/失败输出保持。fresh attempt2对每一个显式对象从actual link提取源路径、当前SHA/flags独立编译，再逐项替换，保证链接中无旧CMakeFiles显式对象。原cache/archive/member/SHA/资源/自有进程watchdog/同源码两变体/130业务checks/基础镜像/四tag/八停止probe/all19/config守卫保持。本source提交时attempt2 NOT_RUN；无部署/配置/数据/其他应用改动，不将工具修复作性能收益。
