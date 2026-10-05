@@ -23,6 +23,7 @@
 #include "common/protocol/ClientChatProtocol.h"
 #include "gateway/RemoteDurableAcceptance.h"
 #include "gateway/ChatRequestPhaseTrace.h"
+#include "gateway/LoginRequestPhaseTrace.h"
 
 #include <algorithm>
 #include <atomic>
@@ -72,6 +73,28 @@ void LogChatPhaseSnapshot(const tinyimx::ChatRequestPhaseTrace::Snapshot& x) noe
     }
 }
 
+
+// Login samples preserve absolute phase times for same-UID/client correlation.
+void LogLoginPhaseSnapshot(const tinyimx::LoginRequestPhaseTrace::Snapshot& x) noexcept {
+    static tinyimx::ChatPhaseLogLimiter limiter;
+    const auto second = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            tinyimx::BusinessClock::now().time_since_epoch()).count());
+    if (!limiter.Admit(second)) return;
+    try {
+        LOG_WARN("login_path uid=" << x.uid << " tid=" << x.tid << " seq=" << x.seq
+            << " received_us=" << x.received_us << " started_us=" << x.started_us
+            << " finished_us=" << x.finished_us << " response_us=" << x.response_us
+            << " cpu_us=" << x.cpu_us
+            << " auth_start_us=" << x.phase_start_us[0]
+            << " auth_end_us=" << x.phase_end_us[0] << " auth_cpu_us=" << x.phase_cpu_us[0]
+            << " presence_start_us=" << x.phase_start_us[1]
+            << " presence_end_us=" << x.phase_end_us[1] << " presence_cpu_us=" << x.phase_cpu_us[1]
+            << " unread_start_us=" << x.phase_start_us[2]
+            << " unread_end_us=" << x.phase_end_us[2] << " unread_cpu_us=" << x.phase_cpu_us[2]
+            << " success=" << x.success << " failed=" << x.failed);
+    } catch (...) { /* Diagnostics cannot alter login. */ }
+}
 
 constexpr std::uint32_t kGroupOfflineReplayPageSize = 100;
 constexpr std::uint32_t kGroupOfflineReplayLeaseMs = 10000;
@@ -4732,6 +4755,7 @@ void GatewayServer::HandleLoginRequest(
             [this, connection, packet](
                 const BusinessExecutor::ExecutionContext& context
             ) -> BusinessExecutor::Completion {
+                LoginRequestPhaseTrace login_trace(context.Request(), &LogLoginPhaseSnapshot);
                 if (context.CancellationRequested()) {
                     return {};
                 }
@@ -4746,7 +4770,7 @@ void GatewayServer::HandleLoginRequest(
                 std::string error_message;
 
                 auto send_login_response =
-                    [this, &connection, &packet](
+                    [this, &connection, &packet, &login_trace](
                         bool success,
                         const std::string& message,
                         const std::string& reason,
@@ -4756,6 +4780,7 @@ void GatewayServer::HandleLoginRequest(
                         std::size_t offline_count,
                         std::int64_t total_unread
                     ) {
+                        login_trace.ResponseStart(success);
                         Json response_body;
                         response_body["success"] = success;
                         response_body["message"] = message;
@@ -4923,11 +4948,10 @@ void GatewayServer::HandleLoginRequest(
                 rpc_request.username = username;
                 rpc_request.password = password;
 
-                const auto rpc_result =
-                    user_rpc_client_->Authenticate(
-                        rpc_request,
-                        call_options
-                    );
+                const auto rpc_result = login_trace.Measure(
+                    LoginRequestPhaseTrace::Phase::Authenticate, [&] {
+                        return user_rpc_client_->Authenticate(rpc_request, call_options);
+                    });
 
                 if (!rpc_result.ok()) {
                     const char* const reason =
@@ -5014,6 +5038,7 @@ void GatewayServer::HandleLoginRequest(
                     *auth.profile;
                 const UserId user_id =
                     static_cast<UserId>(profile.user_id);
+                login_trace.SetUserId(profile.user_id);
                 const std::string verified_username =
                     profile.username;
 
@@ -5072,7 +5097,9 @@ void GatewayServer::HandleLoginRequest(
                     return {};
                 }
 
-                SetUserOnline(user_id, connection);
+                login_trace.Measure(LoginRequestPhaseTrace::Phase::Presence, [&] {
+                    SetUserOnline(user_id, connection);
+                });
 
                 // Authentication/session acceptance is the Login critical
                 // path. Durable pending-count enrichment is intentionally
@@ -5090,7 +5117,9 @@ void GatewayServer::HandleLoginRequest(
                     verified_username,
                     session_manager_.OnlineCount(),
                     offline_count,
-                    GetTotalUnread(user_id)
+                    login_trace.Measure(LoginRequestPhaseTrace::Phase::Unread, [&] {
+                        return GetTotalUnread(user_id);
+                    })
                 );
 
                 // Replay is post-login best effort and receives its own bounded

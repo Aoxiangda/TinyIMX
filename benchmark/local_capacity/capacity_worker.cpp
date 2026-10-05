@@ -73,10 +73,12 @@ struct Config {
     unsigned worker=0,port=9000,duration=300,hb=15,drain=10,verify=90;
     double rate=100,ramp=100;
     std::string password;
+    bool login_trace{false};
 };
 static void usage() {std::cout<<"tinyimx_capacity_worker --out DIR --control DIR --run-id TOKEN [--connections N --total-users N --offset N --user-id-base N --username-prefix TOKEN --source-ip IPv4 --host IPv4 --port N --worker-id N --mode hold|private --rate N --ramp-per-sec N --duration N --heartbeat-seconds N --drain-seconds N]\nPassword: TINYIMX_BENCH_PASSWORD environment. Protocol: plaintext TCP; no reconnect, TLS, group publish, or 50k claim.\n";}
 static Config args(int argc,char**argv) {
     Config c;const char*pw=std::getenv("TINYIMX_BENCH_PASSWORD");c.password=pw?pw:"123456";
+    const char*lt=std::getenv("TINYIMX_LOGIN_CLIENT_TRACE_ENABLE");c.login_trace=lt&&lt[0]=='1'&&lt[1]=='\0';
     for(int i=1;i<argc;++i){std::string k=argv[i];if(k=="--help"||k=="-h"){usage();std::exit(0);}if(i+1>=argc)throw std::runtime_error("MISSING_OPTION_VALUE");std::string v=argv[++i];
       if(k=="--out")c.out=v;else if(k=="--control")c.control=v;else if(k=="--run-id")c.run=v;else if(k=="--host")c.host=v;else if(k=="--source-ip")c.source=v;else if(k=="--username-prefix")c.prefix=v;else if(k=="--mode")c.mode=v;
       else if(k=="--connections")c.count=number(v);else if(k=="--total-users")c.total=number(v);else if(k=="--offset")c.offset=number(v);else if(k=="--user-id-base")c.base=number(v);
@@ -129,7 +131,7 @@ class Worker {
     void interest(std::size_t i){auto&x=conns[i];if(x.fd<0)return;epoll_event e{};e.data.u32=static_cast<unsigned>(i);e.events=EPOLLIN|EPOLLRDHUP|EPOLLERR|EPOLLHUP;if(x.state==1||!x.output.empty())e.events|=EPOLLOUT;if(::epoll_ctl(ep,EPOLL_CTL_MOD,x.fd,&e)<0)throw std::runtime_error("EPOLL_MOD");}
     void queue(std::size_t i,MessageType type,std::uint32_t d,const std::string& body){auto&x=conns[i];Packet p;p.type=type;p.seq=d;p.body=body;tinyimx::Buffer b;std::string err;if(!codec.Encode(p,&b,&err))throw std::runtime_error("ENCODE");auto s=b.RetrieveAllAsString();if(x.queued+s.size()>262144)throw std::runtime_error("CLIENT_OUTPUT_LIMIT");x.queued+=s.size();x.output.push_back(std::move(s));interest(i);}
     void close(std::size_t i){auto&x=conns[i];if(x.fd<0)return;if(x.state==3){--online;++m["disconnects"];}::epoll_ctl(ep,EPOLL_CTL_DEL,x.fd,nullptr);::close(x.fd);x.fd=-1;x.state=4;}
-    void connected(std::size_t i){auto&x=conns[i];x.state=2;++m["connected"];x.login_start=Clock::now();x.login_seq=seq(x);queue(i,MessageType::kLoginRequest,x.login_seq,"{\"username\":"+quote(username(i))+",\"password\":"+quote(c.password)+"}");}
+    void connected(std::size_t i){auto&x=conns[i];x.state=2;++m["connected"];x.login_start=Clock::now();x.login_seq=seq(x);queue(i,MessageType::kLoginRequest,x.login_seq,"{\"username\":"+quote(username(i))+",\"password\":"+quote(c.password)+"}");if(c.login_trace&&x.uid%16==0)ledger<<"login_sent\t"<<x.uid<<'\t'<<x.to<<"\t0\t"<<x.login_seq<<"\t\t"<<ns(x.login_start)<<'\n';}
     void open(std::size_t i){auto&x=conns[i];x.uid=uid(i);x.to=peer(i);x.fd=::socket(AF_INET,SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC,0);if(x.fd<0)throw std::runtime_error("SOCKET");int one=1;
         if(::setsockopt(x.fd,IPPROTO_TCP,TCP_NODELAY,&one,sizeof(one))<0)throw std::runtime_error("TCP_NODELAY");
 #ifdef IP_BIND_ADDRESS_NO_PORT
@@ -140,7 +142,7 @@ class Worker {
         epoll_event e{};e.data.u32=i;e.events=EPOLLIN|EPOLLOUT|EPOLLRDHUP|EPOLLERR|EPOLLHUP;if(::epoll_ctl(ep,EPOLL_CTL_ADD,x.fd,&e)<0)throw std::runtime_error("EPOLL_ADD");if(rc==0)connected(i);
     }
     void packet(std::size_t i,const Packet&p){auto&x=conns[i];auto t=parse(p.body);auto now=Clock::now();
-      if(p.type==MessageType::kLoginResponse){if(x.state!=2||p.seq!=x.login_seq||t.get<std::string>("success","")!="true"||t.get<std::uint64_t>("user_id",0)!=x.uid){failure_detail(x,p,t,"login");throw std::runtime_error("LOGIN_IDENTITY_OR_FAILURE");}x.state=3;++online;++m["login_ok"];login_latency.add(ms(x.login_start,now));heartbeats.push({now+std::chrono::seconds(c.hb),i});return;}
+      if(p.type==MessageType::kLoginResponse){if(x.state!=2||p.seq!=x.login_seq||t.get<std::string>("success","")!="true"||t.get<std::uint64_t>("user_id",0)!=x.uid){failure_detail(x,p,t,"login");throw std::runtime_error("LOGIN_IDENTITY_OR_FAILURE");}x.state=3;++online;++m["login_ok"];login_latency.add(ms(x.login_start,now));if(c.login_trace&&x.uid%16==0)ledger<<"login_ack\t"<<x.uid<<'\t'<<x.to<<"\t0\t"<<p.seq<<"\t\t"<<ns(now)<<'\n';heartbeats.push({now+std::chrono::seconds(c.hb),i});return;}
       if(p.type==MessageType::kHeartbeat){if(x.state!=3||p.seq!=x.hb_seq||x.hb_seq==0||field(t,"pong")!="true")throw std::runtime_error("HEARTBEAT_IDENTITY");x.hb_seq=0;++m["heartbeat_ack"];return;}
       if(x.state!=3)throw std::runtime_error("BUSINESS_BEFORE_LOGIN");
       if(p.type==MessageType::kChatAck){if(x.chat_seq==0||p.seq!=x.chat_seq)throw std::runtime_error("UNKNOWN_CHAT_ACK");
