@@ -1043,3 +1043,14 @@ v50本机1227文件逐SHA已通过，归档SHA `d151c75541b8a5bedb2adbd3e0654099
 用原worker/SHA/ramp/HB/deadline及同10k150/s60s9000的独立cpuprofile150，batchON保持。三个recorder在allready/control start+4s之后启动，45s完成，原rawrunner始末仍恰好19业务容器；所有符号报告只在压测worker全部drain之后运行，避免破坏runner身份守卫。报告UID1000/zeroCAP，通过 `/proc/<真实servicePID>/root` symfs读取实际当前产品ELF/DSO，防止nativeperf依赖只读mount或旧基础镜像给出错误符号。128MiB/CPU1/pids64/defaultseccomp/nnp/no-net/readonly/lognone和90秒exactownCID边界保持。工具本身CPU和采样扰动可能影响延迟，因此原失败/指标仍存，这一次专用于函数CPU定位，不当无采样验收或CPU等待来源证明。
 
 本source提交时实际业务采样NOT_RUN，无产品CPP/ELF修改/部署，其他应用继续保留。全功能10k50k極致未达，取得函数证据再选择下一具体代码优化。
+
+
+### 2026-10-05：真实负载采样部分成功，先恢复既有 Gateway 证据
+
+`2a6495f` 的cpuprofile150实际完成10k登录、9000 attempt/positive/线上delivery/接收ACK及SQL持久化，negative/skipped/late/disconnect均0。记录仅为带采样诊断；100ms内ACK实时4090，扰动很大，不能冒充原未采样ABBA验收。两个Gateway采样器exit0，各raw约87KiB；Message采样器exit255/raw38KiB，stderr仅final五能力证明和19条Ignored openfailure线程警告，observer因此失败，整体helperFAILED，未生成任何CPU符号结论。所有原始pressure及partialraw/失败/容器保持，19身份和配置保持。
+
+Linux6.8官方 https://raw.githubusercontent.com/torvalds/linux/v6.8/tools/perf/util/evsel.c 表明这种warning属于已经忽略的ESRCH（线程消失）； https://raw.githubusercontent.com/torvalds/linux/v6.8/tools/perf/builtin-record.c 对-p本来就打开ignore_missing_thread。因此警告是线程寿命变化证据，但不能直接认定它就是fatalexit原因或靠加ignoreflag解决。当前准确fatalcause仍OPEN，不能开no-inherit漏掉新工作线程来宣称完整MessageCPU，也不扩大安全权限。
+
+现有四轮未采样cgroup中Messageuser0.427–0.434/system0.483–0.506核，两GW各user0.302–0.339/system0.313–0.344核；用户空间采样只能覆盖其中部分，不能解释全部kernelCPU/调度等待。源码Message/Social RPC已经缓存channel/stub，不能假设每请求CreateChannel并做无效改动。
+
+新工具只在freshrecovery阶段解析两个实际成功Gatewayraw，UID1000/zeroCAP报告读取准确targetroot符号、所有parentraw/sourceSHA校验并保留。报告按全部符号行统计samplecount与unknown符号比例，先验证可用性再选择下一代码优化；没有新负载、重启、编译、权限或产品修改。Message失败保持明确false，不将部分报告称全部CPU剖析完成。新recovery在本source提交时NOT_RUN。全功能极致未达，继续准确分析。
