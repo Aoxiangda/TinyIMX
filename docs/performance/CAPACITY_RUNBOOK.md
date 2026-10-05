@@ -636,3 +636,10 @@ Linux6.8官方 https://raw.githubusercontent.com/torvalds/linux/v6.8/tools/perf/
 `c26fae5` 的指令诊断实际PASS：560k调用全成功，CPUID前置验证，隔离容器f7c763/ELFf2224c79，public vDSO SHA与前probe完全一致。四轮RDTSC批均3395.97–3446.93ns，LFENCE_RDTSC3403.27–3503.22ns，RDTSCP3417.34–3630.61ns；MONOTONIC3493.44–3541.31ns，REALTIME3507.12–3540.98ns，系统调用7225.20–7315.26ns，COARSE4.53–6.15ns。三条指令同样昂贵，不能推荐只禁用RDTSCP/重启/改kernel达到大改善，未做任何此类修改。代码调用频率归属仍缺失，不能用单次成本换算整个请求延迟。
 
 下一诊断只给旧own合成RPC程序加载fresh counterSO，真实clock_gettime和值/result/errno均原样返回；统计4096固定槽×7时钟桶与立即返回代码地址。只保存自身公开代码地址/对应exact ELF函数，不读取任何目标应用内存、完整栈、用户内容或regs。LD_PRELOAD仅在own子进程最小环境生效，产品服务不加载。比较direct计数与grpc正常A1/计数B1/B2/正常A2，每3000条20ms合成echo、16调用worker；overflow/初始化fallback必须0，原binary/DSO SHA前后保护、elf偏移精确符号校验。包括启动/关闭、调用方+服务方，不是实际Gateway调用频率或10k压测。需要该证据后才选择高频调用优化。本source提交时NOT_RUN；allfeatures10k–50k仍OPEN，其他应用继续保留。
+
+
+### 2026-10-05：RPC时钟调用量已量化，检查本地数据库传输成本
+
+`4a9494b` 的own clockcounter五组全部PASS，共15000合成echo，overflow/fallback均0，original ELF/DSO SHA保持。直接3000条共21002时钟调用，grpcB1/B2共183880/183833（约61.29/61.28次/echo），主要now_impl121543/121566、cppsteady53207/53139；direct cppsteady15002。该全进程计数包括启动/关闭以及client+server，不等于Gateway/Message实测调用量。正常A1/计数B1/B2/正常A2过程CPU0.4411/0.4368/0.4256/0.5044核，简单调用P99 22.606/22.377/22.677/23.511ms；没有凭计数工具较低P99宣布性能收益。RPC会放大精确时钟频率，但无法独自解释真实135ms长尾；不能只关私聊trace、用coarse改期限或重启禁用RDTSCP。
+
+原真实ABBA Message内核0.48–0.51核/MySQL0.575–0.588核、guestCPU PSI约60%，内存PSI很低，下一检查本地MySQL TCP内核路径。只读preflight确定MySQL cc86c/d58a/init2425、backend network；public socket /var/run/mysqld/mysqld.sock mode777/uid999/gid999/inode3932320，durability1/1/1/0/0。新ownCPP仅通过test ELF --wrap_mysql_real_connect强制TCP或socket，getsockname验物理AF、TLS协商数明确保存；原健康PING/SELECT1/utf8/认证选项保持。四fresh隔离容器在同be8镜像、相同CPU1/256MiB/16连接，ABBA各3000次，唯一public socket inode只读bind、privateconfig只读、onlyfresh ownoutput可写；没有生产配置/SQL表/服务重启。该inode诊断bind在MySQL重启后会失效，不能直接当稳健部署方案。先测成本，后续若有效再实现可选产品transport并完整故障/事务/跨功能验证。本source提交时NOT_RUN；所有10k–50k功能极致验收仍OPEN。
