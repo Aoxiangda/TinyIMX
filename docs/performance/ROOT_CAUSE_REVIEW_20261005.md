@@ -628,3 +628,10 @@ Linux6.8官方 https://raw.githubusercontent.com/torvalds/linux/v6.8/tools/perf/
 `67b43c6` 的隔离诊断实际PASS，容器50c6f7（UID1000，E/P/I/B/A零，nnp1/seccomp2）、320k调用全成功，19服务/config/内核安全设置保持。MONOTONIC四轮批均wall为8253.29/4201.80/3789.06/3743.26ns，REALTIME4925.45/7956.17/6090.02/4452.72ns，直接syscall14819.69/10131.38/8330.24/9832.50ns，COARSE4.57/4.93/4.38/4.53ns。不是单调用P99或带载表现。公开self vDSO8192字节SHA29465e48a8210bdd3f6d54223c3d5349d01503bedf5a3c10bf4a4a02a9264302，0x765为RDTSCP，热点0x768紧接其后的NOP；平面IP采样可能有skid，不能仅凭NOP断言其自身消耗或分配全部请求延迟。TSC路径公开Linux源码使用rdtsc_ordered；https://raw.githubusercontent.com/torvalds/linux/v6.8/arch/x86/include/asm/vdso/gettimeofday.h ，候选序列RDTSC/LFENCE+RDTSC/RDTSCP由特征决定：https://raw.githubusercontent.com/torvalds/linux/v6.8/arch/x86/include/asm/msr.h 。当前WHP/ULM存在，但无成对宿主模式测试，尚不能宣布唯一原因。
 
 按150消息/s，ChatRequestPhaseTrace每条约10次精确时钟，即便4us也只约0.006CPU核；排除仅关闭该诊断就解决42%用户CPU的未经证实推断。RPC期限/入队/活跃/观测也有精确时钟，当前采样无调用链，调用频率归属仍OPEN。后续own诊断CPUID检查TSC/SSE2/RDTSCP后比较三条用户态指令与四API模式，4轮各20k调用，共560k；原public vDSO SHA也核对相同。原始TSC只是成本对照，不替代安全的monotonic期限或性能量测。fresh source/工具/编译/容器受审计，新probe本source提交时NOT_RUN，无产品代码/VM启动/安全/应用变化。v57主机下载及1388manifest哈希通过，v58实际导出1408文件、SHAe6534ef70ff5d329b88157c9640c8f44da4a03c516afc7a3d8985bd610f2a71f。所有功能10k–50k目标继续OPEN。
+
+
+### 2026-10-05：计时指令对照否定单独禁用RDTSCP方向
+
+`c26fae5` 的指令诊断实际PASS：560k调用全成功，CPUID前置验证，隔离容器f7c763/ELFf2224c79，public vDSO SHA与前probe完全一致。四轮RDTSC批均3395.97–3446.93ns，LFENCE_RDTSC3403.27–3503.22ns，RDTSCP3417.34–3630.61ns；MONOTONIC3493.44–3541.31ns，REALTIME3507.12–3540.98ns，系统调用7225.20–7315.26ns，COARSE4.53–6.15ns。三条指令同样昂贵，不能推荐只禁用RDTSCP/重启/改kernel达到大改善，未做任何此类修改。代码调用频率归属仍缺失，不能用单次成本换算整个请求延迟。
+
+下一诊断只给旧own合成RPC程序加载fresh counterSO，真实clock_gettime和值/result/errno均原样返回；统计4096固定槽×7时钟桶与立即返回代码地址。只保存自身公开代码地址/对应exact ELF函数，不读取任何目标应用内存、完整栈、用户内容或regs。LD_PRELOAD仅在own子进程最小环境生效，产品服务不加载。比较direct计数与grpc正常A1/计数B1/B2/正常A2，每3000条20ms合成echo、16调用worker；overflow/初始化fallback必须0，原binary/DSO SHA前后保护、elf偏移精确符号校验。包括启动/关闭、调用方+服务方，不是实际Gateway调用频率或10k压测。需要该证据后才选择高频调用优化。本source提交时NOT_RUN；allfeatures10k–50k仍OPEN，其他应用继续保留。
