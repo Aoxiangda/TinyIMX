@@ -244,3 +244,20 @@ v18_attempt2归档100文件 SHAece928ff8e5251c4fd6cdb8b3d5533bd9c1e912e0dca8a708
 下一项先只读完整9000成对台账的发送→ACK、发送→wire、wire与ACK时间差，原直方图P50/P95/P99/P99.9和调度迟到不加额外0.1ms；分析guest CPU/PSI增量，明确观察帧捕获边界和同机客户端/代理/其他应用共享CPU限制。负载生成器已有心跳优先队列，不存在每循环扫描所有10k心跳的旧问题；固定epoll_wait10ms会造成若干发送合并，已有计划到ACK和调度迟到严格保留，不能用改发送节奏隐藏服务不足。只读源快照取实际运行Gateway33fc、Message ddc关联公共连接实现及当前HEAD作为审查上下文；当前Gateway公平调度源码曾拒绝，严禁直接构建部署它，未标注Git的Social/outbox运行等同HEAD也不能臆测。重点检查持续心跳/在线路由以及每私信好友关系校验与共享网络往返，再决定新产品变更。当前全部功能极致性能及20k50k仍未实现。
 
 本轮分析证据限制也保存：回滚前候选服务阶段日志未单独采集，容器重建后不可用，不能捏造候选phase或比较；所有必要完整台账/数据库/CPU/压力/门槛原始结果已保留，原版日志在部署前私有快照中可筛出数值慢样本（阈值且限频，有偏样本非P99）。新版回滚helper仅增强今后的模板，在重建前把本任务当前candidate log保存runtime-private，捕获失败仍保存分类并继续必要回滚，绝不导出全日志；已经执行的旧Git/原回滚记录不修改。曾只读误查resources.jsonl，实际是guest-resources.log，改用真实路径后读取，未更改任何样本/产品。主机其他应用/游戏/Python全部保留，无全局清理或VM安全更改。
+
+
+### 2026-10-05：完整投递与共同消息计时证明等待分散，先验证在线维护合并机制
+
+9eb6296 的只读成本报告完成。原/候选全部9000发送-ACK-wire按CID/MID和双方身份成对核对，无丢弃样本：发送→wire均值74.6993/72.6494ms，P99 210.1270/210.9084、P99.9 286.9274/296.8753、max324.5814/358.2285，实际投递尾延迟没有改善。2554/2604条实际delivery早于sender ACK属于允许交叉顺序，未把负wire-minus-ACK时间丢掉；该差值均值10.5391/10.1802，P99 73.4677/73.2296。原完整ACK均值64.1773/P50 55.4/P95 130.1/P99 175.5/P99.9 245.6，候选62.4872/54.6/125.3/173.1/240.3，严格原100us上界桶保持。发送调度迟到均值1.71312/1.73115、P99 9.1/9.0、max15.383/12.035ms，不能把近175ms尾延迟都归因于10ms客户端epoll等待。
+
+活动guest忙碌85.6950/85.1040%，system+softirq40.1613/39.1819%，ctxt37885.5/37278.7每秒、guestwide fork/thread310.821/312.832每秒（包含全部应用/观察者）。CPU some压力63.2608/62.3974%，IO some2.0670/2.0806/full1.0182/1.0235%，memory压力接近0；19cgroup总5.42436/5.37003核（不含所有系统路径，不能与guest差值断言loadgen独占）。采样在两帧中读数时刻有350-394ms边界不确定，所有capture值和原stat/PSI保存。这不是内存不足导致本轮失败，不进行全局内存清理、主机程序停止或安全/VM设置更改。
+
+原版488个阈值/限频持久化慢样本全部按MID/身份/单调时间与同一条消息台账匹配，全部计时顺序有效，没有不匹配。这个共同有偏样本发送→ACK均值74.79054，由进入仓储前33.66787、仓储内部23.44657、仓储结束至ACK17.67611ms精确逐消息加和；commit均值11.31337、max110.503ms。仓储前包括client/nginx/Gateway排队、权限/路由与RPC，仓储后包括服务返回/RPC、未读快照和ACK交付，不能直接称某一项独占。此样本不是总体P99，也不把不同人群均值相减得出差异。
+
+Gateway原版慢chat日志327条、candidate299，均失败0；原chat dispatch年龄平均11.2933、work119.8545、permission19.2139、route8.16086、persistRPC82.8792、unread8.87533ms；candidate9.57197/118.8080/17.3080/8.03041/81.7788/11.14788。peer原4/candidate6条慢样本，不是完整交叉路径总体。进一步原327 Gateway与488repo取相同MID交集40条，全部RPCduration>=repository：同一组senderACK均值152.6363，Gatewaydispatch10.9378、权限17.03325、路由8.941075、persistRPC87.349325，其中repo59.627375/RPC之外27.72195、unread10.528375，repo内commit34.307525；40条是两处慢采样交集，不能称主观百分比根因或将27.72当gRPC独占CPU/运输时间。真实尾等待横跨存储与多跳/共享调度，需要改变高频成本而非只调单个SQL参数。
+
+已按运行33fc源码确认：Pong快速返回、4线程异步presence、O(1)session反向索引、本地ZK发现快照、权限一条双向SQL、原子未读一lease/EVAL快照、持久化确认边界之前的sender ACK策略都已存在，不能重复声称修复。在线刷新仍每次健康lease/PING再owner(gateway_id+connection_name)绑定Lua GET/JSON/EXPIRE。10k/15秒约667次维护每秒，再叠加每消息路线和未读Redis调用；下一项只能先隔离机制：独立自有Redis键，原single Lua与有界批量owner条件刷新，相同open-loop维护人口/健康检查/状态结果，验证TTL、旧连接/新所有者、notfound/invalidrecord/wrongtype/取消或停机边界，再比较网络命令数/CPU/墙时/迟到。当前尚未编写/构建/测量生产批量候选，尚不承诺端到端收益，native→Docker组件路径不同于真实container→Docker；不缓存/放宽好友拉黑权限，不跳过健康检查，不延长客户端期限或削弱持久化。
+
+日志当前Gateway/Message/Social均warn，console=true/file=true/async=false/file每条flush=false；User info但活动User仅0.023核。Logger代码同步锁/console endl存在，TINYIMX_LOG确有过滤前ostringstream构造，但正常INFO实际写入在上述服务已关闭，异步日志改造不是已证实主要瓶颈；不能直接调更低级别或根据源码就宣称根因。v22本地44条目/43文件SHA全部验证，归档a44d03d3ac977d267d0ac900ddb38256f0728281e46905439e88f10a4ddb2f47；Gateway数值3文件单独哈希下载核验，仓储与GatewayWindows数值join源工具与结果均单独留存并原样复制至guest新stage，Python执行环境为原Windows任务tools目录，Git forensic copy不在guest执行。
+
+只读解析失败与修正也记录：第一helper错把peer context user_id当recipient，嵌入Python35行AssertionError，第一stage只有审计无成功数值报告，原脚本/stage不覆盖。运行33fc的SubmitMustRunConnectionBusinessTask不赋user/epoch，BusinessRequestContext默认0，HandleGatewayForwardChat使用该helper且ScopedBusinessDispatchContext(connection,0,0)；只读分类sourceSHA4a8fed3bbc7decc120eb287d9022ba0023c7ab3c52d551d019e3fa0c786eb5da、类型SHAabe8fc9ff0181e5a91cd8234a316d9ac13eac894e6413efa9c11b5809b743228。新attempt2保留MID绑定正ACK台账；chat sender/原seq/正epoch，peer内部user=epoch=0/正seq，产品身份校验没有改。分类命令一次自动审查超时未启动，仅一次同意重试成功；这是超时而不是安全拒绝，没有approval阻塞。全部19/config/运行原版及MCP好修复仍保持、整体目标未达，继续有证据地迭代。
