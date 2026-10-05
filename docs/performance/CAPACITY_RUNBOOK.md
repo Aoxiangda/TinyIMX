@@ -351,3 +351,16 @@ v30导出在生成archive/audit前失败：fullGateway link.map33533003bytes超�
 本轮10路径仅工具/文档预审计：封装only38Gateway ELF到原1d8 base新tag、UID1000 no-net/no-cap只读loader/missingconfig控制；先原10k/150/s60秒9000 baseline，候选部署仅两GW增加exactbatch_enable=1且保存privateinspect/log、原env/rollback指令，其他17/config/worker16/recovery/fanout/SQLdurability1/1/1/0/0保持。回滚先capture候选log，capture失败仍回滚，恢复原1d8及flag缺省；保留全部候选/rows/log，不prune/delete。原matched压力工具精确改GW身份，新run batch150A1/B1/B2/A2，worker5d6bd183及原Messagec119固定，activewindow readonlydigest/wholecgroup+gueststat/PSI、all9000完整attempt/positive/wire/SQL/HB相等gates、每个FAIL保存。源helpers提交前全NOT_RUN。
 
 现场已有功能链用新519880/882/884/886四个synthetic身份，执行前确认socialpair为空，正常friend/private/read/group/file+wire/durable/checksum，仅样本回归非TLS/MCP/AI/offline/fault/50k全验收。后续TTL缺失/旧连接下线/跨GW替换会话测试另审计。3secI/Oidle非wholecmd/全局停机绝对deadline，不从组件少命令推断端到端极致。若端到端不能重复改善则还原并准确分析剩余瓶颈；不盲重复callback/32worker/groupcommitdelay/skiphealthyPing。所有apps/game/Python保留，不清内存删文件/改VM/security/NIC，源迭代Git和原raw完整留存。全10k50k所有功能极致尚未达到，持续推进。
+
+
+### 2026-10-05：原10k150基线P99仍180.5ms，真实会话交叉验证候选已健康
+
+5dc3cb9已提交镜像/控制工具；sealedimage a8b7d5ea6446a2fdbedac0f3ebbbfb07579155ec19b819959d96eb0262aeb6a9仅38f41Gateway ELF c289到原1d8base，UID1000 loader及expectedmissingconfigexit1通过，全部旧SDK目标保持。v31 source/lifecycle/fullbuild54文件/55条目 SHA00a187fd2dd95d1dcf75e912b733f322d6ef14e274f71804b35612df19182e09全54本地SHA通过，完整map保存，v30大小失败未丢证据。
+
+baseline batch150A1实际完成、privateexit2/FAIL：10klogin、9000attempt/positive/wire/receiverACK及SQLconfirmed全部正确，无negative/skip/late/disconnect，HB82612/82612；P99180.5、scheduledP99181.7、max346.497ms，active8990/60=149.8333/s，仅延迟gates失败。不能把completed状态当性能PASS；两个activewindow readonlydigest/19wholecgroup/gueststat/PSI等raw已保留。候选尚未测性能。
+
+双Gateway候选部署a8已健康，gateway-a ecb08556be0f75ec39fd4b6e2fc1104479b3bc37d21db7455257acc9c136ed56、gateway-b a7fedf6c9293de88f7da6cf7b3b63a22f588b76e818e9b491a85d4e78d1a925f；其他17精确身份/启动/privateconfig不变，env只新增batchEnable1，原worker16/recovery/fanout/pools/SQLdurability保持，privateoldlogs/inspect和原1d8rollback已保存。此轮source提交不再部署或改productionCPP。
+
+7路径预审计新增真实twoGW session actor，existing synthetic519890/519892 readonlySQL精确验证username/status及在线key初始missing；仅自有会话正常login/HB/close和全recordCAS EXPIRE1（每次mutation前独立audit）强制过期，privateRedis密码onlyRAM、无DEL/SQL直接写/其他key/全局设置。验证missingrestore、同GW替换/旧EOF、新owner不受旧cleanup影响、跨GW接管后旧HB/旧close不覆盖新owner、新ownerclose/inflightmaintenance和expiredownsession32HBclose不复活；主动关闭burst只报告clientwrites不伪称serveraccepted，offline watch10samples/1sec明确限制，不估算竞态频率或全负载P99。Probe原始body/owner/PTTL/wire/seq以及失败完整保存，90sec ownPID/starttime/argv/PGID守护，无其他应用停机/清理。
+
+提交前liveactor/现成功能链/候选150性能NOT_RUN，继续功能门控后再测匹配负载。新v32仅明确完成/失败自有stages，冻结所有raw与源工具；既有Messageddc/b24/c119、User38、MCPbc85保持。3secI/Oidle非absolutewholecmd/globalshutdown proof；全10k50k所有功能极致未达到，持续凭端到端CPU/SQL/latency证据迭代，不盲重复旧被否定方向。所有apps/game/Python保留，无任意删除、VM/security/NIC变化。
