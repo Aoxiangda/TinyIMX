@@ -1157,3 +1157,10 @@ f51b4f6已提交产品修正；lazy-logging-regression-20261005实际PASS，ELF6
 ### 2026-10-05：成对构建预检发现测试多对象，逐对象校准后重试
 
 8efa570 first helper在line36链接清单预检失败，尚未创建build stage、编译或镜像。private_receiver_ack_tests实际有test与gateway/ReceiverDeliveryTracker两条.cpp.o，不能沿用单main假设。只读确认全部七目标，其余六单对象、该测试双对象，路径都真实存在；原helper/Git/失败输出保持。fresh attempt2对每一个显式对象从actual link提取源路径、当前SHA/flags独立编译，再逐项替换，保证链接中无旧CMakeFiles显式对象。原cache/archive/member/SHA/资源/自有进程watchdog/同源码两变体/130业务checks/基础镜像/四tag/八停止probe/all19/config守卫保持。本source提交时attempt2 NOT_RUN；无部署/配置/数据/其他应用改动，不将工具修复作性能收益。
+
+
+### 2026-10-05：44个对照对象和130业务检查通过，修正本地基础镜像引用
+
+3f5b971 attempt2完整重编译44个eager对象、七个ELF并通过130业务unit（trace17/application53/crash28/receiver10/boundary22），随后封装Gateway FAIL。build日志SHA efbc0f6ec2b53e2d7ee404e2824969abd05bf691233ef441efa7219daa139748明确显示FROM sha256:a8b7被BuildKit解析为docker.io/library/sha256仓库，未创建候选镜像。该失败和旧Dockerfile/ELF/archive/log都保留。只读再次核对源和全部借用输入SHA保持。
+
+fresh attempt3引用真实已存在本地tag（Gateway codex-online-maintenance-gateway-v1、Message codex-private-begin-insert-read-batch-v1），build前后均核对a8b7/be8物理ID，不拉取或更换基础镜像。为避免重复已成功编译，先验证attempt2源/flags/archive SHA和44项编译计划与当前完全一致，冻结其自有eager产物SHA再复用，重跑130业务unit。冻结发生在原失败后/复用前，不伪称是原编译前已记录SHA。新stage保存复用审计及fresh image context/Dockerfile，完全不覆盖attempt2目录；eager镜像标记真实build revision3f5，lazy标记本轮head。lazy44对象/七ELF独立编译、130同样unit、四镜像及UID1000加载/缺配置退出守卫继续。source提交时attempt3 NOT_RUN，正式19/config/SQL/apps均保持；仍需真实跨功能与匹配10k150才能评估本次业务收益，所有功能10k–50k极致目标未达标。
