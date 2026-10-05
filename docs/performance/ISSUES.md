@@ -853,3 +853,25 @@ actualcandidate batch150B1 completed/privateexit2/FAIL，原同10k15060秒9000�
 候选日后回滚时原before-log捕获会丢SIGTERM后drain统计，本轮添加独立wrapper预审计2个ownDocker logs --follow进程到runtime-private再调用原已审计2GWrollback；通过stream保留oldcontainer停止/移除期间真实batchaccepted/terminals/pending/maxbatch日志。日志失败不阻止恢复，只有ownPID/starttime/argv/PGID验证后关闭followers，缺失line只算未证实；原rollback按精确1d8/flag缺省/worker16/other17/config保护，source旧helper不改且所有raw/失败/rows/files保留。v34显式扩展analysis/source/phases/drainrollback和未来B2/A2完整/失败记录，不覆盖旧归档。
 
 当前a8/38候选两GW healthy，Message原ddc/b24/c119 User38 MCPbc85 SQLdurability1/1/1/0/0保持，所有apps/game/Python保留，不删文件清内存/改VM/security/NIC。先分析同窗机制与剩余长尾，再根据首次明显改善决定B2/A2复制验证或下轮具体修复，不能盲重复加worker/callback/groupcommitdelay/跳healthyPing。全10k50k所有功能极致未达到，继续准确分析并Git迭代。
+
+
+### 2026-10-05：完整10k150 ABBA确认维护批处理收益，仍继续长尾优化
+
+b911b2b的分析/私有日志保全/停机持续stream工具实际执行成功。四轮相同10k登录、150/s×60s=9000原负载，Message原ddc/b24/c119、原worker5d6bd、durability1/1/1/0/0、other17/config/apps保持。每轮9000发送/正ACK/实际wire/receiverACK/SQLconfirmed完整；negative/skip/late/disconnect0，HB82612/82196/82136/81481分别精确相等。counter两快照均在60秒activewindow，完整ledger严格UID/CID/MID/seq关联，未丢弃合法wire先于senderACK负差。
+
+|窗口|ACK P99 ms|实际收取 P99 ms|send→ACK mean ms|Redis核|两GW核|19容器核|CPU PSI some %|
+|---|---:|---:|---:|---:|---:|---:|---:|
+|原版 A1|180.5|214.744504|50.730026|0.539518|1.370194|5.152189|55.254434|
+|候选 B1|104.4|123.064594|38.105161|0.371591|1.234038|4.918230|52.355852|
+|候选 B2|110.0|127.127925|36.439514|0.362574|1.231716|4.893547|51.058919|
+|原版 A2|153.7|180.573642|44.439333|0.541070|1.343698|5.088737|53.711161|
+
+候选两轮ACK P99均低于两轮原版；对应A1→B1下降42.16%、A2→B2下降28.43%，原版自身存在时段波动，不能将单次42%宣传为全负载稳定收益或对四个P99取均值当总体P99。实际收取同步改善，维护Redis/网关CPU下降重复出现；MessageCPU0.8651/0.8883/0.8803/0.8516，MySQL1.3594/1.4041/1.3953/1.3478未下降，wholecgroup含background不能归为单RPCexclusiveCPU。SQLCOMMIT均值5.4849/4.8350/4.6189/5.2173ms，不是commitP99；guestCPU busy81.53/79.23/78.99/80.58%、约290–296fork/thread每秒以及高CPU排队仍存在；memoryPSI近0，不能把本轮归为缺内存、也不删除应用/缓存。
+
+全部四轮privateexit2/FAIL，100ms两门槛未通过；scheduled P99181.7/106.0/111.6/155.9。仅固定plaintext私聊场景，不是所有功能20k50k/AI/TLS/离线/故障/长稳PASS。真实session36checks/18Pong和functional49operations35assertions保持PASS，原fixture碰撞零操作FAIL保留。已验证源38候选可据真实ABBA条件重新保留，helper要求maxcandidateP99<minbaselineP99、完整所有nonlatencygates、real功能/会话/两drain证据；本sourcecommit仍不改变运行，后续独立预审计精确a8/c289复用，仅2GWs且other17/config/env不变（仅batchflag1）。
+
+两候选GW退出drain实际accepted=terminals分别82179/82207，pending0/maxbatch16/peak23与32/Rediserror0/overload0；A completed82179，B completed82168+cancelIO24+cancelCallback15=82207。batchcalls21748/21741、batchitems82179/82183，合并164362items/43489calls≈3.78items/call，是候选存活期含真实session/functional与两容量轮的统计，不能充作某个60秒窗口的callcount。Missing1/16及Mismatch8/0包含真实过期/takeover测试，不是消息丢失。恢复原GW1d8健康，新CID b1f7b4/913a624，other17/privateconfigs精确保持；候选完整私有日志已在恢复前留存，停机stream全部验证，避免了旧日志捕获缺失。
+
+现有Gateway慢样本>=100ms/rate8与repo>=10ms/rate8是不同偏置人群。A1 chat249/repo488只共享MID23；B1 chat29/repo488交集0；B2 chat47/repo486交集2。Gateway慢样本persistRPC均值79.838/91.007/79.832ms，仅说明已抓到的慢请求中该段突出，不能减去不同仓储人群18.765/16.297/15.433ms而宣称transport占比，更不能用waitshare当CPU。新增strict sameMID/UID/seq/绝对时间配对helper，按每条send→repo start→repo end→ACK分解并检查容差；rpc-minus-repo明确包括应用、响应、传输、调度等，不是纯gRPCCPU。交集不足限制本轮因果分解，下一步针对性补证据或隔离机制，而非盲worker/callback/commitdelay矩阵。配对helper尚NOT_RUN，在新commit后执行并另保存实际结果。
+
+v34实际已导出294文件，SHA218b982f8b164f49fa95ff934c2b646462075556f22eedfb09c3e667a03a0f64，完整四轮raw和failedfixture/functional/source/phase/drain恢复在内；排除privateconfig/env/fullLogs/ELF并RAM扫描，local下载/逐SHA解包待执行，不能提前宣称本机验证。v35新增本source/配对/有效候选保留stage的显式完整或失败守卫，旧归档保持。持续迭代目标未达，不以组件PASS或helpercompleted替代业务延迟验收。
