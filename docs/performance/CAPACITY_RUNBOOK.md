@@ -477,3 +477,10 @@ ed90提交产品默认OFF候选及真实fault测试，运行仍a8Gateway/b24Mess
 503 final新fault main编译和链接成功，trace17PASS，应用unit出现InvalidStateFailsClosed/LookupFailureDoesNotMutate两失败。准确源码/test核对：ddc旧ConfirmReceiver switch没有default，enum99落到repository Confirm而confirm_calls变1；后一断言共享counter被前次非法mutation污染，lookup错误本身的earlyreturn正确。因此是一处缺失default，不是两个不同SQL/查询故障。旧guarded实验helper原有非法状态拒绝，恢复整文件时同时恢复了这个旧缺口。承认并保全真实失败日志，不删测试、不把批SQL当罪因或重启重测掩盖。
 
 新7路径审计仅App switch default返回InvalidRecord，不SQL/lease/retry/API/vtable改变，仍原read-first确认，不启用被拒绝的guardedUPDATE性能策略。只重编译App一对象，三个persistproduct对象+八testmain/所有借用SDK逐个SHA前后相等，旧四个失败阶段及每个completed产物保留，freshconfirm-fixstage重链8ELF。全部五unit后才PASS，四ownschema真实SQL之前仍未执行。v43显式保存fixsource/build/SQL和所有旧fail，原运行b24/全部19/config不变；当前不能声称极致全功能验收或COMMITresponse故障验证通过。
+
+
+### 2026-10-05：130unit实测PASS，真实SQL第一次仅旧策略断言失败
+
+b32独立重链五unit实测trace17/app53/crash28/receiverACK10/chatACK22共130PASS、failure0，全部借用对象/headers/archive不变。原source恢复错误非法状态缺口已正确修正，仍read-first确认。随后真实SQL OFFpool1执行唯一失败断言“Pending normal path avoids SELECT before update”；其余实际domain幂等/outbox原子回滚/权限/缺失/坏记录/receiver/read/竞争行为全部PASS。旧断言来自84被否定的guardedfastUPDATE，是实现开销约束，与主动保留read-first策略不匹配，不是新batch故障（flagOFF）。保留旧testGit和failedraw，不能以它要求重新部署已拒绝优化。
+
+新7路径审计仅把该策略assert改为OBSERVE真实Com_select before/after（无法测量写unavailable，绝不假0），保留所有业务断言。只编译一个outboxmain/relink，七其他ELF/四product对象和所有借用库同SHA，130unit原始结果基于同sealedcode复用无需重跑。产品common/services未改。SQLv2四新名字codex_private_batch_20261005_v2_off_p1/off_p4/on_p1/on_p4，旧实际已创建off_p1库/成功事务/坏记录和outbox保留；旧另外3仅planned未创建，不伪称四库都存在。新轮所有ownschema先查absent/DDL计划再执行，不重建/清旧库。v44保全真实failedSQL、修正前测试和v2结果，未知COMMITresponse仍NOT_RUN；无新capacity或产品部署，all19/config/原1/1/1/0/0不变，全功能50k验收仍未达成。
