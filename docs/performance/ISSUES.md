@@ -1032,3 +1032,14 @@ record输出binary pipe由guest进程直接保存fresh0700私有目录/0600文�
 新attempt2只在全新0700stage编译同源码，然后审计新ELF绝对路径、SHA、无symlink、原mode及新mode0555；仅给该刚创建自有诊断ELF只读可执行权限，没有任意chmod其他文件或新增DAC能力。旧stage/probe/ELF0700保留，不覆盖。其余UID1000/finalPERFMON五集合/defaultseccomp/no-net/readonly/nnp/128MiB/CPU1/pids64/49Hz1秒自测与独立cap零报告全部保持。新probe名明确attempt2，OCI未执行时记录实际State/Error而非空断言。新自检在本提交时NOT_RUN；先修工具再剖析，不把工具失败解释为产品瓶颈。
 
 v50本机1227文件逐SHA已通过，归档SHA `d151c75541b8a5bedb2adbd3e06540996801e32701a7ae536ce7bad7186d5d1a`。全功能10k50k极致未达，继续。
+
+
+### 2026-10-05：同 UID 采样启动器通过，准备真实业务 CPU 函数证据
+
+`08bab3c` attempt2实际PASS：新ownELF0555、采样前uid/gid1000、effective/permitted/inheritable/bounding/ambient均PERFMON `0000004000000000`、nnp1/seccomp2，1秒自身record exit0/11804bytes及独立zeroCAP报告成功。第一失败0700/OCI126完整保留。没有产品或19运行身份/配置/sysctl4/1变化。
+
+真实附加前只读检查发现容器PID1为docker-init，不能拿容器State.Pid/PID1当Message/Gateway业务进程。新增helper必须在每个目标namespace中仅匹配唯一准确业务exe，nsPID>1、UID/GID全1000、startticks/ELFSHA和maps/实际rootELF可读，再附加这个PID并保持目标CID/启动时间不变。三个新的专有诊断容器各只共享其准确目标container PID空间、无网络/hostPID/写mount，已通过启动器到sameUID/solePERFMON；49Hz userCPU平面IP45秒，无内核/栈/寄存器/内存。保留完整私有binarypipe，所有能力启动检查，PID/ELF/文件SHA边界。
+
+用原worker/SHA/ramp/HB/deadline及同10k150/s60s9000的独立cpuprofile150，batchON保持。三个recorder在allready/control start+4s之后启动，45s完成，原rawrunner始末仍恰好19业务容器；所有符号报告只在压测worker全部drain之后运行，避免破坏runner身份守卫。报告UID1000/zeroCAP，通过 `/proc/<真实servicePID>/root` symfs读取实际当前产品ELF/DSO，防止nativeperf依赖只读mount或旧基础镜像给出错误符号。128MiB/CPU1/pids64/defaultseccomp/nnp/no-net/readonly/lognone和90秒exactownCID边界保持。工具本身CPU和采样扰动可能影响延迟，因此原失败/指标仍存，这一次专用于函数CPU定位，不当无采样验收或CPU等待来源证明。
+
+本source提交时实际业务采样NOT_RUN，无产品CPP/ELF修改/部署，其他应用继续保留。全功能10k50k極致未达，取得函数证据再选择下一具体代码优化。
