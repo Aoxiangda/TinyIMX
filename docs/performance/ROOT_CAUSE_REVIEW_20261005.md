@@ -661,3 +661,12 @@ fresh attempt3先做zeroCAP/no-net/readonly独立stat容器，唯一bind公开ca
 `cd2715f` attempt3的no-net/zeroCAP/stat容器6bdffcfb在OCI阶段仍EINVAL，statecreated/PID0/exit128，未执行stat、更无SQL。已推翻“只去掉/var/run symlink即可”的假设，前一版审计原样保留。两次source均通过proc/PID/root进入MySQL的mount namespace。实际只读mountinfo确认MySQL namespace4026533105、SSH4026531841；Linux6.8 `fs/namespace.c::__do_loopback`对不属于caller namespace的来源挂载返回EINVAL，与现象吻合（机制解释，不伪称已内核trace定位）。初次readlink /proc/1/ns/mnt受不同UID限制，改为/proc/self成功；只读失败保留。
 
 来源依据：https://raw.githubusercontent.com/torvalds/linux/v6.8/fs/namespace.c 。MySQL实际根overlay挂载元数据给出upperdir `/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/458/fs`；fresh attempt4仅绑定该实际upperdir下 `/run/mysqld/mysqld.sock` 单一公开socket，不猜GraphDriver路径，不映射数据库卷或整个root/upperdir。先独立stat要求socket777/999/999/inode3932320与原MySQL完全一致，再允许只读4×3000PING+SELECT1。复用attempt2已编译ELF与object，SHA/555/源码/库不变。首次启动失败容器与所有报告保留。新socket验证和SQL对照本提交时NOT_RUN，全部正式服务/配置/宿主应用不变。
+
+
+### 2026-10-05：公开socket stat通过但native连接失败；区分传输与RPC框架
+
+`d3f229e` attempt4实际upperdir单socket stat预检通过，首TCP16条全TLS连接、3000PING/SELECT1正确/P992.932063ms。Unix容器62a34a29执行后exit4，setup连接失败，无result，stderr/stdout均空；没有Unix查询或ABBA收益。inode/type/owner stat相同不足以确认可连接，不能部署该路径。fresh nativeC仅socket/connect/SO_ERROR/close自有fd并记录OS errno与dev/ino，不读配置、不认证、不发送SQL。Linux6.8 af_unix.c查找依赖d_backing_inode对象而非仅stat数字，作为候选解释，必须等实际errno再分类，不能臆断SSL/account故障。
+
+下一诊断重心是已有61次preciseclock/echo与~0.43core300/s的RPC组件开销。fresh ownCPP沿用实际gRPC1.76/当前缓存proto与syncCQ1MIN1MAX2，native16client，0ms和20ms handler两场景，分别TCP/UnixABBA4×3000全字段synthetic结果。只在自己的ELF链接bind/connect包装器核对物理family与127loopback/固定私有socket路径，保持realcall/errno。所有新容器零CAP/UID1000/nnp/seccomp2/readonly/no-net，仅自己的caseoutput RW；Unix socket只能在fresh且预检不存在的case目录由框架创建/清理。全部正式19容器/配置/SQL durability/宿主应用保持，不把synthetic组件结果当作全功能/10k50k验收。
+
+另一个源代码审查发现是LOG宏先构造ostringstream再进入Logger过滤，禁用日志也计算message表达式；潜在浪费尚未量化，未以此替代真实CPU证据，也未修改产品。应用器白名单第一次克隆漏了underscore helper名，在任何源文件或审计目录写入前被严格白名单拒绝；原applier/包保留，fresh v2由manifest精确白名单通过，已保存local审计。
