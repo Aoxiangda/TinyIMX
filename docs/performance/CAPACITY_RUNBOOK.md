@@ -549,3 +549,12 @@ SQL digest COMMIT平均wall6.25–6.92ms，接收确认UPDATE7.76–8.39ms，包
 真实CPU函数剖析尚缺失。只读系统核对实际kernel6.8.0-138、匹配perf6.8.12、Docker29.8.1，perf_event_paranoid4/kptr1保持。官方 https://docs.kernel.org/admin-guide/perf-security.html 推荐CAP_PERFMON；Docker官方default https://raw.githubusercontent.com/moby/profiles/main/seccomp/default.json 有CAP_PERFMON条件perf_event_open许可。不要从仅CPU高推测全部开销属于gRPC/MySQL/VM主机安全设置。当前新工具只做隔离自检：三个新自有容器UID0无CAP、UID0仅PERFMON、UID1000仅PERFMON，同nativeperf+逐个依赖ELF只读mount，自有futex1线程1秒、cpu-clock:u49Hz平面IP采样；不读取产品PID、宿主PID空间或用户应用。默认seccomp/dropALL/只读/no-net/nnp/128MiB/CPU1/pids64，无SYS_ADMIN/SYS_PTRACE/privileged/unconfined/setcap/sysctl/全盘mount。
 
 record输出binary pipe由guest进程直接保存fresh0700私有目录/0600文件，Dockerlogdrivernone，不采集堆栈、寄存器、内存或内核；报告从stdin只读取自有raw，零CAP/平面符号聚合。既有系统perf/libSHA保留且不下载或安装，所有probe停止后保留。20秒上限只按exact自有CID/name/image/argv停止。真实UID能力以实测为准，若失败保留错误先分析，不擅自扩大权限。自检在本source提交时NOT_RUN；成功仍需后续单独审计实际服务附加与诊断扰动，不能据此宣称生产瓶颈或性能达标。继续优化目标仍未达成。
+
+
+### 2026-10-05：最小采样能力实测通过，补证同 UID 启动
+
+`b6f3cea` 工具自检实际PASS：UID0无权限对照exit255/0raw，UID0只PERFMON exit0/11948bytes、报告成功；UID1000普通OCI方式只PERFMON exit255/0raw。该方式没有得到可用采样能力，不能假设nonroot cap自动继承。全部三个实际结果及错误摘要哈希保留、19运行身份/配置/sysctl4/1保持。v49本机1207文件逐SHA通过，v50实际导出1227文件SHA `d151c75541b8a5bedb2adbd3e06540996801e32701a7ae536ce7bad7186d5d1a`，本机v50核验尚待执行。
+
+后续专用自有launcher在隔离容器启动瞬间只给PERFMON/SETUID/SETGID/SETPCAP；先清ambient、将所有bounding cap除PERFMON外全部删除，再empty supplementarygroups、切固定UID/GID1000，effective/permitted/inheritable仅PERFMON，ambient仅PERFMON，清keepcaps。严格核验五个cap集合均 `0000004000000000`、resuid/resgid全1000、supplementary0、nnp1/seccomp2，再exec固定nativeperf record。所有启动能力从最终五个集合消失且不可恢复，失败任何一步均在采样前abort。没有SYS_PTRACE/SYS_ADMIN/globalsetcap/sysctl/unconfined或hostPID共享，容器readonly/no-net/defaultseccomp/128MiB/CPU1/pids64保留。这个自检仍仅一线程一秒工具自身，未附加产品服务。
+
+启动器用单独ownstage ELF编译，180s自有compiler PID/start/argv/PGID界限，旧cache/products均不覆盖。采样49Hzuser-onlyflatIP不采栈/regs/memory/kernel，binarypipe私有保存，报告zeroCAP/stdin。所有stoppedprobe和失败raw保留，额外caps只在launcher初始化、没有产品权限变化。新bootstrap本source提交时NOT_RUN；通过后实际targetmaps/符号/采样窗口仍需单独准确审计。全功能极致仍未实现，持续推进真实瓶颈剖析。
