@@ -9,3 +9,10 @@ strict defaultOFF TINYIMX_GROUP_DELIVERY_MESSAGE_RUNTIME_ENABLE=1，只把Handle
 原生计划：strict OFF/ON/非法01/0；固定两个现有1worker执行器，阻塞群peer后原ACK同identity FIFO，ON下profile控制功能独立前进；private与group在同message域的竞争明确验证。原boundedhotkey拒绝/BeginDrain/stopped拒绝无fallback/生命周期计数和原27 tracker全套保持。原14executor/recipientFIFO回归与封闭镜像检查后实际相同image仅runtime旗标ABBA；route/completion/claim/partial/recipient/defer/commitwake固定。需要每轮真实所有收件/SQL3及完整公开功能交叉、再万人混合私聊/列表/群确认共同验证，不把隔离原生检查等同容量。
 
 全部结果/问题/代码Git/预映像保存；当前全功能目标仍OPEN，2万混合FAIL和5万/文件容量/离线故障/AI原配置和CPU推理待完成。
+
+
+## 原生与封闭镜像已通过，真实ABBA待运行
+
+源码04a95c6、助手41ad443。124新隔离/原27tracker四模式（strict OFF/1/01/0）+原executor14+recipient排序6共144PASS；阻塞群peer时ACK不越过同identity，ON控制profile独立前进，private与群共享message域的竞争保留；boundedhotkey、BeginDrain、已装停止执行器不回退、全部计数drain零pending均通过。GatewayServer重编译一次、其余archive成员逐字节一致；class layout/原Main、所有封闭输入保持，无运行ELF测试wrapper。当前tag codex-group-message-runtime-gateway-v1-20261006，image818bea357d99761903ff9902729474884d4ad6677a838e284b33267ad3099f72，ELF066acab345ec029e5876bd21a89fd8a9b9a1fa4324da59123eaf6a13ccace156；Message f9094e0f/baa2ec54不变。继承164协调器/128Resolver/720Redis/62MessageRPC与旧协议/应用的相同对象及输入已核验，未宣称本次重复运行这些组。Docker UID1000/network none/read-only ldd-r和缺配置退出检查PASS，19服务/配置/借用库不变。
+
+只读定位链接process凭据又曾误假设在runtime-private；find后找到stage根目录，未修改任何数据。真实同image仅message-runtime0/1/1/0，partial/route/completion/claim/recipient/defer/commitwake固定1；528消息/23628真实收件确认及四完整公开链216操作148断言，原3秒截止/SQL观察上界保持，失败和精确restore完整保存。此控制是100连接规模微对照，不代表私聊混合容量或全部10k–50k功能验收，结果pending。
