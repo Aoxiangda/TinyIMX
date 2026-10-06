@@ -71,7 +71,7 @@ OFF A1列表发送迟到P99仅1.902ms，响应P99 246.504ms，差异不能仅归
 | cumixfeatB2 | 49 | 36 | 38.596 | login 38.596ms; login 33.617ms |
 | cumixfeatA2 | 49 | 36 | 60.411 | private-idempotent-repeat 60.411ms; conversations-before-read 54.593ms |
 
-file-begin150.503ms、group-create134.176ms、混合OFF A1 file-begin112.107ms都保留。这些是低样本单次，不是P99，也不足以直接归因数据库。好友列表已有单JOIN，群列表/成员已有有界游标单查询，不把全部功能套用逐项Redis根因。慢写操作需关联阶段后再改。
+file-begin150.503ms、group-create134.176ms、混合OFF A1 file-begin112.107ms都保留。这些是低样本单次，不是P99，也不足以直接归因数据库。好友列表已有单JOIN，群列表已有有界游标查询，群成员列表还包含群/成员授权读取与一致性事务，不把全部功能套用逐项Redis根因。慢写操作需关联阶段后再改。
 
 ## AI/MCP独立问题
 
@@ -119,3 +119,7 @@ Ubuntu已有Ollama0.18.3监听127.0.0.1:11434，qwen2.5:7b已安装；原profile
 公开原日志/逐请求/对账导出带SHA manifest；私有配置/token/inspect/binary/payload留guest，导出副本按敏感字段脱敏，原证据不删除。
 
 下一点20k长连接+135/s私聊+20/s固定50项列表+4人49链，原工具不改，仅新增独立20k调度。单ON点不做ABBA归因。保留全部计划请求/失败/原100/s登录爬坡。20k/30k/50k每类功能及TLS/离线/热点/过载/soak仍NOT_RUN，失败按首窗口关联证据后改。
+
+## 后续20k实测已保存
+
+20k长连接+135私聊/s+20会话页/s+公开交互链已完成。8100私聊/1200完整页/49操作36断言正确，231524发出心跳全部响应；延迟FAIL，原ACK P99上界201.0ms，会话页P99 155.029ms。未放宽期限/漏掉失败。相同MID阶段分析及准确的下一步见 [20k失败复盘](MIXED20K_BOTTLENECK_AND_NEXT_20261006.md)。以上“下一点20k”是先前准备时记录，当前状态以本段和新复盘为准。
