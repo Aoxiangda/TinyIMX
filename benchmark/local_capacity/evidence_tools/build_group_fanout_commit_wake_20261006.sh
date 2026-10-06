@@ -7,7 +7,7 @@ import pathlib,json,hashlib,subprocess,shlex,shutil,os,signal,datetime,re,sys
 r=pathlib.Path.cwd();b=r/'.local/codex';d=b/'group-fanout-wake-build-20261006';assert not d.exists()
 def run(a,t=30):return subprocess.check_output(a,text=True,timeout=t)
 def sha(p):return hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
-source=json.loads((b/'group-fanout-wake-source-20261006/summary.json').read_text());helper=json.loads((b/'group-fanout-wake-build-source-20261006/summary.json').read_text())
+source=json.loads((b/'group-fanout-wake-source-20261006/summary.json').read_text());helper=json.loads((b/'group-fanout-wake-build-repair-source-20261006/summary.json').read_text())
 assert run(['git','rev-parse','HEAD']).strip()==helper['head'] and all(sha(r/n)==h for n,h in source['files'].items()) and all(sha(r/n)==h for n,h in helper['files'].items())
 def runtime():
  names=run(['docker','ps','--format','{{.Names}}']).splitlines();assert len(names)==19
@@ -18,9 +18,11 @@ before=runtime();assert before['identities']==json.loads((b/'group-fanout-delay-
 assert subprocess.run(['pgrep','-f','^/home/jackson7/projects/TinyIMX_publish/.*tinyimx_capacity_worker'],capture_output=True).returncode==1
 cache=r/'build/linux-release';accepted=b/'conversation-unread-batch-build-20261006-attempt2'
 summary=json.loads((accepted/'summary.json').read_text());assert summary['gateway_image_id']=='sha256:a2bb65215bfc85246b946a8c0850e134cd3144d078e5b56c376676c2cd8d1cfa' and sha(accepted/'runtime-private/gateway_demo')==summary['gateway_elf_sha256']
+# First preflight rejected duplicated static archive tokens before any build writes.
+# Preserve both verified references in link order; require one unique accepted archive.
 link= json.loads((accepted/'gateway-link-process.json').read_text())['argv'];assert not any('--wrap' in x for x in link)
-main=[v for v in link if v.endswith('gateway_demo.cpp.o')];archives=[v for v in link if v.endswith('libtinyimx_gateway.a')];cachelibs=[v for v in link if v.endswith('libtinyimx_cache_service.a')]
-assert len(main)==len(archives)==len(cachelibs)==1 and pathlib.Path(archives[0])==accepted/'runtime-private/libtinyimx_gateway.a' and pathlib.Path(cachelibs[0])==accepted/'runtime-private/libtinyimx_cache_service.a'
+main=[v for v in link if v.endswith('gateway_demo.cpp.o')];archive_refs=[v for v in link if v.endswith('libtinyimx_gateway.a')];archives=list(dict.fromkeys(archive_refs));cachelibs=[v for v in link if v.endswith('libtinyimx_cache_service.a')]
+assert len(archive_refs)==2 and len(main)==len(archives)==len(cachelibs)==1 and pathlib.Path(archives[0])==accepted/'runtime-private/libtinyimx_gateway.a' and pathlib.Path(cachelibs[0])==accepted/'runtime-private/libtinyimx_cache_service.a'
 borrowed={str(accepted/'gateway-link-process.json'):sha(accepted/'gateway-link-process.json')}
 for token in link:
  p=pathlib.Path(token) if pathlib.Path(token).is_absolute() else cache/token
