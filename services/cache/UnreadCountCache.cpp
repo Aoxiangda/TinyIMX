@@ -335,6 +335,84 @@ end
 return 1
 )lua";
 
+// Values remain bulk strings: Lua double precision must not round int64.
+constexpr const char* kReadPrivateUnreadBatchScript = R"lua(
+local out = {}
+for _, key in ipairs(KEYS) do
+    local value = redis.pcall('GET', key)
+    if type(value) == 'table' and value.err then
+        out[#out + 1] = 'error'
+        out[#out + 1] = ''
+    elseif value == false then
+        out[#out + 1] = 'missing'
+        out[#out + 1] = ''
+    else
+        out[#out + 1] = 'value'
+        out[#out + 1] = value
+    end
+end
+return out
+)lua";
+
+tinyimx::GetUnreadCountResult ParseStoredUnreadCount(const std::string& text,
+                                            const std::string& action) {
+    tinyimx::GetUnreadCountResult result;
+
+
+    std::int64_t parsed_count = 0;
+
+    const char* begin =
+        text.data();
+
+    const char* end =
+        text.data() + text.size();
+
+    const auto parse_result =
+        std::from_chars(
+            begin,
+            end,
+            parsed_count
+        );
+
+    if (parse_result.ec !=
+            std::errc{} ||
+        parse_result.ptr != end) {
+        result.status =
+            tinyimx::GetUnreadCountStatus::
+                kInvalidValue;
+
+        result.error_message =
+            "unread count " +
+            action +
+            " failed: stored value "
+            "is not a valid integer";
+
+        return result;
+    }
+
+    if (parsed_count < 0) {
+        result.status =
+            tinyimx::GetUnreadCountStatus::
+                kInvalidValue;
+
+        result.error_message =
+            "unread count " +
+            action +
+            " failed: stored count "
+            "is negative";
+
+        return result;
+    }
+
+    result.status =
+        tinyimx::GetUnreadCountStatus::kFound;
+
+    result.count =
+        parsed_count;
+
+    return result;
+}
+
 }  // namespace
 
 namespace tinyimx {
@@ -679,6 +757,84 @@ UnreadCountCache::GetPrivateUnread(
 }
 
 
+std::vector<GetUnreadCountResult> UnreadCountCache::GetPrivateUnreadBatch(
+    std::uint64_t receiver_user_id,
+    const std::vector<std::uint64_t>& sender_user_ids
+) {
+    std::vector<GetUnreadCountResult> results(sender_user_ids.size());
+    if (sender_user_ids.size() > 50) {
+        for (auto& result : results) {
+            result.status = GetUnreadCountStatus::kInvalidArgument;
+            result.error_message = "unread count batch failed: page exceeds 50 peers";
+        }
+        return results;
+    }
+    std::vector<std::string> keys;
+    std::vector<std::size_t> positions;
+    keys.reserve(sender_user_ids.size());
+    positions.reserve(sender_user_ids.size());
+    for (std::size_t i = 0; i < sender_user_ids.size(); ++i) {
+        const auto sender = sender_user_ids[i];
+        if (receiver_user_id == 0 || sender == 0) {
+            results[i].status = GetUnreadCountStatus::kInvalidArgument;
+            results[i].error_message = "unread count get private failed: invalid user id";
+        } else if (receiver_user_id == sender) {
+            results[i].status = GetUnreadCountStatus::kInvalidArgument;
+            results[i].error_message = "unread count get private failed: receiver equals sender";
+        } else {
+            keys.push_back(BuildPrivateKey(receiver_user_id, sender));
+            positions.push_back(i);
+        }
+    }
+    if (keys.empty()) return results;
+    const auto fail_valid = [&](const std::string& message) {
+        for (const auto i : positions) {
+            results[i].status = GetUnreadCountStatus::kRedisError;
+            results[i].error_message = message;
+        }
+    };
+    if (pool_ == nullptr) {
+        fail_valid("unread count get private unread failed: redis pool is null");
+        return results;
+    }
+    auto connection = pool_->Acquire(); // Original healthy PING remains.
+    if (!connection) {
+        fail_valid("unread count get private unread failed: acquire redis connection failed");
+        return results;
+    }
+    const auto values = connection->EvalStringArray(kReadPrivateUnreadBatchScript, keys, {});
+    if (!values) {
+        fail_valid(connection->LastError());
+        return results;
+    }
+    if (values->size() != positions.size() * 2) {
+        fail_valid("unread count batch failed: unexpected result cardinality");
+        return results;
+    }
+    // Validate all tags before interpreting any row: never accept a partial
+    // malformed reply as successful data for another peer.
+    for (std::size_t j = 0; j < positions.size(); ++j) {
+        const auto& tag = (*values)[j * 2];
+        if (tag != "value" && tag != "missing" && tag != "error") {
+            fail_valid("unread count batch failed: invalid result tag");
+            return results;
+        }
+    }
+    for (std::size_t j = 0; j < positions.size(); ++j) {
+        auto& result = results[positions[j]];
+        const auto& tag = (*values)[j * 2];
+        if (tag == "missing") {
+            result.status = GetUnreadCountStatus::kNotFound;
+        } else if (tag == "error") {
+            result.status = GetUnreadCountStatus::kRedisError;
+            result.error_message = "redis get failed: invalid reply type";
+        } else {
+            result = ParseStoredUnreadCount((*values)[j * 2 + 1], "get private unread");
+        }
+    }
+    return results;
+}
+
 GetUnreadCountResult UnreadCountCache::GetTotalUnread(
     std::uint64_t receiver_user_id
 ) {
@@ -773,61 +929,7 @@ UnreadCountCache::ReadCount(
         return result;
     }
 
-    const std::string& text =
-        value.value();
-
-    std::int64_t parsed_count = 0;
-
-    const char* begin =
-        text.data();
-
-    const char* end =
-        text.data() + text.size();
-
-    const auto parse_result =
-        std::from_chars(
-            begin,
-            end,
-            parsed_count
-        );
-
-    if (parse_result.ec !=
-            std::errc{} ||
-        parse_result.ptr != end) {
-        result.status =
-            GetUnreadCountStatus::
-                kInvalidValue;
-
-        result.error_message =
-            "unread count " +
-            action +
-            " failed: stored value "
-            "is not a valid integer";
-
-        return result;
-    }
-
-    if (parsed_count < 0) {
-        result.status =
-            GetUnreadCountStatus::
-                kInvalidValue;
-
-        result.error_message =
-            "unread count " +
-            action +
-            " failed: stored count "
-            "is negative";
-
-        return result;
-    }
-
-    result.status =
-        GetUnreadCountStatus::kFound;
-
-    result.count =
-        parsed_count;
-
-    return result;
+    return ParseStoredUnreadCount(value.value(), action);
 }
 
 ClearUnreadResult

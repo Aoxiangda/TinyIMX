@@ -210,6 +210,14 @@ public:
         std::uint64_t sender_user_id
     );
 
+    // Bounded readonly snapshot for an authorized conversation page.
+    // Result order/cardinality matches input, including invalid IDs. At most
+    // 50 entries; oversize/empty/all-invalid requests issue no Redis command.
+    std::vector<GetUnreadCountResult> GetPrivateUnreadBatch(
+        std::uint64_t receiver_user_id,
+        const std::vector<std::uint64_t>& sender_user_ids
+    );
+
     GetUnreadCountResult
     GetTotalUnread(
         std::uint64_t receiver_user_id
