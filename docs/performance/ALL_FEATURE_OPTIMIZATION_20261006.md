@@ -122,3 +122,8 @@ accepted-group-fanout-wake-20261006实际receipt已PASS：当前两个Gateway im
 207项真实隔离SQL验证PASS；同MessageELF领取batch OFF/ON/ON/OFF、recipient/defer1固定，208群消息/9308实际收件及SQL确认、216操作148断言正确。64条领取阶段约93–94ms→33–36ms，但两ON65人全收件mean237.915/215.675ms，100人453.840/484.238ms仍FAIL；16人B1max113.177ms也FAIL。原网关5c2645+Messagebe8及完整Env恢复，其他16/配置/持久化/主机应用保持，下一万人混合尚未进行。完整表、native、precise恢复及Git见GROUP_DELIVERY_CLAIM_BATCH_20261006.md。
 
 保留A2 MID1304全部慢请求：49人约202ms到达，余15人约一秒后才开始，ALL1117.585ms，attempts均1。源码将不足64条领取当作可等待1000ms，SKIP LOCKED并发下这不成立；下一defaultOFF有界部分批drain先原生重现验证，再对照，不能把该修正当作完成RPC的全面解法。全功能20k–50k高频/文件传输并发/离线故障/AI原profile及推理仍OPEN；100ms只是门槛，所有FAIL及原日志保留。
+
+
+## 部分批drain真实对照与下一主瓶颈
+
+92原生检查PASS；真实OFF/ON/ON/OFF共528群消息、23628实际收件SQL确认、216全链操作148断言正确。100人全收件mean530.578/497.820/486.567/489.157ms，65人221.350/208.863/212.008/216.701ms，均FAIL。16人B1max115.674msFAIL也保留。30消息不估P99；本轮两模式没有复现此前877ms部分批空档，机制修正不能宣称实际因果增益。64批完成RPC均值308–319ms约占整批75%，继续优先减少该明确串行阶段；领取30–33/派发63–71ms不能误归因一个原因。原5c2645+be8全Env恢复、其他16和配置持久化/宿主应用保持，新候选尚未选入万人混合。全部功能验收仍OPEN，文件幂等begin重复完整SQL读取也进入下一独立候选。见GROUP_FANOUT_PARTIAL_DRAIN_20261006.md。
