@@ -155,3 +155,10 @@ accepted-group-fanout-wake-20261006实际receipt已PASS：当前两个Gateway im
 MID2895前48人189.004ms收到，网关B partial48批后，网关A直到1060.946ms才开始剩51条领取，ALL1203.057ms；902.123ms空档与不足64条进入1000ms恢复等待相符。低频未测完整锁时间线，下一同候选保持route1/completion1/claim1，只切有界partial drain验证；其原生调度回归已在当前镜像重新通过。另一瓶颈原4工作线程内ACK排队抽样约99–103ms，每人durable Get+Confirm执行约19–20ms；不删授权/序号证据，不盲扩池或线程，不降持久化。既有InsertGroupMessageDeliveries早已TX内bulk256，避免错误方向。两问题分别分析、单变量验因。
 
 当前已完整恢复原Gateway5c2645+Messagebe8/fullEnv及其他16/配置/持久化/宿主应用；最近实例以group-route-batch-control-20261006/restore-summary.json为准。2万混合FAIL、5万全部功能/热点大群、各功能高频交叉、文件并发真实传输、离线/故障/长稳态、AI原生产配置和CPU推理仍未验收，不能把低样本完整功能链或一项成功泛化为全功能极致。
+
+
+## 第二次部分批对照未显示性能收益，保留负面结果
+
+route/completion/claim固定1，仅partial0/1/1/0，528消息/23628真实收件及SQL状态3、216全链操作/148断言、0观察重复正确。100人ON334.490/321.398ms，OFF327.232/315.551；65人ON139.113/136.124ms，OFF130.720/131.576，均FAIL，未显示稳定平均收益。两模式均未重现902ms空档，不以长尾缺失宣称修复实测因果。已恢复原运行，最新restore为group-route-partial-drain-control-20261006/restore-summary.json。见GROUP_FANOUT_PARTIAL_DRAIN_20261006.md。
+
+新源码审查确认群peer和ACK都仍提交business_executor_4worker；现有私聊使用message_executor_原默认8worker，并且已有优雅drain。原控制功能与群慢RPC因此竞争；下一只移动两入口至现有消息执行器并同identity排序，保持无新增线程、鉴权/SQL/持久化/重试/全功能交互及私聊共用压力验证。该方向尚未实现/测量，不宣称达到全部功能目标。20k混合FAIL、50k全功能、文件容量/故障/AI仍OPEN。

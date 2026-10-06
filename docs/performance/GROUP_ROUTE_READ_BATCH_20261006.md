@@ -79,3 +79,8 @@ A2最慢MID2895：sender ACK53.232604ms；网关B在发送后25.194ms开始领�
 真实原始结果stage group-route-batch-control-20261006和cross-feature-groute1featA1/B1/B2/A2完整保留。最终restore-summary状态ACCEPTED_GATEWAY_AND_MESSAGE_FULL_ENV_RESTORED：原5c2645 Gateway/e687 ELF、be8 Message/2548 ELF、全部Env/HostConfig/Health/Mounts恢复，其他16实例/配置/持久化1/1/1/0/0保持，自己的actors关闭，宿主其他应用保持。以该新receipt实例身份为准，旧CID是历史。候选尚未选入长期运行/万人混合，全功能目标OPEN。
 
 本轮只读分析又有一次把报告错假设在benchmark/local_capacity的路径错误；随后rg定位docs/performance并读取。此前StorageWaitTiming路径假设错误亦由rg定位common/db。只读无运行/代码影响，保留工具输出及记录，后续先查路径。
+
+
+后续3ba6007同路由开启镜像的partial独立ABBA也完成：528消息/23628确认/216全功能操作148断言正确，65/100仍FAIL，没有稳定平均收益且两模式均未重现902ms长尾。原运行已恢复；完整数据见GROUP_FANOUT_PARTIAL_DRAIN_20261006.md。后续方向为群peer/ACK遗漏既有message_executor隔离，而非反复归因Redis或盲扩线程。
+
+本轮控制准备预执行发现新助手源receipt误写成独立partial-source，但源码包实际统一outcome-source；在运行前保存新助手预映像及旧tar包，创建v2包，仅修正receipt绑定，3ba6007提交后真实控制一次完整通过。刚才只读审查另有common/rpc及message application旧路径假设、PowerShell通配Literal rg路径错误、不存在tests/CMakeLists路径，均由rg --files/实际CMake定位，未改变源码/运行，记录便于复盘。

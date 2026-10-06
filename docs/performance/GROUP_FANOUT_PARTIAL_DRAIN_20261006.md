@@ -52,3 +52,31 @@ strict defaultOFF开关TINYIMX_GROUP_FANOUT_PARTIAL_DRAIN_ENABLE=1，只影响�
 ## 路由与批完成之后重新观察到部分批长尾
 
 新route候选partial0对照A2 MID2895：48+51两partial claim合计99个收件。B早批48，A迟批51在发送1060.946ms才开始，前48全到189.004ms，后51起1091.127ms，ALL1203.057ms，空档902.123217ms；最终状态3和attempt1，无重复。旧partial对照未重现因果增益的结论仍保留。现在在route/completion/claim固定1的同sealed image中，仅partial0/1/1/0，原4批+25msyield/空及失败1000ms/lease/ACK身份/序号/3秒deadline不变；不重新构建或合入尚未验收容量。结果pending，以新group-route-partial-drain-control-20261006全部原始请求和精确restore为准。
+
+
+## route/completion固定开启后的第二次部分批真实对照（已完成）
+
+控制3ba6007、Gateway同99ee1b4c/a50e500d、Message同f9094e0f/baa2ec54；仅partial OFF/ON/ON/OFF，route/completion/claim/recipient/defer/commitwake固定1。当前image重新通过的164协调器回归含原partial调度四模式测试。528消息/23628真实wire及SQL状态3、216完整功能操作/148断言、0观察重复；原3秒ACK/ALL/SQL确认观察界限保持。全部结果和失败在group-route-partial-drain-control-20261006及cross-feature-groutep1featA1/B1/B2/A2，30测量每单元不估P99或容量。
+
+| case | size | ACK mean ms | ALL mean ms | ALL max ms | 100ms样本门槛 |
+|---|---:|---:|---:|---:|---|
+| A1 off | 2 | 26.069 | 42.881 | 64.226 | PASS |
+| A1 off | 16 | 28.826 | 65.519 | 78.274 | PASS |
+| A1 off | 65 | 39.119 | 130.720 | 178.246 | FAIL |
+| A1 off | 100 | 68.284 | 327.232 | 415.588 | FAIL |
+| B1 on | 2 | 24.840 | 40.375 | 73.545 | PASS |
+| B1 on | 16 | 26.967 | 61.418 | 71.989 | PASS |
+| B1 on | 65 | 41.426 | 139.113 | 199.507 | FAIL |
+| B1 on | 100 | 56.034 | 334.490 | 441.529 | FAIL |
+| B2 on | 2 | 24.741 | 41.042 | 46.862 | PASS |
+| B2 on | 16 | 29.400 | 66.080 | 91.328 | PASS |
+| B2 on | 65 | 38.437 | 136.124 | 163.375 | FAIL |
+| B2 on | 100 | 52.616 | 321.398 | 385.705 | FAIL |
+| A2 off | 2 | 23.735 | 39.546 | 48.614 | PASS |
+| A2 off | 16 | 27.066 | 61.044 | 73.994 | PASS |
+| A2 off | 65 | 39.112 | 131.576 | 165.541 | FAIL |
+| A2 off | 100 | 56.612 | 315.551 | 374.963 | FAIL |
+
+100人ON334.490/321.398ms，OFF327.232/315.551ms；65人ON139.113/136.124ms，OFF130.720/131.576ms。没有稳定平均收益，不能包装为突破，65/100全部FAIL。两模式都未重新出现MID2895约902ms空档，最大相邻收件间隔（含warm）A1/B1/B2/A2为161.635/207.306/155.484/156.905ms；缺失长尾不证明开关实际因果消除。机制原生正确，但实际全收件仍主要受ACK/peer同步任务排队约束。后续保留boundedpartial机制独立说明，不据此接受万人容量。
+
+原Gateway5c2645、Messagebe8/全部Env/HostConfig/Health/Mounts恢复，其他16实例/配置/持久化1/1/1/0/0/主机应用保持，自有actors关闭，三个候选Message优雅退出0。最新CID以该控制restore-summary为准。下一strictOFF候选核验现有群ACK/peer错误进入4worker控制执行器，而私聊早已使用已有message_executor（原默认8worker）。只移动两处接线到同消息执行器，保持GroupDeliveryOrderingKey、会话epoch/鉴权/durable Get+Confirm/ACK序号/原deadline/有界队列/重试和线程总数；要测私聊、控制功能隔离与同身份FIFO，不能把8worker当作无证据扩线程。
