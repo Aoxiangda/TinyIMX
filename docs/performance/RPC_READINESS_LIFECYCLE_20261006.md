@@ -27,3 +27,7 @@ https://github.com/grpc/grpc-proto/blob/master/grpc/health/v1/health.proto
 ## 五服务原生及候选构建结果
 第二次真实生成接口测试97个检查PASS；五入口及五server已编译，候选Group+探针镜像加载及不可达/缺配置负例PASS。镜像2ba38e...，Group ELF1373de...，探针ee0665...。全部19运行实例、原库/复用对象/配置未变，其他四服务仍未部署。
 准备attempt3实际控制：同Group ELF OFF/ON/ON/OFF，仅更换Group镜像/快照开关/健康探针，四次均单独验证全部线程信号屏蔽和两个Gateway注册快照。每次先停止精确无外部会话的Group，保留停止后退出码/日志；候选须退出0。所有startup探测失败单独留存且排除测量；既有测量失败不重试。成功后800测量+四个54操作37断言完整链，最终恢复原Group及原nc健康检查，其他18实例不变。状态待执行，非性能达标。
+
+## 实际切换 attempt3：审计误判中止，生命周期证据有效
+候选真实Group健康探针SERVING、27线程中26个普通线程屏蔽SIGINT/SIGTERM；末个专用sigwait线程在等待时内核SigBlk显示未屏蔽。控制器把全部线程都要求屏蔽，故正式端点/功能链前中止，保持整轮FAIL。候选随后正常Stop、退出码0，原38dca/全部Env/原nc健康检查恢复，其他18原样。没有800测量或交互链结果。
+只读原Group线程wchan验证：20个遥测/gRPC早建线程未屏蔽且futex/ep_poll等等待，1个专用线程处于do_sigtimedwait。原先“21个异常线程”更正为20个普通后台线程+1个合法sigwait。候选26普通已修正，合法waiter不应禁止。attempt4只修审计：必须恰好一个实际do_sigtimedwait，其余全部屏蔽，两种退出码及日志保留；业务候选ELF不变。尚未执行attempt4，不接受性能。
