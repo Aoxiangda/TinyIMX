@@ -1,5 +1,7 @@
 #include "services/file/server/FileServiceServer.h"
 
+#include "common/runtime/RpcReadiness.h"
+
 #include <grpcpp/grpcpp.h>
 
 #include <string>
@@ -28,6 +30,7 @@ bool FileServiceServer::Start(const std::string& listen_target) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (service_ == nullptr || listen_target.empty() || server_ != nullptr) return false;
 
+    tinyimx::runtime::EnableRpcReadiness();
     grpc::ServerBuilder builder;
     // M18-B chunks can be up to 8MiB; keep bounded headroom for protobuf/RPC
     // framing while avoiding an unbounded large-message configuration.
@@ -39,6 +42,10 @@ bool FileServiceServer::Start(const std::string& listen_target) {
     auto server = builder.BuildAndStart();
     if (!server || selected_port <= 0) return false;
 
+    if (!tinyimx::runtime::SetRpcReadiness(server.get(), false)) {
+        server->Shutdown();
+        return false;
+    }
     server_ = std::move(server);
     selected_port_ = selected_port;
     bound_target_ = BuildBoundTarget(listen_target, selected_port);
@@ -46,11 +53,18 @@ bool FileServiceServer::Start(const std::string& listen_target) {
     return true;
 }
 
+bool FileServiceServer::SetReady(bool ready) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (server_ == nullptr || shutdown_requested_) return false;
+    return tinyimx::runtime::SetRpcReadiness(server_.get(), ready);
+}
+
 void FileServiceServer::Shutdown() {
     grpc::Server* server = nullptr;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (server_ == nullptr || shutdown_requested_) return;
+        tinyimx::runtime::SetRpcReadiness(server_.get(), false);
         shutdown_requested_ = true;
         server = server_.get();
     }

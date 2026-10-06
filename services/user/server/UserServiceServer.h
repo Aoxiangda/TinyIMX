@@ -34,6 +34,8 @@ public:
         const std::string& listen_target,
         UserServiceServerOptions options = {}
     );
+    // Socket listening precedes dependency and registry readiness.
+    [[nodiscard]] bool SetReady(bool ready);
     void Shutdown();
     void Wait();
 

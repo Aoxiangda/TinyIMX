@@ -86,6 +86,16 @@ BuildServiceInstance(
 }  // namespace
 
 int main(int argc, char* argv[]) {
+    // Block before telemetry/gRPC creates threads; children inherit the mask.
+    sigset_t signal_set;
+    sigemptyset(&signal_set);
+    sigaddset(&signal_set, SIGINT);
+    sigaddset(&signal_set, SIGTERM);
+    if (pthread_sigmask(SIG_BLOCK, &signal_set, nullptr) != 0) {
+        std::cerr << "failed to block shutdown signals\n";
+        return 1;
+    }
+
     std::string config_path = "config/gateway.json";
 
     if (argc >= 2) {
@@ -118,21 +128,6 @@ int main(int argc, char* argv[]) {
 
     if (!config.MySql().enable) {
         LOG_ERROR("UserService requires mysql.enable=true");
-        tinyimx::Logger::Instance().Shutdown();
-        return 1;
-    }
-
-    sigset_t signal_set;
-    sigemptyset(&signal_set);
-    sigaddset(&signal_set, SIGINT);
-    sigaddset(&signal_set, SIGTERM);
-
-    if (pthread_sigmask(
-            SIG_BLOCK,
-            &signal_set,
-            nullptr
-        ) != 0) {
-        LOG_ERROR("UserService failed to block shutdown signals");
         tinyimx::Logger::Instance().Shutdown();
         return 1;
     }
@@ -314,6 +309,13 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    if (!server.SetReady(true)) {
+        std::cerr << "RPC readiness initialization failed\n";
+        server.Shutdown();
+        server.Wait();
+        return 1;
+    }
+
     LOG_INFO(
         "UserService ready"
         << ", target=" << server.BoundTarget()
@@ -338,6 +340,7 @@ int main(int argc, char* argv[]) {
                     &signal_set,
                     &signal_number
                 ) == 0) {
+            (void)server.SetReady(false);
                 LOG_INFO(
                     "UserService shutdown signal received"
                     << ", signal=" << signal_number

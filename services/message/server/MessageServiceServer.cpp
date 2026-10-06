@@ -1,5 +1,7 @@
 #include "services/message/server/MessageServiceServer.h"
 
+#include "common/runtime/RpcReadiness.h"
+
 #include <grpcpp/grpcpp.h>
 
 #include <string>
@@ -47,6 +49,7 @@ bool MessageServiceServer::Start(
         return false;
     }
 
+    tinyimx::runtime::EnableRpcReadiness();
     grpc::ServerBuilder builder;
     int selected_port = 0;
 
@@ -63,12 +66,22 @@ bool MessageServiceServer::Start(
         return false;
     }
 
+    if (!tinyimx::runtime::SetRpcReadiness(server.get(), false)) {
+        server->Shutdown();
+        return false;
+    }
     server_ = std::move(server);
     selected_port_ = selected_port;
     bound_target_ =
         BuildBoundTarget(listen_target, selected_port);
     shutdown_requested_ = false;
     return true;
+}
+
+bool MessageServiceServer::SetReady(bool ready) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (server_ == nullptr || shutdown_requested_) return false;
+    return tinyimx::runtime::SetRpcReadiness(server_.get(), ready);
 }
 
 void MessageServiceServer::Shutdown() {
@@ -82,6 +95,7 @@ void MessageServiceServer::Shutdown() {
             return;
         }
 
+        tinyimx::runtime::SetRpcReadiness(server_.get(), false);
         shutdown_requested_ = true;
         server = server_.get();
     }

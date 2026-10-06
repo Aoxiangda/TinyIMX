@@ -25,3 +25,8 @@ group-actor-snapshot-build-20261006三处TU/两archive副本/Group与native ELF�
 group-actor-snapshot-endpoint-control-20261006在首次OFF切换健康后，被HostConfig严格JSON守卫中止，endpoint/cross操作均0，不能算协议或性能结果。finally恢复原Group镜像38dca459/ELF8fe7eab8及全部Env后，再因同一表示守卫中止。所有original inspect/override/切换与恢复日志/failed.json保留。只读group-control-abort-review-20261006确认19 healthy、other18 IDs/images/start精确保持、Env/mount/Cmd/User/health相等、原Group ELF正确；当前GroupCID130c810f703db21f362d6674240d439a73e6a2774a969845dd5b5bf6590100ec。
 
 只读group-control-dns-representation-20261006确认HostConfig仅Dns/DnsOptions/DnsSearch原[]、恢复后null，其余全部字段精确相等，无具体DNS值变化。新attempt2只将这3项的null规范化为[]，任何非空值和全部其他HostConfig仍精确比较；不是忽略DNS/资源/安全/挂载。新stage、新runid，原失败不覆盖；核对最新GroupCID并保留other18，不假设preflight旧CID仍当前。wrapper原54操作/37断言、期限/字段/全部功能测试不变。新控制本提交时NOT_RUN，候选未保留运行或接受性能。
+
+
+## 实际端点 attempt2 中止及注册时序
+
+OFF GetGroup100测量成功，成员页第97个失败group_service_unavailable；ON及四功能链未执行，整轮保持FAIL。旧会话在失败前约9ms过期，新进程失败后约63ms才报告注册完成，nc提前判定健康。原Group恢复。详见RPC_READINESS_LIFECYCLE_20261006.md及原请求/Group/ZK日志。先修正五服务共用信号继承和就绪缺口。

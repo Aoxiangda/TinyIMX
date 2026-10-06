@@ -1520,3 +1520,6 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/benchmark/local_capacity/LocalCapacity.cmak
 # BEGIN TINYIMX_R2A_PRIVATE_CHAT_ACK
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/TinyIMXPrivateChatAckBoundary.cmake")
 # END TINYIMX_R2A_PRIVATE_CHAT_ACK
+
+# RPC startup readiness and shutdown lifecycle regression.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXRpcReadiness.cmake")

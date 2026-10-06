@@ -1,5 +1,7 @@
 #include "services/group/server/GroupServiceServer.h"
 
+#include "common/runtime/RpcReadiness.h"
+
 #include <grpcpp/grpcpp.h>
 
 #include <string>
@@ -34,6 +36,7 @@ bool GroupServiceServer::Start(const std::string& listen_target) {
         return false;
     }
 
+    tinyimx::runtime::EnableRpcReadiness();
     grpc::ServerBuilder builder;
     int selected_port = 0;
     builder.AddListeningPort(
@@ -45,11 +48,21 @@ bool GroupServiceServer::Start(const std::string& listen_target) {
         return false;
     }
 
+    if (!tinyimx::runtime::SetRpcReadiness(server.get(), false)) {
+        server->Shutdown();
+        return false;
+    }
     server_ = std::move(server);
     selected_port_ = selected_port;
     bound_target_ = BuildBoundTarget(listen_target, selected_port);
     shutdown_requested_ = false;
     return true;
+}
+
+bool GroupServiceServer::SetReady(bool ready) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (server_ == nullptr || shutdown_requested_) return false;
+    return tinyimx::runtime::SetRpcReadiness(server_.get(), ready);
 }
 
 void GroupServiceServer::Shutdown() {
@@ -59,6 +72,7 @@ void GroupServiceServer::Shutdown() {
         if (server_ == nullptr || shutdown_requested_) {
             return;
         }
+        tinyimx::runtime::SetRpcReadiness(server_.get(), false);
         shutdown_requested_ = true;
         server = server_.get();
     }

@@ -52,6 +52,16 @@ tinyimx::registry::zookeeper::ServiceInstance BuildServiceInstance(
 }  // namespace
 
 int main(int argc, char* argv[]) {
+    // Block before telemetry/gRPC creates threads; children inherit the mask.
+    sigset_t signal_set;
+    sigemptyset(&signal_set);
+    sigaddset(&signal_set, SIGINT);
+    sigaddset(&signal_set, SIGTERM);
+    if (pthread_sigmask(SIG_BLOCK, &signal_set, nullptr) != 0) {
+        std::cerr << "failed to block shutdown signals\n";
+        return 1;
+    }
+
     const std::string config_path = argc >= 2 ? argv[1] : "config/gateway.json";
     tinyimx::Config config;
     if (!config.LoadFromFile(config_path)) { std::cerr << "load config failed: " << config.LastError() << '\n'; return 1; }
@@ -68,9 +78,6 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     if (!config.MySql().enable) { LOG_ERROR("FileService requires mysql.enable=true"); return 1; }
-
-    sigset_t signal_set; sigemptyset(&signal_set); sigaddset(&signal_set,SIGINT); sigaddset(&signal_set,SIGTERM);
-    if (pthread_sigmask(SIG_BLOCK,&signal_set,nullptr) != 0) { LOG_ERROR("FileService failed to block shutdown signals"); return 1; }
 
     tinyimx::MySqlConnectionPool pool;
     if (!pool.Initialize(config.MySql())) { LOG_ERROR("FileService mysql pool initialize failed"); return 1; }
@@ -98,6 +105,13 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    if (!server.SetReady(true)) {
+        std::cerr << "RPC readiness initialization failed\n";
+        server.Shutdown();
+        server.Wait();
+        return 1;
+    }
+
     LOG_INFO("FileService ready" << ", target=" << server.BoundTarget()
              << ", storage_root=" << storage.Root().string()
              << ", zookeeper_registered=" << (registrar ? 1 : 0));
@@ -105,6 +119,7 @@ int main(int argc, char* argv[]) {
     std::thread signal_thread([&server, registrar_for_signal, signal_set]() mutable {
         int signal_number = 0;
         if (sigwait(&signal_set,&signal_number) == 0) {
+            (void)server.SetReady(false);
             if (registrar_for_signal) registrar_for_signal->Stop();
             server.Shutdown();
         }

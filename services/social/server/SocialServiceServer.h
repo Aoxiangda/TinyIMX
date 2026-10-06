@@ -22,6 +22,8 @@ public:
     SocialServiceServer& operator=(const SocialServiceServer&) = delete;
 
     bool Start(const std::string& listen_target);
+    // Socket listening precedes dependency and registry readiness.
+    [[nodiscard]] bool SetReady(bool ready);
     void Shutdown();
     void Wait();
 
