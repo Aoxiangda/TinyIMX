@@ -11,7 +11,7 @@ def run(a,timeout=30):return subprocess.check_output(a,text=True,timeout=timeout
 def sha(p):return hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
 def envmap(c):return dict(x.split('=',1) for x in c['Config']['Env'] if '=' in x)
 def ident(c):return {'id':c['Id'],'image':c['Image'],'started':c['State']['StartedAt']}
-source=json.loads((b/'group-claim-batch-control-source-20261006/summary.json').read_text())
+source=json.loads((b/'group-claim-batch-control-repair-source-20261006/summary.json').read_text())
 head=run(['git','rev-parse','HEAD']).strip();assert head==source['head'] and all(sha(r/p)==h for p,h in source['files'].items())
 build=json.loads((b/'group-delivery-ordering-build-20261006-attempt3/summary.json').read_text());assert build['status']=='GROUP_DELIVERY_ORDER_NATIVE_AND_IMAGE_PASS' and build['native_tests_total']==56
 buildaudit=json.loads((b/'group-delivery-ordering-build-20261006-attempt3/audit-before.json').read_text())
@@ -23,10 +23,10 @@ names=run(['docker','ps','--format','{{.Names}}']).splitlines();assert len(names
 def inspect():return json.loads(run(['docker','inspect',*names]))
 cs=inspect();before={c['Name']:ident(c) for c in cs}
 assert before==json.loads((b/'group-delivery-ordering-control-20261006/restore-summary.json').read_text())['runtime']
-roles=['gateway-a','gateway-b','message'];gateway_roles=roles[:2];flag='TINYIMX_GROUP_DELIVERY_CLAIM_BATCH_ENABLE'
+roles=['gateway-a','gateway-b','message-service'];gateway_roles=roles[:2];flag='TINYIMX_GROUP_DELIVERY_CLAIM_BATCH_ENABLE'
 original={role:next(c for c in cs if c['Name']=='/tinyimx-m21-'+role+'-1') for role in roles}
 assert all(c['Image']=='sha256:5c2645b1e8512bdd3fe68d4fea229a9418a5e115c9d96d636871639dba41a405' and c['State'].get('Health',{}).get('Status')=='healthy' and flag not in envmap(c) and envmap(c).get('TINYIMX_GROUP_FANOUT_COMMIT_WAKE_ENABLE')=='1' and envmap(c).get('TINYIMX_CONVERSATION_UNREAD_BATCH_ENABLE')=='1' and envmap(c).get('TINYIMX_ONLINE_MAINTENANCE_BATCH_ENABLE')=='1' and 'TINYIMX_REDIS_ACQUIRE_TRACE_ENABLE' not in envmap(c) for role,c in original.items() if role in gateway_roles)
-assert original['message']['Image']=='sha256:be8b5ddea1a874ce017b0e8dfda1c3ac4e5c0f5b8fa938041aae1a4aaba0a060' and flag not in envmap(original['message'])
+assert original['message-service']['Image']=='sha256:be8b5ddea1a874ce017b0e8dfda1c3ac4e5c0f5b8fa938041aae1a4aaba0a060' and flag not in envmap(original['message-service'])
 claim_build=json.loads((b/'group-delivery-claim-batch-build-test-20261006/summary.json').read_text())
 assert claim_build['status']=='GROUP_CLAIM_REAL_SQL_AND_IMAGE_PASS' and claim_build['native_total_checks']==207
 claim_audit=json.loads((b/'group-delivery-claim-batch-build-test-20261006/audit-before.json').read_text())
@@ -72,7 +72,7 @@ for role,c in original.items():
  for key in ['TINYIMX_GROUP_FANOUT_RECOVERY_MS','TINYIMX_GROUP_FANOUT_BATCH_SIZE','TINYIMX_GROUP_FANOUT_LEASE_MS','TINYIMX_GROUP_FANOUT_ACK_RETRY_MS','TINYIMX_GROUP_FANOUT_FAILURE_RETRY_MS']:assert key not in e
 elf_paths={role:'/opt/tinyimx/bin/'+('gateway_demo' if role in gateway_roles else 'message_service_demo') for role in roles}
 original_elf={role:run(['docker','exec',c['Id'],'sha256sum',elf_paths[role]]).split()[0] for role,c in original.items()}
-assert {original_elf[role] for role in gateway_roles}=={'e68731562d83b3b5c1923d80ed7ad4459d2f5cbc9b8a224e32014626fac04cfc'} and original_elf['message']=='2548733766409d282d30f6ffbbbe47f9c12b5d4fa3cacfdcc3d3e47f72582699'
+assert {original_elf[role] for role in gateway_roles}=={'e68731562d83b3b5c1923d80ed7ad4459d2f5cbc9b8a224e32014626fac04cfc'} and original_elf['message-service']=='2548733766409d282d30f6ffbbbe47f9c12b5d4fa3cacfdcc3d3e47f72582699'
 d.mkdir(mode=0o700);private=d/'runtime-private';private.mkdir(mode=0o700)
 def save(n,x):(d/n).write_text(json.dumps(x,indent=2)+'\n')
 (private/'original-inspect.json').write_text(json.dumps(original,indent=2)+'\n')
