@@ -74,6 +74,14 @@ struct GroupMemberFindResult {
     [[nodiscard]] bool Succeeded() const noexcept { return status == GroupRepositoryStatus::kSucceeded; }
 };
 
+// Separate typed outcomes preserve group-first authorization/error handling.
+// This snapshot is for non-locking reads only; mutations keep their original
+// FOR UPDATE reads and transaction/lock ordering.
+struct GroupActorSnapshotFindResult {
+    GroupFindResult group;
+    GroupMemberFindResult member;
+};
+
 struct GroupOperationFindResult {
     GroupRepositoryStatus status{GroupRepositoryStatus::kStorageError};
     bool found{false};
@@ -144,6 +152,13 @@ public:
         MySqlConnection* connection,
         std::uint64_t group_id,
         bool for_update
+    );
+    // One bounded PK LEFT JOIN. Does not begin/commit a transaction or bypass
+    // authorization; callers retain their existing consistent-read boundary.
+    [[nodiscard]] GroupActorSnapshotFindResult FindGroupAndMemberOnConnection(
+        MySqlConnection* connection,
+        std::uint64_t group_id,
+        std::uint64_t user_id
     );
     [[nodiscard]] GroupMemberFindResult FindMemberOnConnection(
         MySqlConnection* connection,

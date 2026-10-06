@@ -1,4 +1,5 @@
 #include "services/group/repository/GroupRepositoryAdapter.h"
+#include "services/group/repository/GroupActorSnapshotControl.h"
 
 #include "common/db/MySqlConnection.h"
 #include "common/db/MySqlConnectionPool.h"
@@ -1178,10 +1179,14 @@ GroupMemberListResult GroupRepositoryAdapter::ListGroupMembers(
         result.message = "ListGroupMembers failed to begin consistent-read transaction";
         return result;
     }
-    const auto group = repository_->FindGroupByIdOnConnection(connection.operator->(), query.group_id, false);
-    const auto actor = repository_->FindMemberOnConnection(
-        connection.operator->(), query.group_id, query.actor_user_id, false
-    );
+    const bool use_actor_snapshot = GroupActorSnapshotEnabled();
+    const auto actor_snapshot = use_actor_snapshot
+        ? repository_->FindGroupAndMemberOnConnection(connection.operator->(), query.group_id, query.actor_user_id)
+        : tinyimx::GroupActorSnapshotFindResult{};
+    const auto group = use_actor_snapshot ? actor_snapshot.group
+        : repository_->FindGroupByIdOnConnection(connection.operator->(), query.group_id, false);
+    const auto actor = use_actor_snapshot ? actor_snapshot.member
+        : repository_->FindMemberOnConnection(connection.operator->(), query.group_id, query.actor_user_id, false);
     if (!group.Succeeded() || !actor.Succeeded()) {
         Rollback(connection.operator->());
         result.status = !group.Succeeded() ? MapStorageStatus(group.status) : MapStorageStatus(actor.status);
@@ -1293,7 +1298,12 @@ GroupSendPermissionResult GroupRepositoryAdapter::CheckGroupSendPermission(
         result.message = "CheckGroupSendPermission failed to begin consistent-read transaction";
         return result;
     }
-    const auto group = repository_->FindGroupByIdOnConnection(connection.operator->(), group_id, false);
+    const bool use_actor_snapshot = GroupActorSnapshotEnabled();
+    const auto actor_snapshot = use_actor_snapshot
+        ? repository_->FindGroupAndMemberOnConnection(connection.operator->(), group_id, actor_user_id)
+        : tinyimx::GroupActorSnapshotFindResult{};
+    const auto group = use_actor_snapshot ? actor_snapshot.group
+        : repository_->FindGroupByIdOnConnection(connection.operator->(), group_id, false);
     if (!group.Succeeded()) {
         Rollback(connection.operator->());
         result.status = MapStorageStatus(group.status);
@@ -1326,8 +1336,8 @@ GroupSendPermissionResult GroupRepositoryAdapter::CheckGroupSendPermission(
         return result;
     }
 
-    const auto member = repository_->FindMemberOnConnection(connection.operator->(), group_id,
-                                                             actor_user_id, false);
+    const auto member = use_actor_snapshot ? actor_snapshot.member
+        : repository_->FindMemberOnConnection(connection.operator->(), group_id, actor_user_id, false);
     if (!member.Succeeded()) {
         Rollback(connection.operator->());
         result.status = MapStorageStatus(member.status);
@@ -1404,7 +1414,12 @@ GroupSendPreparationResult GroupRepositoryAdapter::PrepareGroupMessageSend(
         result.message = "PrepareGroupMessageSend failed to begin consistent-read transaction";
         return result;
     }
-    const auto group = repository_->FindGroupByIdOnConnection(connection.operator->(), group_id, false);
+    const bool use_actor_snapshot = GroupActorSnapshotEnabled();
+    const auto actor_snapshot = use_actor_snapshot
+        ? repository_->FindGroupAndMemberOnConnection(connection.operator->(), group_id, actor_user_id)
+        : tinyimx::GroupActorSnapshotFindResult{};
+    const auto group = use_actor_snapshot ? actor_snapshot.group
+        : repository_->FindGroupByIdOnConnection(connection.operator->(), group_id, false);
     if (!group.Succeeded()) {
         Rollback(connection.operator->());
         result.status = MapStorageStatus(group.status);
@@ -1436,8 +1451,8 @@ GroupSendPreparationResult GroupRepositoryAdapter::PrepareGroupMessageSend(
         result.message = "group is not active";
         return result;
     }
-    const auto member = repository_->FindMemberOnConnection(
-        connection.operator->(), group_id, actor_user_id, false);
+    const auto member = use_actor_snapshot ? actor_snapshot.member
+        : repository_->FindMemberOnConnection(connection.operator->(), group_id, actor_user_id, false);
     if (!member.Succeeded()) {
         Rollback(connection.operator->());
         result.status = MapStorageStatus(member.status);

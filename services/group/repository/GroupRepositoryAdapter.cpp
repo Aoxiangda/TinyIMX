@@ -1,4 +1,5 @@
 #include "services/group/repository/GroupRepositoryAdapter.h"
+#include "services/group/repository/GroupActorSnapshotControl.h"
 
 #include "common/db/MySqlConnection.h"
 #include "common/db/MySqlConnectionPool.h"
@@ -486,7 +487,12 @@ GroupRepositoryGetResult GroupRepositoryAdapter::GetGroup(
         return output;
     }
 
-    const auto group = repository_->FindGroupByIdOnConnection(connection.operator->(), group_id, false);
+    const bool use_actor_snapshot = GroupActorSnapshotEnabled();
+    const auto actor_snapshot = use_actor_snapshot
+        ? repository_->FindGroupAndMemberOnConnection(connection.operator->(), group_id, actor_user_id)
+        : tinyimx::GroupActorSnapshotFindResult{};
+    const auto group = use_actor_snapshot ? actor_snapshot.group
+        : repository_->FindGroupByIdOnConnection(connection.operator->(), group_id, false);
     if (!group.Succeeded()) {
         output.status = MapStorageStatus(group.status);
         output.message = group.message;
@@ -498,9 +504,8 @@ GroupRepositoryGetResult GroupRepositoryAdapter::GetGroup(
         return output;
     }
 
-    const auto member = repository_->FindMemberOnConnection(
-        connection.operator->(), group_id, actor_user_id, false
-    );
+    const auto member = use_actor_snapshot ? actor_snapshot.member
+        : repository_->FindMemberOnConnection(connection.operator->(), group_id, actor_user_id, false);
     if (!member.Succeeded()) {
         output.status = MapStorageStatus(member.status);
         output.message = member.message;

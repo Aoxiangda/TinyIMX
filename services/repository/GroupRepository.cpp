@@ -264,6 +264,70 @@ GroupFindResult GroupRepository::FindGroupByIdOnConnection(
     return ParseGroupResult(query);
 }
 
+GroupActorSnapshotFindResult GroupRepository::FindGroupAndMemberOnConnection(
+    MySqlConnection* connection,
+    std::uint64_t group_id,
+    std::uint64_t user_id
+) {
+    GroupActorSnapshotFindResult result;
+    if (connection == nullptr || group_id == 0 || user_id == 0) {
+        // Preserve the original per-read validation/status messages and the
+        // valid group result when only the actor argument is invalid.
+        result.group = FindGroupByIdOnConnection(connection, group_id, false);
+        result.member = FindMemberOnConnection(connection, group_id, user_id, false);
+        return result;
+    }
+    const std::string sql =
+        "SELECT g.group_id, g.name, g.description, g.avatar_url, g.owner_user_id, "
+        "g.status, g.join_policy, g.max_members, g.version, g.member_version, "
+        "g.created_at, g.updated_at, IFNULL(g.disbanded_at, ''), "
+        "IFNULL(g.disbanded_by_user_id, 0), "
+        "m.group_id, m.user_id, m.role, m.status, m.membership_epoch, "
+        "IFNULL(m.muted_until, ''), m.joined_at, IFNULL(m.left_at, ''), m.updated_at, "
+        "IFNULL(m.user_id, 0) "
+        "FROM im_groups g LEFT JOIN im_group_members m "
+        "ON m.group_id = g.group_id AND m.user_id = " + std::to_string(user_id) +
+        " WHERE g.group_id = " + std::to_string(group_id) + " LIMIT 1";
+    MySqlQueryResult query;
+    if (!connection->Query(sql, &query)) {
+        result.group.status = result.member.status = GroupRepositoryStatus::kStorageError;
+        result.group.message = result.member.message =
+            "FindGroupAndMemberOnConnection query failed: " + connection->LastError();
+        return result;
+    }
+    MySqlQueryResult group_query, member_query;
+    if (query.rows.empty()) {
+        result.group = ParseGroupResult(group_query);
+        result.member = ParseMemberResult(member_query);
+        return result;
+    }
+    if (query.rows.size() != 1 || query.rows.front().size() != 24) {
+        result.group.status = result.member.status = GroupRepositoryStatus::kInvalidRecord;
+        result.group.message = result.member.message = "invalid group actor snapshot row shape";
+        return result;
+    }
+    const auto& row = query.rows.front();
+    group_query.rows.emplace_back(row.begin(), row.begin() + 14);
+    result.group = ParseGroupResult(group_query);
+    // The explicit member-presence probe distinguishes a valid group with no
+    // actor membership from a malformed membership row. Never filter status
+    // or role in SQL: the existing permission policy must still reject them.
+    if (row[23] == "0") {
+        result.member = ParseMemberResult(member_query);
+        return result;
+    }
+    member_query.rows.emplace_back(row.begin() + 14, row.begin() + 23);
+    result.member = ParseMemberResult(member_query);
+    if (result.member.Succeeded() && result.member.found &&
+        (result.member.record.group_id != group_id ||
+         result.member.record.user_id != user_id)) {
+        result.member = {};
+        result.member.status = GroupRepositoryStatus::kInvalidRecord;
+        result.member.message = "group actor snapshot membership identity mismatch";
+    }
+    return result;
+}
+
 GroupMemberFindResult GroupRepository::FindMemberOnConnection(
     MySqlConnection* connection,
     std::uint64_t group_id,
