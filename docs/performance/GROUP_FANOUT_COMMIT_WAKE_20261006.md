@@ -35,3 +35,20 @@ Git4443175控制源码，stage group-fanout-wake-endpoint-control-20261006。原
 
 四个独立新自有4actor集合的原54操作/37断言公开交互链全部PASS，共216操作148断言，涵盖好友同意/拒绝、私聊发送/真实ACK/历史/读/未读、群分页/角色/禁言/离群/踢人/解散及3实际收件、真实1.8MiB文件流和字节SHA/幂等取消。低样本正确性仍不代替全部功能并发性能。
 最终恢复原a2bb两Gateway及ca01b0 ELF，严格原全Env/健康/Cmd/HostConfig/挂载/SQL双1不变；其他17实例身份及私有配置SHA保持。当前GW A dba2aeedf6ed814a93ba7f58cea7cf1ecc1e740c02bdd2182ba70b39f8d85c7a，B a1c0c2801e769d6f9b29a890f1f8366a0cbdc19f95c10c9b170544229b054b82。候选未做万人混合/热点群最终接受，全部功能极致目标继续OPEN。下一轮将群实际收件加入原10k私聊/会话页负载并保留完整交互回归。
+
+## 10k混合 ABBA 已完成，准备选择运行版本
+
+Git f4fd1e7；stage group-fanout-wake-mixed10k-20261006。10000原自有环用户，总登录100/s，原private100/s×60秒=6000/case，固定50会话页20/s×60秒=1200/case。加入固定到不同Gateway的两名真实群成员2/s（70消息/60测量）和54操作/38断言（多出的1断言严格所有操作在同一steady）。群/列表/环/4功能actor互不共用登录身份，保留原native和coordinator SHA、heartbeat15秒及全部原deadline/durability。
+
+|case|原private ACK P99直方图上界 ms|完整50项会话页 P99 ms|群实际收件 mean / 样本P99 ms|
+|---|---:|---:|---:|
+|mixed-A1 off|74.0|47.436211|478.139298 / 1036.300845|
+|mixed-B1 on|57.5|38.293330|39.097486 / 84.044447|
+|mixed-B2 on|50.9|34.198594|37.832799 / 79.622417|
+|mixed-A2 off|57.7|40.925379|525.406253 / 1021.918781|
+
+开启两轮的原private全部gates、列表sent与scheduled P99≤100ms、群实际与scheduled样本P99≤100ms均PASS。关闭两轮的群交付性能FAIL保留；保守最慢ON对最好OFF，群实际交付样本P99减少91.776%。2/s、每case60样本的P99仍等于最大值，不能外推所有群规模或总体P99。private/list数字用于回退检查，不把微小差值宣称新独立私聊根因改善。
+四轮24000private正ACK=SQL=真实wire=确认，4800整个列表响应准确，280群消息真实收件与SQL状态3，0跳过/超时/重复wire/负ACK；216操作152断言（含4个steady窗口检查）正确，所有功能链和群收件在原60秒窗口内。通过这些选定场景，不等于28类型每类高频容量、50k/TLS/故障/soak验收。
+
+测试最终先严格恢复原a2bb/全Env及原健康/Cmd/HostConfig/挂载，其他17和私有配置保持。后续选择5c2645候选ON作为继续迭代版本，须以accepted-group-fanout-wake-20261006/summary.json实际运行receipt为准；本次提交只保存明确准入条件与部署助手，未将准备描述为已经运行。完整a2bb原配置/映像回滚继续留存。
+源码审查发现大群另一潜在开销：ClaimGroupMessageDeliveries在同事务内每收件人一次租约UPDATE，协调器又逐收件人完成同步RPC；当前两人群结果不证明大群已快。下一步用自有多成员群实测各阶段，再选择有界合并方案，保留FOR UPDATE/SKIP LOCKED、租约、受认证会话、实际ACK和持久化原语。20k之前private201ms/诊断149.4ms FAIL、AI秒级与文件并发容量仍OPEN，不停止全部功能迭代。
