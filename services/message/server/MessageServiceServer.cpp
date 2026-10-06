@@ -1,3 +1,4 @@
+#include "services/message/server/MessageRpcPollerPolicy.h"
 #include "services/message/server/MessageServiceServer.h"
 
 #include "common/runtime/RpcReadiness.h"
@@ -51,6 +52,12 @@ bool MessageServiceServer::Start(
 
     tinyimx::runtime::EnableRpcReadiness();
     grpc::ServerBuilder builder;
+    const auto polling=ConfiguredMessageRpcPollerPolicy();
+    if (polling.enabled) {
+        builder.SetSyncServerOption(grpc::ServerBuilder::SyncServerOption::NUM_CQS,polling.queues);
+        builder.SetSyncServerOption(grpc::ServerBuilder::SyncServerOption::MIN_POLLERS,polling.min_pollers);
+        builder.SetSyncServerOption(grpc::ServerBuilder::SyncServerOption::MAX_POLLERS,polling.max_pollers);
+    }
     int selected_port = 0;
 
     builder.AddListeningPort(
