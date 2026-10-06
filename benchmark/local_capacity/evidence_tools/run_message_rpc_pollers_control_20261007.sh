@@ -11,7 +11,7 @@ def run(a,timeout=30):return subprocess.check_output(a,text=True,timeout=timeout
 def sha(p):return hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
 def envmap(c):return dict(x.split('=',1) for x in c['Config']['Env'] if '=' in x)
 def ident(c):return {'id':c['Id'],'image':c['Image'],'started':c['State']['StartedAt']}
-source=json.loads((b/'message-rpc-pollers-source-20261007/summary.json').read_text())
+source=json.loads((b/'message-rpc-pollers-build-repair-source-20261007/summary.json').read_text())
 head=run(['git','rev-parse','HEAD']).strip();assert head==source['head'] and all(sha(r/p)==h for p,h in source['files'].items())
 candidate=json.loads((b/'group-message-runtime-build-20261006/summary.json').read_text())
 message_proof=json.loads((b/'group-completion-rpc-build-20261006-attempt6/summary.json').read_text())
@@ -32,8 +32,8 @@ assert all(sha(p)==h for p,h in buildaudit['borrowed_sha256'].items())
 boundary=json.loads((b/'group-get-boundary-build-20261007-attempt2/summary.json').read_text())
 assert boundary['status']=='GROUP_GET_BOUNDARY_NATIVE_AND_IMAGES_PASS' and boundary['head']=='884908e3664ae96f7491f36a210855dea1b0a112' and boundary['native_checks']==145 and boundary['existing_class_headers_unchanged'] and boundary['protocol_unchanged'] and boundary['gateway_only_rpc_member_changed'] and boundary['message_only_repo_and_impl_objects_changed'] and boundary['other_archive_members_and_borrowed_preserved'] and boundary['original_message_unit_pass']
 boundary_audit=json.loads((b/'group-get-boundary-build-20261007-attempt2/audit-before.json').read_text());assert all(sha(r/n)==h for n,h in boundary_audit['source_sha256'].items() if not n.startswith('docs/') and n!='services/message/server/MessageServiceServer.cpp') and all(sha(p)==h for p,h in boundary_audit['borrowed_sha256'].items())
-pollers=json.loads((b/'message-rpc-pollers-build-20261007/summary.json').read_text());assert pollers['status']=='MESSAGE_RPC_POLLERS_NATIVE_AND_IMAGE_PASS' and pollers['head']==head and pollers['native_rpc_calls']==320 and pollers['only_server_object_changed'] and pollers['borrowed_preserved']
-poller_audit=json.loads((b/'message-rpc-pollers-build-20261007/audit-before.json').read_text());assert all(sha(r/n)==h for n,h in poller_audit['source_sha256'].items()) and all(sha(p)==h for p,h in poller_audit['borrowed_sha256'].items())
+pollers=json.loads((b/'message-rpc-pollers-build-20261007-attempt2/summary.json').read_text());assert pollers['status']=='MESSAGE_RPC_POLLERS_NATIVE_AND_IMAGE_PASS' and pollers['head']==head and pollers['native_rpc_calls']==320 and pollers['only_server_object_changed'] and pollers['borrowed_preserved']
+poller_audit=json.loads((b/'message-rpc-pollers-build-20261007-attempt2/audit-before.json').read_text());assert all(sha(r/n)==h for n,h in poller_audit['source_sha256'].items()) and all(sha(p)==h for p,h in poller_audit['borrowed_sha256'].items())
 build={'gateway_image_id':boundary['images']['gateway']['image_id'],'gateway_elf_sha256':boundary['images']['gateway']['elf_sha256']}
 claim_build={'image_id':pollers['images']['message']['image_id'],'message_elf_sha256':pollers['images']['message']['elf_sha256']}
 assert message_proof['rpc_checks']==62 and message_proof['protocol_exact_preservation_checks']==1

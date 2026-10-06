@@ -5,3 +5,7 @@
 native仅自有ephemeral127.0.0.1 fakeMessageService，无SQL/外部数据写入。覆盖absent/invalid/realENV、空service/地址/repeatedStart/readiness、16nativecaller各4次共64RPC身份内容一致、错误状态、Wait/Shutdown/重启fence；各case新进程，原native/日志保留。编译仅新Server.o和nativeTU，Message原密封链接替换Server对象，其余borrowed对象/包逐SHA核对，旧class header/meta/编译布局保持。新独立image不直接部署验收配置。
 
 计划同新Gateway ac546和同新Message profile image，只开pollerflag0/1/1/0，固定traceUID519862/batch128/coalescing1/clientdeferred1/完整其他Env。四同自有群/100连接/528消息23628逐人wireSQL3、四54op37断言及文件字节，原3秒ACK/ALL和SQL8秒观察保持，不估P99/容量。分析同调用是否减少handler前等待与端到端ALL，同时观察其他大小/完整串联退化，不以平均或RPC指标改善掩盖tailFAIL。最后完整恢复原配置与19服务/other16/私有配置/宿主应用。全部功能1万到5万极致目标OPEN。
+
+## 构建失败与修复（保留首轮）
+
+首轮 `.local/codex/message-rpc-pollers-build-20261007`：Server TU 成功，native TU 失败，错误为 `message.grpc.pb.h` 不存在。实际封存的生成头路径是 `tinyimx/message/v1/message_service.grpc.pb.h`（与现有 Impl 一致）。修复 native include，在新 attempt2 目录重编译，保留原失败 JSON/编译日志。首轮未构建新镜像、未部署、未创建压测数据，runtime-after 完整校验与之前恢复收据相同。该错误属于测试依赖名称，不是运行时性能回归。

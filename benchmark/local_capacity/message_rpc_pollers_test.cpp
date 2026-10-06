@@ -1,6 +1,6 @@
 #include "services/message/server/MessageRpcPollerPolicy.h"
 #include "services/message/server/MessageServiceServer.h"
-#include "message.grpc.pb.h"
+#include "tinyimx/message/v1/message_service.grpc.pb.h"
 #include <grpcpp/grpcpp.h>
 #include <iostream>
 #include <thread>
