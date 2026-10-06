@@ -39,6 +39,15 @@ namespace {
 
 using Json = nlohmann::json;
 
+// Default off until same-ELF endpoint and cross-feature controls pass.
+bool ConversationUnreadBatchEnabled() noexcept {
+    static const bool enabled = [] {
+        const char* value = std::getenv("TINYIMX_CONVERSATION_UNREAD_BATCH_ENABLE");
+        return value != nullptr && std::string(value) == "1";
+    }();
+    return enabled;
+}
+
 // Bounded numeric-only diagnostic. Does not change admission, deadline or retry.
 void LogChatPhaseSnapshot(const tinyimx::ChatRequestPhaseTrace::Snapshot& x) noexcept {
     static tinyimx::ChatPhaseLogLimiter limiter;
@@ -8931,7 +8940,25 @@ void GatewayServer::HandleConversationListRequest(
                     return {};
                 }
 
+                // The RPC already validates this authorized page (at most 50).
+                // One bounded readonly snapshot keeps healthy pool acquisition.
+                const bool batch_unread =
+                    ConversationUnreadBatchEnabled() && HasUnreadCountCache();
+                std::vector<GetUnreadCountResult> unread_results;
+                if (batch_unread) {
+                    std::vector<std::uint64_t> peers;
+                    peers.reserve(rpc_result.value->conversations.size());
+                    for (const auto& conversation : rpc_result.value->conversations) {
+                        peers.push_back(conversation.peer_user_id);
+                    }
+                    if (context.CancellationRequested()) return {};
+                    unread_results = unread_count_cache_->GetPrivateUnreadBatch(
+                        self_user_id, peers);
+                    if (context.CancellationRequested()) return {};
+                }
+
                 Json conversation_array = Json::array();
+                std::size_t unread_index = 0;
                 for (const auto& conversation :
                      rpc_result.value->conversations) {
                     if (context.CancellationRequested()) {
@@ -8958,13 +8985,22 @@ void GatewayServer::HandleConversationListRequest(
                         conversation.last_receiver_confirmed_at;
                     item["last_read_at"] = conversation.last_read_at;
 
-                    // Unread is still the existing Redis-derived projection in
-                    // C1. Only the durable conversation read crosses the new
-                    // MessageService boundary.
-                    item["unread_count"] = GetPrivateUnread(
-                        self_user_id,
-                        conversation.peer_user_id
-                    );
+                    // Preserve the existing per-row zero fallback and warning.
+                    if (batch_unread) {
+                        const auto& unread = unread_results.at(unread_index);
+                        item["unread_count"] = unread.Completed() ? unread.count : 0;
+                        if (!unread.Completed()) {
+                            LOG_WARN("gateway get private unread failed"
+                                << ", receiver=" << self_user_id
+                                << ", sender=" << conversation.peer_user_id
+                                << ", status=" << GetUnreadCountStatusToString(unread.status)
+                                << ", error=" << unread.error_message);
+                        }
+                    } else {
+                        item["unread_count"] = GetPrivateUnread(
+                            self_user_id, conversation.peer_user_id);
+                    }
+                    ++unread_index;
 
                     conversation_array.push_back(std::move(item));
                 }
