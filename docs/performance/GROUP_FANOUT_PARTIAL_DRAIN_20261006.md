@@ -47,3 +47,8 @@ strict defaultOFF开关TINYIMX_GROUP_FANOUT_PARTIAL_DRAIN_ENABLE=1，只影响�
 完成RPC仍占协调器整批约75%，是本轮明确的主要串行阶段；线程CPU和上述墙钟不能相加，派发包含嵌套路由成本。最大相邻收件间隔四轮约288/283/291/298ms，均在64人分界，含warm；本轮OFF/ON没有重新出现之前877ms空档，不能将样本缺失当作实测消除或因果收益证明。部分drain机制原生正确，但真实平均提升没有稳定ABBA证据；下一步针对原逐条完成RPC及每收件路由，不通过减小持久化/放宽100ms/删除失败/增大批次掩盖问题。
 
 运行结束完整恢复5c2645 Gateway和be8 Message原ELF/全Env，其他16实例、私有配置、持久化1/1/1/0/0、主机其他应用保持。精确新实例身份以.local/codex/group-partial-drain-control-20261006/restore-summary.json为准，旧报告CID是历史记录。源候选没有选入运行；全部功能10k–50k、离线/故障/并发文件/AI容量仍OPEN。原生日志、逐消息/收件、阶段日志、四轮readiness失败和全部完整链均保存在该stage及对应cross-feature stages，原数据不删除。
+
+
+## 路由与批完成之后重新观察到部分批长尾
+
+新route候选partial0对照A2 MID2895：48+51两partial claim合计99个收件。B早批48，A迟批51在发送1060.946ms才开始，前48全到189.004ms，后51起1091.127ms，ALL1203.057ms，空档902.123217ms；最终状态3和attempt1，无重复。旧partial对照未重现因果增益的结论仍保留。现在在route/completion/claim固定1的同sealed image中，仅partial0/1/1/0，原4批+25msyield/空及失败1000ms/lease/ACK身份/序号/3秒deadline不变；不重新构建或合入尚未验收容量。结果pending，以新group-route-partial-drain-control-20261006全部原始请求和精确restore为准。

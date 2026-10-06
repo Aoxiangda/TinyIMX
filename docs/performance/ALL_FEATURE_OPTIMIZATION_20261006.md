@@ -146,3 +146,12 @@ accepted-group-fanout-wake-20261006实际receipt已PASS：当前两个Gateway im
 剩余领取约32–34ms、64次逐人派发约64–67ms、对端durable read约4–6ms及排队仍实测存在。下一有界路由批读取先保留uint64/每key错误/TTL/真实TCP与对端授权、持久化校验，再隔离验证和实际对照；不能把一项批处理当作所有功能已经达标。当前最终恢复原5c2645网关+be8Message完整配置，其他16不变/持久化1/1/1/0/0/宿主应用保持；最近恢复receipt是group-completion-batch-control-20261006-attempt2/restore-summary.json，以其CID为准，前文CID仅历史。
 
 全部功能目标继续OPEN：1万已通过的是既定私聊/会话页/两人群混合门槛；2万混合延迟FAIL尚待突破；热点大群仍FAIL；资料/好友/群管理/分页/权限交叉仅低样本功能正确；文件snapshot已有限入口对照通过，文件高并发真实传输容量未验收；离线补发、断连恢复/故障/长稳态容量未验收；AI原生产服务地址/模型配置与CPU推理几十秒问题未解决，不能计为100ms达标。后续每次迭代必须保留功能链和失败原值，不扩大结论至未测功能或5万用户。
+
+
+## 路由批读取真实结果与下一准确瓶颈（当前）
+
+真实Redis720/Resolver128/协调器164、继承62Message RPC和旧协议/应用通过。Route同image OFF/ON/ON/OFF，528消息/23628实际收件及SQL状态3、216全功能交互操作148断言正确、0观察重复。64路由派发约60–62ms→4.22–4.32ms；65人ALL均值201–202→125–128ms，16人75→60ms。100人仍301–320ms，保守相对OFF改善仅1.255%，未达标；A2 100人1203.057ms及16人142.915msFAIL保留，30消息不估P99或容量。完整复盘见GROUP_ROUTE_READ_BATCH_20261006.md。
+
+MID2895前48人189.004ms收到，网关B partial48批后，网关A直到1060.946ms才开始剩51条领取，ALL1203.057ms；902.123ms空档与不足64条进入1000ms恢复等待相符。低频未测完整锁时间线，下一同候选保持route1/completion1/claim1，只切有界partial drain验证；其原生调度回归已在当前镜像重新通过。另一瓶颈原4工作线程内ACK排队抽样约99–103ms，每人durable Get+Confirm执行约19–20ms；不删授权/序号证据，不盲扩池或线程，不降持久化。既有InsertGroupMessageDeliveries早已TX内bulk256，避免错误方向。两问题分别分析、单变量验因。
+
+当前已完整恢复原Gateway5c2645+Messagebe8/fullEnv及其他16/配置/持久化/宿主应用；最近实例以group-route-batch-control-20261006/restore-summary.json为准。2万混合FAIL、5万全部功能/热点大群、各功能高频交叉、文件并发真实传输、离线/故障/长稳态、AI原生产配置和CPU推理仍未验收，不能把低样本完整功能链或一项成功泛化为全功能极致。
