@@ -1,5 +1,6 @@
 #include "gateway/GroupFanoutCoordinator.h"
 #include "gateway/GroupFanoutWakeup.h"
+#include "gateway/GroupFanoutPipeline.h"
 
 #include "common/logging/LogMacros.h"
 
@@ -7,6 +8,7 @@
 #include <chrono>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace tinyimx {
 namespace {
@@ -149,6 +151,7 @@ std::size_t GroupFanoutCoordinator::RunOneIteration() {
         return 0;
     }
 
+    diagnostics::GroupFanoutPhaseTrace trace(GroupFanoutDeferCompletionEnabled());
     const std::string lease_token = NextLeaseToken();
 
     rpc::ClaimGroupMessageDeliveriesRpcRequest claim;
@@ -167,6 +170,27 @@ std::size_t GroupFanoutCoordinator::RunOneIteration() {
                  << ", error=" << claimed.status.message);
         return 0;
     }
+
+    const auto& items = claimed.value->work_items;
+    trace.Claimed(items.size(), items.empty() ? 0 : items.front().message.message_id,
+                  items.empty() ? 0 : items.back().message.message_id);
+    // No buffer growth for unexpected responses larger than the <=256 claim.
+    const bool defer = GroupFanoutDeferCompletionEnabled() && items.size() <= claim.limit;
+    std::vector<rpc::CompleteGroupMessageDeliveryAttemptRpcRequest> pending;
+    if (defer) pending.reserve(items.size());
+    const auto finish = [&](const rpc::CompleteGroupMessageDeliveryAttemptRpcRequest& complete) {
+        const auto begin = trace.Mark();
+        const auto completed = dependencies_.complete(
+            complete, MakeCallOptions("complete-group-delivery-attempt"));
+        trace.CompleteDone(begin);
+        if (!completed.ok()) {
+            LOG_WARN("group fanout attempt completion uncertain"
+                     << ", message_id=" << complete.message_id
+                     << ", recipient=" << complete.recipient_user_id
+                     << ", attempted=" << completed.attempted
+                     << ", error=" << completed.status.message);
+        }
+    };
 
     if (!claimed.value->work_items.empty() &&
         options_.fault_pause_after_claim.count() > 0) {
@@ -193,7 +217,9 @@ std::size_t GroupFanoutCoordinator::RunOneIteration() {
             continue;
         }
 
+        const auto dispatch_start = trace.Mark();
         const GroupFanoutDispatchResult dispatched = dependencies_.dispatch(work);
+        trace.DispatchDone(dispatch_start);
 
         // Receiver ACK can race and move the row to DELIVERED before this RPC.
         // Completion is guarded by lease/status in MessageService and therefore
@@ -224,17 +250,13 @@ std::size_t GroupFanoutCoordinator::RunOneIteration() {
                 break;
         }
 
-        const auto completed = dependencies_.complete(
-            complete, MakeCallOptions("complete-group-delivery-attempt"));
-        if (!completed.ok()) {
-            LOG_WARN("group fanout attempt completion uncertain"
-                     << ", message_id=" << complete.message_id
-                     << ", recipient=" << complete.recipient_user_id
-                     << ", attempted=" << completed.attempted
-                     << ", error=" << completed.status.message);
-        }
+        if (defer) pending.push_back(std::move(complete));
+        else finish(complete);
         ++processed;
     }
+    // Original lease/status fence prevents completion from reverting an ACK's
+    // DELIVERED state. Every dispatch follows the original committed claim.
+    for (const auto& complete : pending) finish(complete);
 
     return processed;
 }

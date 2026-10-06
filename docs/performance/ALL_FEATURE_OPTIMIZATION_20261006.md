@@ -102,3 +102,7 @@ AI原profile桥接地址不可达且模型不存在；新私有测试配置连�
 accepted-group-fanout-wake-20261006实际receipt已PASS：当前两个Gateway image5c2645b1e8512bdd3fe68d4fea229a9418a5e115c9d96d636871639dba41a405，ELF e68731562d83b3b5c1923d80ed7ad4459d2f5cbc9b8a224e32014626fac04cfc，commitwake=1、conversation-unread=1、online-maintenance-batch=1；A CID cb5446335cfde72634157b564789b843d2335e90ec4d9577427c8ab7e9c80a80，B ad3626c181645b00210a43ee904e1276f02037c8b1e166bd6d3cfe3add73eec9。19健康/其他17实例不变/完整配置和原持久化保持。部署后的3资料、完整50页、1条跨Gateway群消息实际收件及SQL状态3/Pong drain正确。完整a2bb回滚override SHA e204cf1092a3421c70a36f9bbb4ddc5cff8de5d211625841215dcc6b91fea2c7继续保留。
 
 下一源助手只创建4个新自有2/16/65/100人群，固定100个自有连接分布两网关，分别13条消息/3warm10测量逐收件和SQL确认，原3秒ACK/交付期限保持，保留全部Group/成员/记录以便下一轮同夹具迭代。10个消息样本不估总体P99/容量。源码实际公开群上限500；内部recipient snapshot guard5000不能当5000人群支持。观察租约逐行UPDATE、逐收件完成RPC，以及peer receive/ACK按同MID串行的影响，准确分解后再改代码。此次仅准备规模分析，尚未标结果PASS，全部功能极致目标继续OPEN。
+
+## 群规模实际结果与有界投递方向
+
+2/16/65/100人群52消息/2327真实wire+SQL确认正确、0重复，全收件mean32.319/133.498/482.334/767.800ms，max38.675/160.643/534.799/863.790ms。16/65/100性能FAIL保留，10样本不能估P99或万人容量。当前默认OFF候选只将已提交同批有界dispatch置于原completionRPC之前，保留租约/重试/授权/持久化；低频阶段计时配合同Group/ELF开关对照验证瓶颈。见GROUP_FANOUT_PIPELINE_20261006.md。全部功能高频交叉20k–50k、文件/离线恢复/AI性能仍OPEN。
