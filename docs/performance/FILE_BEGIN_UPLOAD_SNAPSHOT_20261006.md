@@ -29,3 +29,20 @@ ZooKeeper明确日志旧0x100051254b700be在10:43:32.568过期；新0x100051254b
 ## 对准确原因的修正与下一验证
 
 已审计的五RPC97项namedready与前置信号mask修正源码，此前只实际Group验证，File运行没有包含它。现在绑定当前150PASS adapter与原已验证FileMain/FileServer/probe对象，其他全部cached输入与原运行f1b9一致且原宏；重跑97PASS，v2 imagea45522...、ELF064835e92f5abcad832a44ff99e701897c411079105fbca9ae326fc99ec2b980，probeee066590...，UID1000/noNet加载及负例PASS。运行尚未选用。namedready health/信号修正固定在OFF和ON同ELF，只有snapshotflag变化；每次先验证实际注册完成、双GatewayGet、普通线程信号mask、候选SIGTERM退出0，再测量；原Healthcheck/全Env最终恢复。单副本滚动切换零丢请求尚未证明，不把startupgate当作该保证。
+
+## attempt3真实ABBA已完成
+
+18c78f53控制源码；同File ELF064835e92f5abcad832a44ff99e701897c411079105fbca9ae326fc99ec2b980，snapshot OFF/ON/ON/OFF。namedready/早期信号mask/实际注册日志门控固定在两模式，不作为snapshot收益；仅开关不同。每case4真实actor分布两原Gateway，30warm480测量，再30波四并发120。1920测量、120warm、480并发重试；4×658请求/659文件断言正确，216完整操作148完整链断言正确，含每轮真实1.8MiB prepare/chunk/finalize/partialdownload/resume/字节一致。
+
+| 轮次 | 已有begin均值ms | 中位ms | 480样本P99 ms | 最大ms | 4并发观测上界均值ms | 4并发120样本P99上界ms |
+|---|---:|---:|---:|---:|---:|---:|
+| A1 off | 6.845720 | 6.835712 | 8.904546 | 10.416270 | 11.433473 | 21.729655 |
+| B1 on | 5.220292 | 5.171485 | 7.396021 | 9.905162 | 9.631597 | 20.207930 |
+| B2 on | 5.019929 | 4.982181 | 6.824712 | 8.702243 | 10.074137 | 20.492335 |
+| A2 off | 6.953903 | 6.897013 | 9.194251 | 12.054497 | 11.965870 | 22.410967 |
+
+开启均值5.019929/5.220292ms，关闭6.845720/6.953903ms。保守用最慢ON和最快OFF减少23.744%。顺序/网络/日志/精确校验及deadline相同；这是有限480closedloop微对照，非10k50k人口/到达率容量证明。4并发数据是一次pump收齐响应后每条采集的观察上界，有额外排队/用户态读取，不把它解释为服务处理P99。各实际完整否定响应/取消/后续SQL身份和状态核对保留。
+
+三个候选部署普通后台线程均屏蔽SIGINT/SIGTERM，恰1合法do_sigtimedwait；候选三次SIGTERM退出均0。原File首退出码143也保留。每次namedready明确SERVING/镜像探针SHA正确/实际注册日志之后才测量；没有再次遇到第155项注册窗口错误，但该有限测试不能保证单实例切换零错误。以前两轮FAIL、日志、4个旧upload和150native6schemas完整保留。
+
+最后恢复原File image38dca、f1b9原ELF、完整原Env/原nc Healthcheck/实际Mounts/HostConfig（Binds多重集合），其他18精确实例和私有配置/原持久化/宿主应用保持。原File新CID和时间以.local/codex/file-begin-snapshot-control-20261006-attempt3/restore-summary.json为准。新候选尚未选入长期运行或万人混合；高并发真实分块/终结/恢复、故障/跨功能20k–50k容量仍OPEN。

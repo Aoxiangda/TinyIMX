@@ -132,3 +132,8 @@ accepted-group-fanout-wake-20261006实际receipt已PASS：当前两个Gateway im
 ## 文件幂等优化与注册窗口真实失败
 
 已保存93e2e6a9文件snapshot候选；150真实SQL检查和原应用层PASS，仓库层重复读取/健康PING2→1，pool1/4均值约3.4–3.7ms→1.5ms。真实入口首轮保护Binds顺序误报、第二轮OFF154重复成功后第155请求在服务发现阶段失败：旧注册session32.568过期，新File32.686才注册完成，32.600失败未进入RPC/SQL。所有失败/成功/恢复保留，ON和全部4功能链没有运行，无入口性能结论。原File/其他18/配置/持久化恢复。当前v2组合原97PASS File注册就绪与同一snapshot机制，namedready/信号修正固定OFF/ON后再实际对照，不能把这一稳定性修正算作snapshot性能收益。群64批completion308–319ms仍主瓶颈，群大规模/其他功能交叉容量全部OPEN。见FILE_BEGIN_UPLOAD_SNAPSHOT_20261006.md。
+
+
+## 文件实际查询优化对照已经通过
+
+保持registeredready固定同ELF，仅snapshotOFF/ON/ON/OFF：1920真实入口测量+480四并发重试及2636文件检查、216完整操作148全链断言正确，真实传输每轮字节一致。已有begin均值关闭6.845720/6.953903ms，开启5.220292/5.019929ms，保守减少23.744%；480样本P99关闭8.904546/9.194251ms，开启7.396021/6.824712ms。只有4closedloopactor，不以该结果作为万人容量P99；4并发为pump观测上界。三个候选退出0/普通线程mask/namedready/真实注册均验证；原File全部Env/Health/Mounts恢复，其他18/私有配置/持久化/宿主应用保持。早先两轮失败并保留，不接受遗漏或替换失败。尚未选入长期运行；文件高并发真实传输/全部功能20k–50k和AI仍OPEN。下一独立群完成批SQL API针对实测308–319ms阶段，先真实隔离SQL验证再RPC接线。见FILE_BEGIN_UPLOAD_SNAPSHOT_20261006.md。
