@@ -31,3 +31,10 @@ https://github.com/grpc/grpc-proto/blob/master/grpc/health/v1/health.proto
 ## 实际切换 attempt3：审计误判中止，生命周期证据有效
 候选真实Group健康探针SERVING、27线程中26个普通线程屏蔽SIGINT/SIGTERM；末个专用sigwait线程在等待时内核SigBlk显示未屏蔽。控制器把全部线程都要求屏蔽，故正式端点/功能链前中止，保持整轮FAIL。候选随后正常Stop、退出码0，原38dca/全部Env/原nc健康检查恢复，其他18原样。没有800测量或交互链结果。
 只读原Group线程wchan验证：20个遥测/gRPC早建线程未屏蔽且futex/ep_poll等等待，1个专用线程处于do_sigtimedwait。原先“21个异常线程”更正为20个普通后台线程+1个合法sigwait。候选26普通已修正，合法waiter不应禁止。attempt4只修审计：必须恰好一个实际do_sigtimedwait，其余全部屏蔽，两种退出码及日志保留；业务候选ELF不变。尚未执行attempt4，不接受性能。
+
+
+## attempt4完整实测
+
+四轮800测量群查询、80warm、16权限/actor注入负例、216公开操作/148断言PASS。每组26普通线程屏蔽，恰1个do_sigtimedwait；候选四次退出0，对照原镜像退出143。Group真实注册健康及双Gateway快照均验证。最终恢复原镜像/noSnapshotFlag/原nc健康检查，其他18实例不变。
+群Get P99 OFF7.945900/5.515735ms，ON5.785445/6.193453ms；成员页OFF10.131855/9.053622ms，ON9.096427/5.033324ms，存在重叠，不能宣布稳定降幅或容量性能接受。完整链成功不是全部功能10k–50k P99证明。
+新增逐MID分析发现真实群交付148.571–694.784ms，ACK20.079–25.723ms；进一步定位原扇出1s恢复轮询无提交通知，下一次迭代见GROUP_FANOUT_COMMIT_WAKE_20261006.md。对groupSQL仅保持defaultOFF候选，不把功能PASS冒充提速。

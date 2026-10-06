@@ -1,4 +1,5 @@
 #include "gateway/GatewayServer.h"
+#include "gateway/GroupFanoutWakeup.h"
 #include <limits>
 
 #include "common/logging/LogMacros.h"
@@ -11747,6 +11748,10 @@ void GatewayServer::HandleGroupMessageSend(
                 body["message_id"] = rpc_result.value->message_id;
             } else {
                 body["success"] = true;
+                // Successful non-conflicting RPC means message, recipients
+                // and outbox have committed (or are recovered durable truth).
+                // Hint before client cancellation; never dispatch without claim.
+                if (rpc_result.value->message_id != 0) NotifyGroupFanoutCommitted();
                 body["result"] = rpc_result.value->Created()
                     ? "created"
                     : "reused";

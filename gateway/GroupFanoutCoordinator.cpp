@@ -1,4 +1,5 @@
 #include "gateway/GroupFanoutCoordinator.h"
+#include "gateway/GroupFanoutWakeup.h"
 
 #include "common/logging/LogMacros.h"
 
@@ -87,6 +88,7 @@ void GroupFanoutCoordinator::Stop() {
     }
     if (worker_.joinable()) {
         worker_.request_stop();
+        if (GroupFanoutCommitWakeEnabled()) LocalGroupFanoutWakeState().cv.notify_all();
         worker_.join();
     }
     LOG_INFO("group fanout coordinator stopped" << ", gateway_id=" << options_.gateway_id);
@@ -101,6 +103,38 @@ std::size_t GroupFanoutCoordinator::RunOneIterationForTest() {
 }
 
 void GroupFanoutCoordinator::Run(std::stop_token token) {
+    if (GroupFanoutCommitWakeEnabled()) {
+        auto& wake = LocalGroupFanoutWakeState();
+        std::uint64_t observed = 0;
+        {
+            std::lock_guard<std::mutex> lock(wake.mutex);
+            observed = wake.generation;
+        }
+        unsigned full_batches = 0;
+        while (!token.stop_requested() && running_.load(std::memory_order_acquire)) {
+            const auto processed = RunOneIteration();
+            const bool full = processed >= std::min<std::size_t>(options_.batch_size, 256);
+            // Drain a bounded number of full batches before yielding. Work still
+            // uses the original durable claim, lease token and completion fence.
+            if (full && ++full_batches < 4) continue;
+            std::unique_lock<std::mutex> lock(wake.mutex);
+            if (full) {
+                wake.cv.wait_for(lock, std::chrono::milliseconds(25), [&] {
+                    return token.stop_requested() ||
+                           !running_.load(std::memory_order_acquire);
+                });
+            } else {
+                wake.cv.wait_for(lock, options_.recovery_interval, [&] {
+                    return token.stop_requested() ||
+                           !running_.load(std::memory_order_acquire) ||
+                           wake.generation != observed;
+                });
+            }
+            observed = wake.generation;
+            full_batches = 0;
+        }
+        return;
+    }
     while (!token.stop_requested() && running_.load(std::memory_order_acquire)) {
         RunOneIteration();
         const auto until = std::chrono::steady_clock::now() + options_.recovery_interval;

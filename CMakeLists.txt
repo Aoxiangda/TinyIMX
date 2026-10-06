@@ -1523,3 +1523,5 @@ include("${CMAKE_CURRENT_LIST_DIR}/cmake/TinyIMXPrivateChatAckBoundary.cmake")
 
 # RPC startup readiness and shutdown lifecycle regression.
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXRpcReadiness.cmake")
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXGroupFanoutWakeTests.cmake")
