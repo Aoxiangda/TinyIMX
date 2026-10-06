@@ -22,13 +22,13 @@ struct Fixture {
                 rpc::GroupDeliveryWorkRpcRecord w;
                 w.message.message_id=9007199254740993ULL;
                 w.delivery.message_id=i==invalid?0:w.message.message_id;
-                w.delivery.recipient_user_id=18446744073709551600ULL+i;
+                w.delivery.recipient_user_id=18446744073709550000ULL+i;
                 out.work_items.push_back(w);
             }
             return rpc::RpcResult<rpc::ClaimGroupMessageDeliveriesRpcResponse>::Success(out);
         };
         d.dispatch=[&](const auto& w) {
-            auto i=w.delivery.recipient_user_id-18446744073709551600ULL;
+            auto i=w.delivery.recipient_user_id-18446744073709550000ULL;
             events.push_back("d"+std::to_string(i));
             GroupFanoutDispatchResult out;out.gateway_id="target'\\bytes";
             out.status=i==0?GroupFanoutDispatchStatus::kSubmitted:
@@ -43,7 +43,7 @@ struct Fixture {
             return rpc::MessageMutationRpcCallResult::Success(out);
         };
         d.complete=[&,result](const auto& q,const auto&) {
-            ++single;events.push_back("c"+std::to_string(q.recipient_user_id-18446744073709551600ULL));
+            ++single;events.push_back("c"+std::to_string(q.recipient_user_id-18446744073709550000ULL));
             completed.push_back(q);return result();
         };
         if(!absent)d.complete_batch=[&,result](const auto& q,const auto& options) {
