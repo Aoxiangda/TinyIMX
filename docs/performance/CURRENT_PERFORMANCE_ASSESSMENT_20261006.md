@@ -117,3 +117,13 @@
 本次三组控制共1584消息（含warm144，measured1440）、70884实际收件及确认、12完整链648操作444断言正确。测量完整性新增25checks在本轮第一项实测，后续复用同SHA；每case捕获记录数与落盘一致，无buffer失败。每份阶段原raw、SQL窗口、SHA/恢复/Git审计均保留。结果见benchmark/local_capacity/results/group_confirm_batch128_20261006.json；完整本轮公开证据用export_final_group_optimization_evidence_20261006.sh封存，故意损坏native样本按两精确SHA原样保留，私有配置/Env/inspect/密钥/二进制排除。
 
 当前建议顺序：①在Gateway→Message Get调用增加严格默认OFF、指定收件人、同MID/UID/request_id哈希关联的client/server/repository边界，量化RPC残差和超时预算；②据证据调整同步串行/批量取数或调度，保持同delivery identity peer/ACK FIFO、auth/durable/lease；③同版本小群/大群混合、公平/热点/过载/故障/长稳态后才接受batch128+coalescing；④当前1万指定mix可保留，2万FAIL与5万全功能、文件并发/离线/AI闭环目标仍OPEN。尚无所有功能极致性能已完成的证据。
+
+## 2026-10-07最新边界诊断与poller对照
+
+同调用Get client/handler/repository诊断新增并默认为OFF（145 native及原application unit通过）：100人选择UID样本整RPC约12.8–13.1ms，handler仅2.5–2.7ms、Acquire含PING与Query各约1ms，约10.4ms在handler范围之外，包含准入、传输、调度和日志；不能认定纯网络或SQL唯一问题。四trace对照528消息23628收件核对及216操作148功能断言正确，但诊断扰动可达约4.9%且不估P99。
+
+随后默认poller1/2与有界4/8在相同新镜像/trace/batch128/coalescing1/deferred1上的真实ABBA完成：100人ALL mean OFF134.10/130.52ms、ON134.83/125.83ms，无稳定收益；65人OFF96.73/101.30、ON101.29/104.59ms。105 lifecycle/concurrent/default native检查与320有效fake RPC正确；再528消息23628收件、216操作148断言全部正确、0观察重复。524采样键完整client/handler/repo配对；Get RPC没有整体改善，handler/Acquire/Query反而增加。该poller候选不接受、不启用，原运行镜像5c2645/be8及完整配置恢复。
+
+B区间仅4秒资源观察有约8.43GiB可用内存、memory PSI0，无须清理；CPU有等待但未满载。恢复后只读CPU quota确认各容器无quota/cpuset限制、throttle0，但该快照不能归因全压测或宿主应用。保留每次失败（原诊断符号校验、namespace预检、native头文件名称、proc/root权限probe）与对应修复及无运行影响证据。完整新数据和否定结论见GROUP_GET_RPC_BOUNDARY_20261007.md、MESSAGE_RPC_POLLERS_20261007.md及results JSON。
+
+下一优先级是准确分解剩余RPC/工作队列等待并评估逐收件人durable往返与队列公平性，保持认证/租约/FIFO/最终确认；不得把增加线程或去掉持久化当极致优化。全部功能1万到5万、2万P99问题、50k混合/soak/故障及AI容量仍未完成。

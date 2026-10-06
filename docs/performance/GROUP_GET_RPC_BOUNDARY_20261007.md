@@ -39,3 +39,7 @@ bc8e5c4，四轮528消息23628真实收件及SQL状态3、216完整功能操作1
 诊断扰动：2人OFF32.262/32.487ms、ON31.787/31.113；16人OFF48.023/48.052、ON46.527/47.614；65人OFF97.744/97.555、ON98.695/94.591；100人OFF133.611/128.691、ON129.215/134.956。100人较慢ON对较快OFF差约+4.87%，不能声称诊断零成本或产品提速；新trace默认OFF。65/100max仍FAIL，不能将均值波动转成极致达标。
 
 实装grpcpp/server_builder.h明确SyncServerSettings默认num_cqs1/min_pollers1/max_pollers2，MIN/MAX为polling threads而非所有active handlers上限；MessageServiceServer当前未设置，与UserServiceServer已支持明确poller配置相比是一个有依据的候选入口。下一仅对照Message startup有界profile默认1/2与CQ1/min4/max8，不是扩业务worker或SQLpool，不放松deadline/durability。尚未证明profile能减少前6ms，不以理论代替实测。
+
+## 下一轮poller假设实测完成（否定）
+
+144268ae同镜像固定traceUID519862，对照默认poller1/2与4/8。105 native及320并发有效RPC、528消息23628收件确认、216功能操作148断言正确；524捕获键完整关联、0未配对。100人ALL OFF134.099/130.522ms，ON134.829/125.828ms，无稳定收益；65人也未改善。Get RPC均值OFF13.237/13.357→ON13.681/14.196ms，handler均值约2.46/2.53→3.62/4.08ms，不能把10ms residual简单归因唯一poller不足。原接受配置已完整恢复、候选不启用，详见MESSAGE_RPC_POLLERS_20261007.md；本文件前计划状态为历史记录，最终状态以这里和实际receipt为准。
