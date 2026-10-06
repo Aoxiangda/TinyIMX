@@ -1,3 +1,4 @@
+#include "common/db/GroupGetBoundaryTrace.h"
 #include "services/repository/MessageRepository.h"
 #include "common/runtime/BoundedCallerBatch.h"
 #include <atomic>
@@ -2420,6 +2421,7 @@ FindGroupDeliveryResult MessageRepository::FindGroupMessageDelivery(
     std::uint64_t message_id,
     std::uint64_t recipient_user_id
 ) {
+    diagnostics::GroupGetBoundaryTrace trace(3,message_id,recipient_user_id);
     FindGroupDeliveryResult result;
     if (pool_ == nullptr || message_id == 0 || recipient_user_id == 0) {
         result.status = MessageQueryStatus::kInvalidArgument;
@@ -2427,6 +2429,7 @@ FindGroupDeliveryResult MessageRepository::FindGroupMessageDelivery(
         return result;
     }
     auto connection = pool_->Acquire();
+    trace.Mark(1);
     if (!connection) {
         result.status = MessageQueryStatus::kStorageError;
         result.message = "group delivery lookup failed to acquire connection";
@@ -2437,7 +2440,10 @@ FindGroupDeliveryResult MessageRepository::FindGroupMessageDelivery(
         "FROM im_group_message_deliveries d JOIN im_group_messages m ON m.message_id=d.message_id "
         "WHERE d.message_id=" + std::to_string(message_id) +
         " AND d.recipient_user_id=" + std::to_string(recipient_user_id) + " LIMIT 1";
-    if (!connection->Query(sql, &query)) {
+    trace.Mark(2);
+    const bool queried=connection->Query(sql, &query);
+    trace.Mark(3);
+    if (!queried) {
         result.status = MessageQueryStatus::kStorageError;
         result.message = "group delivery lookup failed: " + connection->LastError();
         return result;
@@ -2446,6 +2452,7 @@ FindGroupDeliveryResult MessageRepository::FindGroupMessageDelivery(
         result.status = MessageQueryStatus::kSucceeded;
         result.found = false;
         result.message = "group delivery not found";
+        trace.Mark(4);trace.Result(static_cast<int>(result.status));
         return result;
     }
     if (query.rows.size() != 1 || !BuildGroupDeliveryWorkRecord(query.rows.front(), &result.record)) {
@@ -2456,6 +2463,7 @@ FindGroupDeliveryResult MessageRepository::FindGroupMessageDelivery(
     result.status = MessageQueryStatus::kSucceeded;
     result.found = true;
     result.message = "group delivery found";
+    trace.Mark(4);trace.Result(static_cast<int>(result.status));
     return result;
 }
 

@@ -1,3 +1,4 @@
+#include "common/db/GroupGetBoundaryTrace.h"
 #include "services/message/service/MessageServiceImpl.h"
 
 #include "common/observability/GrpcTracing.h"
@@ -446,12 +447,17 @@ grpc::Status MessageServiceImpl::GetGroupMessageDelivery(
 ) {
     if (!ValidateRpcArguments(context, request, response))
         return {grpc::StatusCode::INVALID_ARGUMENT, "invalid GetGroupMessageDelivery RPC arguments"};
+    diagnostics::GroupGetBoundaryTrace trace(2,request->message_id(),request->recipient_user_id(),request->meta().request_id(),request->meta().caller_instance());
+    diagnostics::GroupGetBoundaryTrace::Scope trace_scope(trace);
+    trace.Mark(1);
     if (!application_service_) return {grpc::StatusCode::UNAVAILABLE, "MessageService application service is unavailable"};
     const auto result = application_service_->GetGroupMessageDelivery(
         request->message_id(), request->recipient_user_id());
+    trace.Mark(2);
     if (!result.Succeeded()) return MapApplicationFailure(result.status, result.message);
     if (!result.found) return {grpc::StatusCode::NOT_FOUND, result.message};
     FillGroupDeliveryWork(result.record, response->mutable_work());
+    trace.Mark(3);trace.Result(0);
     return grpc::Status::OK;
 }
 

@@ -1,3 +1,4 @@
+#include "common/db/GroupGetBoundaryTrace.h"
 #include "services/rpc/MessageRpcClient.h"
 
 #include "common/observability/GrpcTracing.h"
@@ -493,25 +494,33 @@ MessageRpcClient::GetGroupMessageDelivery(
     const GetGroupMessageDeliveryRpcRequest& request,
     const RpcCallOptions& options
 ) const {
+    diagnostics::GroupGetBoundaryTrace trace(1,request.message_id,request.recipient_user_id,options.request_id,options.caller_instance);
     if (request.message_id == 0 || request.recipient_user_id == 0)
         return RpcResult<GetGroupMessageDeliveryRpcResponse>::Failure(RpcErrorCode::kInvalidArgument, "invalid GetGroupMessageDelivery request");
     if (options.remaining_timeout <= std::chrono::milliseconds::zero())
         return RpcResult<GetGroupMessageDeliveryRpcResponse>::Failure(RpcErrorCode::kDeadlineExceeded, "GetGroupMessageDelivery RPC budget exhausted");
     if (!endpoint_provider_) return RpcResult<GetGroupMessageDeliveryRpcResponse>::Failure(RpcErrorCode::kUnavailable, "MessageService endpoint provider is not configured");
     const auto endpoint = endpoint_provider_->Resolve(ServiceKind::kMessage);
+    trace.Mark(1);
     if (!endpoint || endpoint->target.empty()) return RpcResult<GetGroupMessageDeliveryRpcResponse>::Failure(RpcErrorCode::kUnavailable, "MessageService endpoint is unavailable");
     auto stub = GetOrCreateStub(*endpoint);
+    trace.Mark(2);
     if (!stub) return RpcResult<GetGroupMessageDeliveryRpcResponse>::Failure(RpcErrorCode::kUnavailable, "MessageService gRPC stub could not be created");
     tinyimx::message::v1::GetGroupMessageDeliveryRequest in;
     FillMeta(options, in.mutable_meta()); in.set_message_id(request.message_id); in.set_recipient_user_id(request.recipient_user_id);
     tinyimx::message::v1::GetGroupMessageDeliveryResponse out;
     grpc::ClientContext context; context.set_deadline(std::chrono::system_clock::now()+options.remaining_timeout);
+    trace.Mark(3);
     const auto status = stub->GetGroupMessageDelivery(&context, in, &out);
+    trace.Mark(4);trace.Result(static_cast<int>(status.error_code()));
     if (!status.ok()) { const auto mapped=MapGrpcStatus(status); return RpcResult<GetGroupMessageDeliveryRpcResponse>::Failure(mapped.code,mapped.message); }
     const auto work = ToRpcRecord(out.work());
-    if (!work || work->delivery.message_id != request.message_id || work->delivery.recipient_user_id != request.recipient_user_id)
+    if (!work || work->delivery.message_id != request.message_id || work->delivery.recipient_user_id != request.recipient_user_id) {
+        trace.Result(static_cast<int>(grpc::StatusCode::DATA_LOSS));
         return RpcResult<GetGroupMessageDeliveryRpcResponse>::Failure(RpcErrorCode::kDataLoss,"MessageService returned invalid group delivery");
+    }
     GetGroupMessageDeliveryRpcResponse response; response.work=*work;
+    trace.Mark(5);
     return RpcResult<GetGroupMessageDeliveryRpcResponse>::Success(std::move(response));
 }
 
