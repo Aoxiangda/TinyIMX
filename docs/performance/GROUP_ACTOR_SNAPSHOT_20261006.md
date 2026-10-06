@@ -11,3 +11,11 @@ TINYIMX_GROUP_ACTOR_SNAPSHOT_ENABLE严格1才启用，默认OFF保留原分支�
 计划：实际数据库原2SELECT/新JOIN逐字段比较，null/closed/invalid输入与所有lease回收；同nativeELF OFF/ON/ON/OFF四组四接口全结果比对和分接口wall，明确closed-loop不是万人容量。旧integration有直接DELETE清理，禁止在原业务库原样运行。使用现有自有记录的只读新测试，不覆写/删除数据，再仅group-service候选健康切换、全功能公开操作/权限/禁言/退群交叉回归、真实固定群页同ELF对照。原19、private configs、其他18服务、原Group镜像/Env/Cmd/HostConfig/mount恢复配置、SQLdurability1/1/1/0/0、宿主游戏和应用保留。每一步独立审计/Git和新证据stage。
 
 Redis935采样不支持盲扩池，commit长尾还未解决；本群候选是独立有界读往返优化，不宣称可以单独解决私聊20k P99或全部功能10k–50k目标。
+
+## 原生回归完成与打包失败（首轮）
+
+group-actor-snapshot-build-20261006三处TU/两archive副本/Group与native ELF全部编译链接成功。八组pool1/4同ELF OFF/ON/ON/OFF每组482检查，合3856 PASS；149逐字段group/member corpus、四接口完整行为611行/组全部等价（8组合4888），分页1/20/100/0/101与cursor边界、null/closed/zero参数、lease回收和本任务shutdown保持。3200逐接口样本原样保存；不是Gateway/10k–50k业务容量。
+
+原生时段波动仍在：pool1 GetGroup B2 P99 2.086436ms，高于A1 1.950633/A2 1.488125；Prepare B1 5.645296，高于A1 5.081486。不能挑pool4改善数字当四接口极致收益。成员列表两pool候选P99均较两控制低，仍只组件证据。必须下一真实端到端对照及交互回归。
+
+首镜像FROM使用物理image SHA，Docker将它误解为docker.io/library/sha256:...，metadata引用失败；未生成候选镜像，未部署，不是C++回归失败。原Dockerfile/log/全部成功对象及八组数据保存。已只读确认实际已有tinyimx/runtime:m21-final物理ID38dca459...与Group原镜像相同；新attempt2仅新目录引用此tag，build前后核对physicalID，无pull/SDK安装。7个成功产物在首失败后、复用前精确SHA冻结，不伪称为原编译前记录。新镜像v2/加载probe本提交时NOT_RUN。
