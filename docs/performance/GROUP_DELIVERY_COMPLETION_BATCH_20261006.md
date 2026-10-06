@@ -27,3 +27,33 @@ Full RPC candidate validation passed: 128 coordinator checks, 62 real loopback M
 Real control attempt1 deployed OFF and verified namedready/masks, but stopped before any measured or warm group requests: it waited for an INFO ready log suppressed by the unchanged Message WARN configuration. Candidate exited0. Its automatic restore recreated original images; the same false log gate prevented a receipt. A separate read-only audit then verified exact original full Env/health/HostConfig/mounts/ELFs,19healthy,16other identities,private config hashes/durability, and eight actual Group/history responses through both Gateways. It wrote an explicit original restoration receipt; no measured messages were sent. All failed logs/receipts remain.
 
 Control attempt2 uses the source-bound97PASS namedready guarantee (SetReady(true) occurs only after Registrar.Start succeeds), then the original real typed Gateway group/history probes before measuring. It preserves WARN, original business deadlines and all other flags. Old original restoration is confirmed by exact original NChealth and real typed probes; it does not require a log intentionally filtered by policy. This repairs the control's readiness observation, not production performance.
+
+## Real cross-Gateway completion ABBA outcome (control2, d936fb9)
+
+The controlled OFF/ON/ON/OFF run completed 528 messages, 23,628 exact recipient wire/SQL confirmations with zero observed duplicates, plus 216 public functional-chain operations and 148 assertions. Every case contains 3 warmups and 30 measured messages per unchanged owned group. Sender ACK, first actual wire arrival, ALL actual recipient arrivals and SQL confirmation observation upper are separate quantities. Thirty messages do not establish population P99 or 10k-50k capacity.
+
+| Group size | OFF A1 ALL mean/max ms | ON B1 ALL mean/max ms | ON B2 ALL mean/max ms | OFF A2 ALL mean/max ms |
+|---|---:|---:|---:|---:|
+| 2 | 45.123/58.509 | 39.842/43.987 | 40.093/45.466 | 40.513/46.315 |
+| 16 | 81.108/108.522 | 80.244/94.923 | 74.648/95.153 | 78.370/101.073 |
+| 65 | 236.939/332.421 | 217.133/259.060 | 204.933/273.359 | 211.272/326.190 |
+| 100 | 564.264/696.290 | 352.113/443.249 | 350.801/424.875 | 484.475/607.331 |
+
+For 100 members, even the slower ON mean is 27.321% below the faster OFF mean. For 65 members, ON overlaps A2 OFF; do not claim a consistent endpoint improvement for this size. Both 65 and 100 still FAIL the original 100ms gate. OFF 16-member maxima108.522/101.073ms FAIL are retained. No full-feature extreme acceptance.
+
+| Case | Sampled full64 batches | Physical completion RPCs/batch | Claim mean ms | Dispatch mean ms | Completion mean ms | Full iteration mean ms | Thread CPU mean ms |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| A1 | 40 | 64 | 33.760 | 65.214 | 329.265 | 429.617 | 50.410 |
+| B1 | 66 | 1 | 33.236 | 63.676 | 44.876 | 142.463 | 21.433 |
+| B2 | 66 | 1 | 31.901 | 64.788 | 34.052 | 131.407 | 21.933 |
+| A2 | 39 | 64 | 33.110 | 66.547 | 312.311 | 413.223 | 50.273 |
+
+The completion reduction is directly observed: 64 physical RPCs to1, completion312-329ms to34-45ms, while claim32-34ms and dispatch64-67ms remain. This trace is bounded at8events/s and includes warmups; OFF/ON sample counts differ, so these are diagnostic sample means, not overall percentiles. A full batch includes synchronous completion after submitting recipients; ALL wire latency must not be computed by adding nested trace stages. The SQL polling upper includes probe execution and is not exact final ACK commit time.
+
+Remaining measured peer task queue age means are21ms (65members) and39ms (100members) in ON, followed by4-6ms durable-read RPC before wire submission. ACK tasks sample queue56-72ms plus6ms reads and13-17ms durable confirms after wire. Those costs and claim locks can overlap fanout. Neither RAM shortage nor fsync alone is established as the sole cause.
+
+Next source candidate: each valid fanout item currently calls GatewayRouteResolver::Resolve -> OnlineStatusCache::GetOnlineStatus -> Acquire with original PING and GET. A bounded per-iteration read can amortize those repeated network trips. It must preserve original JSON uint64 deserialization, per-key wrong-type/invalid/missing results, input order, real local connection checks, current peer discovery and actual persistent recipient validation; it must never retain an online snapshot across iterations or drop receiver ACK checks. Dispatch64ms is measured, but the exact route share has not yet been separately measured and no gain is presumed.
+
+Original runtime restored: Gateways image5c2645 / originalELFe687315; Message imagebe8b5d / originalELF254873. Latest A CID60ea0611b4be2e6b5c0113d39a95b69d553f9f5eae49f012faa052f4a159103f, B CID61586053f09f0715b450a561d7e58ef648b1076636b025608b3a885c2cfe3cf4, Message CID94fc9f6661316819b47249010c114a93dd598bca3b270451c6e95591aba2afe6. Exact full Env/HostConfig/Binds/health/mounts/config hashes and original durability1/1/1/0/0 are restored; other16 instances unchanged, owned clients closed, host applications retained. Three candidate Message stops exited0 and actual namedreadiness/signal-thread masks passed. Receipt: .local/codex/group-completion-batch-control-20261006-attempt2/restore-summary.json. Candidate is retained for further controlled optimization and has not replaced the accepted long-running baseline.
+
+Raw requests, sampled stages, startup probes, first failed INFO gate and all build/native failures remain in immutable guest stages. Local complete public summary/requests/phases/restoration and hashed numerical analysis are under evidence/conversation-unread-batch-20261006/group-completion-real-abba-20261006. Two ad-hoc read errors (mixed-event claimed key and assumed file path) were corrected using event-type selection and rg --files; they did not change product code or measurements. Full public evidence export additionally covers partial-drain, all File attempts and completion stages; private inputs/binaries remain on the guest.
