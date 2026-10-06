@@ -63,3 +63,23 @@ ACK排队ON30–45ms，对OFF92–100ms减少，但ON Get约20.6–20.8ms/Confir
 全功能只读审查另确认AI是compose ai profile的一次性CLI，当前19常驻没有AI容器；原config仍host.docker.internal:11434/qwen3:8b，实际Ubuntu localhost11434已有qwen2.5:7b。现有socat及用户systemd可用，下一需审计可恢复的项目网络桥接和精确模型配置后做AI/MCP全链，不在其他性能测量时推理。MCP会话/history源码maximum50已修正，不能重复修改旧历史报告的100问题。原生产MCP static principal仍需核验，不擅自把身份替换为测试用户。
 
 准备/审查错误均保留：只读尝试匹配不存在运行AI容器时向docker inspect传空列表；一个复杂远程SQL shell引号在PowerShell解析前失败，后使用独立只读ScriptPath完成；数次源码通配Literal/旧路径由rg或find纠正。没有guest数据库/配置/代码影响，避免下一轮重复这种路径/工具组合错误。
+
+
+## 固定窗口 SQL、池与文件等待诊断已完成
+
+控制1bcda00，group-runtime-sql-diagnostic-20261006：同818bea35 Gateway/f9094e0f Message，partial/route/completion/claim/recipient/defer/commitwake均固定1，message-runtime仅A1=0/B1=1，现有池诊断两轮均1。没有数据库SET、清零、消费者修改、扩池/增线程或重新编译。两群65/100，每窗33消息（3warm+30测量），总132消息/10758实际wire与SQL状态3、108完整功能操作74断言、0观察重复。原3秒窗口/SQL8秒观察上界保持。只有一OFF一ON，不能估ABBA收益、总体P99或万人容量。
+
+| case | size | ALL mean ms | 单条确认 SQL count | 确认 SQL mean ms | durable Get SQL mean ms | biased pool samples | free_before=0 | slot mean ms | Acquire total mean ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A1 | 65 | 111.601 | 2112 | 6.320 | 0.597 | 84 | 0 | 0.022 | 0.796 |
+| A1 | 100 | 283.386 | 3267 | 6.062 | 0.637 | 124 | 0 | 0.019 | 0.791 |
+| B1 | 65 | 112.241 | 2111 | 10.632 | 0.733 | 70 | 1 | 0.258 | 1.300 |
+| B1 | 100 | 262.541 | 3267 | 11.160 | 0.946 | 102 | 8 | 1.127 | 2.549 |
+
+100人原控制4worker确认3267 SQL平均6.062ms，现有消息8worker同样3267 SQL平均11.160ms；单条确认累计19.804/36.460秒，是该窗口已捕获群SQL耗时的主要部分。这是并行语句累计时间，不等于端到端秒数，不把SUM_LOCK_TIME误称精确InnoDB行锁时间。全局Innodb_row_lock_time增量1478/3129ms，waits137/310；innodb_log_file累计4.228/3.320秒、binlog4.231/2.995秒，data_fsyncs3300/2288，os_log_fsync2770/1720。事件计数包含多种文件操作，不能当作一条SQL对应一次fsync，也不能直接归因为唯一原因。更并发时实际group commit已经减少物理flush，但每人独立确认、锁竞争和下游调度仍在。
+
+窗口内池空闲耗尽样本A1两窗均0，B1 65人为1/70、100人为8/102；100人slot均值1.127ms、最大26.025ms，Acquire总均值2.549ms（OFF0.791）。存在池等待，但不是所有约20ms Get RPC或全部ALL延迟的充分解释，不能单凭少量限频样本扩大池。durable Get SQL100人OFF0.637/ON0.946ms，也不能把约20ms RPC墙钟全归给SELECT本身；剩余跨RPC调度/等待边界仍未逐请求测量。每池<=8/s，包含warm与其他Message调用，原始样本/时间边界和每项mean/max均保留。P_S前后采集非原子，B1 65确认计数2111对2112收件差1，可能采样与语句事件完成边界不同；不篡改计数，不把该差异当丢消息，所有wire+最终SQL逐人证据为准。
+
+下一候选针对已经明确的每收件独立确认提交成本，审查有界并发合并；仍保留原Gateway durableGet在Tracker ACK之前、已登记attempt seq、认证UID、确认status<>3、每个RPC自己的affected_rows、0行幂等成功、持久化1/1/1/0/0和不确定提交不自动回放。不能简单用总affected_rows发给每个请求。先真实独立SQL/并发/重复/缺失/故障/关闭验证，再同镜像单变量实际对照与全功能交叉，候选尚未实现或验收。
+
+最终原Gateway5c2645/e687+Messagebe8/2548及全Env/HostConfig/Health/Mounts恢复，其他16实例/配置/持久化和主机应用保持；当前恢复实例以group-runtime-sql-diagnostic-20261006/restore-summary.json为准，旧receipt仅历史。当前全部功能目标仍OPEN：20k混合FAIL、50k高频全部功能、文件真实并发传输、离线恢复/故障长稳态、AI原profile地址模型/主体及CPU推理均未达标。本轮只读误读助手本地路径，未写目标；实际tracked helper由rg找到后读取，错误保留审计，之后不猜路径。

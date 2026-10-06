@@ -169,3 +169,10 @@ route/completion/claim固定1，仅partial0/1/1/0，528消息/23628真实收件�
 严格默认OFF候选04a95c6复用既有message_executor，只有群peer/ACK两个提交入口变化，其余执行/授权/序号/SQL/类layout逐字节保持，无新增线程。144原生隔离/FIFO/原tracker/拒绝/关闭检查通过。真实同镜像0/1/1/0，528消息/23628真实收件与SQL状态3、216完整交互操作148断言、0观察重复正确。100人ON221.367/240.540ms，OFF252.403/278.067，保守均值改善4.700%；65人ON113.247/123.273ms没有稳定收益，65/100全部FAIL保留，30样本不估P99。原运行/全配置/其他16/持久化/宿主应用已恢复，以group-message-runtime-control-20261006/restore-summary.json为准。完整复盘GROUP_MESSAGE_RUNTIME_20261006.md。
 
 ACK抽样排队92–100→30–45ms，但原durableGet/Confirm RPC分别约6/11→21/25ms，说明并发成本转移下游；不能继续盲扩线程或改低持久化。下一当前Message现成池阶段诊断+Performance Schema窗口delta，准确定位slot/PING/SQL/锁/提交。只读累计SQL平均Get0.674/Confirm6.774ms是历史提示，不代替本次阶段证明。私聊与群共享message执行器后的10k混合、2万FAIL复测，以及全部50k/各功能高频/文件并发/离线故障/AI目标仍OPEN。
+
+
+## 群收件确认提交成本已由固定窗口验证（当前）
+
+1bcda00只开现有池诊断+只读Performance Schema前后增量，两群/两模式共132消息10758真实收件确认、108全功能操作74断言正确。100人每33消息仍3267次单条确认SQL，4worker均值6.062ms/8worker11.160ms；durable SELECT仅0.637/0.946ms，不能把整个Get RPC墙钟归给SQL本身。更并发100人池0空闲8/102偏置样本，slot均值1.127ms，存在但不足以解释全部延迟；锁等待增量1478→3129ms，同时redo/binlog事件等待实际存在，不能把计数直接等同每条fsync或认定唯一瓶颈。完整方法、窗口原值、采样限制见GROUP_MESSAGE_RUNTIME_20261006.md。
+
+下一先优化有界收件确认合并提交，保留每请求原0/1 affected_rows、缺失/重复/状态/序号/鉴权/持久化/不确定提交语义，先真实独立SQL和并发失败回归再入口对照。全部功能范围不缩减，低频正确不算容量；20k混合FAIL、50k所有功能/文件并发/离线故障/AI仍OPEN。已完整恢复原运行，当前实例receipt为group-runtime-sql-diagnostic-20261006/restore-summary.json。
