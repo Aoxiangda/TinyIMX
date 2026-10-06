@@ -1,0 +1,2620 @@
+{
+  "control_head": "5f05f4cc544e48900d7ee1ee5cfaa08b6c3aa887",
+  "result": {
+    "head": "5f05f4cc544e48900d7ee1ee5cfaa08b6c3aa887",
+    "status": "GROUP_CONFIRM_COALESCE_REAL_ABBA_COMPLETE",
+    "limits": "Fixed4sameownedgroups,100realconnections,30measuredmsgs/size/case; notpopulationP99/10k50kcapacity; bothmodesidenticalboundedtrace; nooverall100msgateclaimed",
+    "messages": 528,
+    "actual_recipient_confirmations": 23628,
+    "functional_operations": 216,
+    "functional_checks": 148,
+    "conservative_mean_gain_percent": {
+      "2": -13.734807132516138,
+      "16": -5.190200930004311,
+      "65": -4.689927128485779,
+      "100": -2.688446816480767
+    }
+  },
+  "cases": [
+    {
+      "case": "A1",
+      "mode": "off",
+      "sizes": [
+        {
+          "size": 2,
+          "ack_mean_ms": 22.195993066666656,
+          "all_mean_ms": 37.557333033333336,
+          "all_max_ms": 44.251538,
+          "confirmation_update_sql": [
+            {
+              "digest": "6b62b4491370e3013610f1ca7f1db3b905138e8ec2a51dac0021c90afb2e1a1f",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE `message_id` = ? AND `recipient_user_id` = ? AND `delivery_status` != ?",
+              "count": 33,
+              "total_ms": 144.821424,
+              "mean_ms": 4.388528,
+              "lock_ms": 3.464,
+              "errors": 0,
+              "affected": 33,
+              "examined": 33
+            }
+          ]
+        },
+        {
+          "size": 16,
+          "ack_mean_ms": 26.471543600000008,
+          "all_mean_ms": 61.19295793333334,
+          "all_max_ms": 111.798087,
+          "confirmation_update_sql": [
+            {
+              "digest": "6b62b4491370e3013610f1ca7f1db3b905138e8ec2a51dac0021c90afb2e1a1f",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE `message_id` = ? AND `recipient_user_id` = ? AND `delivery_status` != ?",
+              "count": 495,
+              "total_ms": 3642.774013,
+              "mean_ms": 7.359139420202021,
+              "lock_ms": 324.975,
+              "errors": 0,
+              "affected": 495,
+              "examined": 495
+            }
+          ]
+        },
+        {
+          "size": 65,
+          "ack_mean_ms": 39.0010261,
+          "all_mean_ms": 130.36809490000002,
+          "all_max_ms": 196.949686,
+          "confirmation_update_sql": [
+            {
+              "digest": "6b62b4491370e3013610f1ca7f1db3b905138e8ec2a51dac0021c90afb2e1a1f",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE `message_id` = ? AND `recipient_user_id` = ? AND `delivery_status` != ?",
+              "count": 2112,
+              "total_ms": 24801.274522,
+              "mean_ms": 11.743027709280303,
+              "lock_ms": 2189.335,
+              "errors": 0,
+              "affected": 2112,
+              "examined": 2112
+            }
+          ]
+        },
+        {
+          "size": 100,
+          "ack_mean_ms": 56.4562943,
+          "all_mean_ms": 261.2004134333334,
+          "all_max_ms": 388.006376,
+          "confirmation_update_sql": [
+            {
+              "digest": "6b62b4491370e3013610f1ca7f1db3b905138e8ec2a51dac0021c90afb2e1a1f",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE `message_id` = ? AND `recipient_user_id` = ? AND `delivery_status` != ?",
+              "count": 3265,
+              "total_ms": 34726.735072,
+              "mean_ms": 10.636059746401227,
+              "lock_ms": 2259.096,
+              "errors": 0,
+              "affected": 3266,
+              "examined": 3266
+            }
+          ]
+        }
+      ],
+      "confirm_samples": {}
+    },
+    {
+      "case": "B1",
+      "mode": "on",
+      "sizes": [
+        {
+          "size": 2,
+          "ack_mean_ms": 22.739570066666666,
+          "all_mean_ms": 37.712344699999996,
+          "all_max_ms": 45.183169,
+          "confirmation_update_sql": [
+            {
+              "digest": "6b62b4491370e3013610f1ca7f1db3b905138e8ec2a51dac0021c90afb2e1a1f",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE `message_id` = ? AND `recipient_user_id` = ? AND `delivery_status` != ?",
+              "count": 33,
+              "total_ms": 146.867609,
+              "mean_ms": 4.450533606060606,
+              "lock_ms": 2.228,
+              "errors": 0,
+              "affected": 33,
+              "examined": 33
+            }
+          ]
+        },
+        {
+          "size": 16,
+          "ack_mean_ms": 27.335652200000002,
+          "all_mean_ms": 58.23737496666667,
+          "all_max_ms": 72.692274,
+          "confirmation_update_sql": [
+            {
+              "digest": "6b62b4491370e3013610f1ca7f1db3b905138e8ec2a51dac0021c90afb2e1a1f",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE `message_id` = ? AND `recipient_user_id` = ? AND `delivery_status` != ?",
+              "count": 20,
+              "total_ms": 111.006157,
+              "mean_ms": 5.55030785,
+              "lock_ms": 17.868,
+              "errors": 0,
+              "affected": 20,
+              "examined": 20
+            },
+            {
+              "digest": "716de1a8d85ec0eda81d2fb0e2d8206ec3954a42be25064520fa446c810a1a2e",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE ( `message_id` , `recipient_user_id` ) IN ( (...) /* , ... */ ) AND `delivery_status` != ?",
+              "count": 81,
+              "total_ms": 219.674511,
+              "mean_ms": 2.712031,
+              "lock_ms": 2.516,
+              "errors": 0,
+              "affected": 475,
+              "examined": 475
+            }
+          ]
+        },
+        {
+          "size": 65,
+          "ack_mean_ms": 39.93811,
+          "all_mean_ms": 119.47832426666665,
+          "all_max_ms": 149.102779,
+          "confirmation_update_sql": [
+            {
+              "digest": "6b62b4491370e3013610f1ca7f1db3b905138e8ec2a51dac0021c90afb2e1a1f",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE `message_id` = ? AND `recipient_user_id` = ? AND `delivery_status` != ?",
+              "count": 30,
+              "total_ms": 429.27207,
+              "mean_ms": 14.309069,
+              "lock_ms": 275.004,
+              "errors": 0,
+              "affected": 30,
+              "examined": 30
+            },
+            {
+              "digest": "716de1a8d85ec0eda81d2fb0e2d8206ec3954a42be25064520fa446c810a1a2e",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE ( `message_id` , `recipient_user_id` ) IN ( (...) /* , ... */ ) AND `delivery_status` != ?",
+              "count": 199,
+              "total_ms": 947.939662,
+              "mean_ms": 4.763515889447236,
+              "lock_ms": 5.738,
+              "errors": 0,
+              "affected": 2082,
+              "examined": 2082
+            }
+          ]
+        },
+        {
+          "size": 100,
+          "ack_mean_ms": 54.7015828,
+          "all_mean_ms": 247.59015646666663,
+          "all_max_ms": 299.913058,
+          "confirmation_update_sql": [
+            {
+              "digest": "6b62b4491370e3013610f1ca7f1db3b905138e8ec2a51dac0021c90afb2e1a1f",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE `message_id` = ? AND `recipient_user_id` = ? AND `delivery_status` != ?",
+              "count": 57,
+              "total_ms": 384.672912,
+              "mean_ms": 6.748647578947368,
+              "lock_ms": 111.15,
+              "errors": 0,
+              "affected": 57,
+              "examined": 57
+            },
+            {
+              "digest": "716de1a8d85ec0eda81d2fb0e2d8206ec3954a42be25064520fa446c810a1a2e",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE ( `message_id` , `recipient_user_id` ) IN ( (...) /* , ... */ ) AND `delivery_status` != ?",
+              "count": 324,
+              "total_ms": 1529.773656,
+              "mean_ms": 4.72152362962963,
+              "lock_ms": 105.004,
+              "errors": 0,
+              "affected": 3210,
+              "examined": 3210
+            }
+          ]
+        }
+      ],
+      "confirm_samples": {
+        "count": 140,
+        "requests_mean": 8.178571428571429,
+        "max_requests": 31,
+        "failed_samples": 0,
+        "acquire_mean_ms": 1.018392857142857,
+        "begin_mean_ms": 0.7021785714285714,
+        "query_mean_ms": 4.835957142857143,
+        "update_mean_ms": 4.468985714285714,
+        "commit_mean_ms": 4.254207142857142,
+        "total_mean_ms": 15.389157142857142
+      }
+    },
+    {
+      "case": "B2",
+      "mode": "on",
+      "sizes": [
+        {
+          "size": 2,
+          "ack_mean_ms": 23.0826745,
+          "all_mean_ms": 38.05934616666666,
+          "all_max_ms": 44.296101,
+          "confirmation_update_sql": [
+            {
+              "digest": "6b62b4491370e3013610f1ca7f1db3b905138e8ec2a51dac0021c90afb2e1a1f",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE `message_id` = ? AND `recipient_user_id` = ? AND `delivery_status` != ?",
+              "count": 33,
+              "total_ms": 145.235589,
+              "mean_ms": 4.401078454545455,
+              "lock_ms": 4.031,
+              "errors": 0,
+              "affected": 33,
+              "examined": 33
+            }
+          ]
+        },
+        {
+          "size": 16,
+          "ack_mean_ms": 25.1002231,
+          "all_mean_ms": 53.834704933333335,
+          "all_max_ms": 71.487141,
+          "confirmation_update_sql": [
+            {
+              "digest": "6b62b4491370e3013610f1ca7f1db3b905138e8ec2a51dac0021c90afb2e1a1f",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE `message_id` = ? AND `recipient_user_id` = ? AND `delivery_status` != ?",
+              "count": 18,
+              "total_ms": 109.597751,
+              "mean_ms": 6.088763944444445,
+              "lock_ms": 37.918,
+              "errors": 0,
+              "affected": 18,
+              "examined": 18
+            },
+            {
+              "digest": "716de1a8d85ec0eda81d2fb0e2d8206ec3954a42be25064520fa446c810a1a2e",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE ( `message_id` , `recipient_user_id` ) IN ( (...) /* , ... */ ) AND `delivery_status` != ?",
+              "count": 75,
+              "total_ms": 204.358845,
+              "mean_ms": 2.7247846,
+              "lock_ms": 2.261,
+              "errors": 0,
+              "affected": 477,
+              "examined": 477
+            }
+          ]
+        },
+        {
+          "size": 65,
+          "ack_mean_ms": 33.90671636666667,
+          "all_mean_ms": 104.87824736666666,
+          "all_max_ms": 142.380891,
+          "confirmation_update_sql": [
+            {
+              "digest": "6b62b4491370e3013610f1ca7f1db3b905138e8ec2a51dac0021c90afb2e1a1f",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE `message_id` = ? AND `recipient_user_id` = ? AND `delivery_status` != ?",
+              "count": 39,
+              "total_ms": 379.939457,
+              "mean_ms": 9.74203735897436,
+              "lock_ms": 181.113,
+              "errors": 0,
+              "affected": 39,
+              "examined": 39
+            },
+            {
+              "digest": "716de1a8d85ec0eda81d2fb0e2d8206ec3954a42be25064520fa446c810a1a2e",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE ( `message_id` , `recipient_user_id` ) IN ( (...) /* , ... */ ) AND `delivery_status` != ?",
+              "count": 204,
+              "total_ms": 829.272381,
+              "mean_ms": 4.065060691176471,
+              "lock_ms": 13.904,
+              "errors": 0,
+              "affected": 2073,
+              "examined": 2073
+            }
+          ]
+        },
+        {
+          "size": 100,
+          "ack_mean_ms": 47.399630800000004,
+          "all_mean_ms": 223.35979376666668,
+          "all_max_ms": 275.072651,
+          "confirmation_update_sql": [
+            {
+              "digest": "6b62b4491370e3013610f1ca7f1db3b905138e8ec2a51dac0021c90afb2e1a1f",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE `message_id` = ? AND `recipient_user_id` = ? AND `delivery_status` != ?",
+              "count": 54,
+              "total_ms": 341.990861,
+              "mean_ms": 6.333164092592592,
+              "lock_ms": 106.526,
+              "errors": 0,
+              "affected": 54,
+              "examined": 54
+            },
+            {
+              "digest": "716de1a8d85ec0eda81d2fb0e2d8206ec3954a42be25064520fa446c810a1a2e",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE ( `message_id` , `recipient_user_id` ) IN ( (...) /* , ... */ ) AND `delivery_status` != ?",
+              "count": 336,
+              "total_ms": 1411.281004,
+              "mean_ms": 4.200241083333333,
+              "lock_ms": 91.431,
+              "errors": 0,
+              "affected": 3213,
+              "examined": 3213
+            }
+          ]
+        }
+      ],
+      "confirm_samples": {
+        "count": 133,
+        "requests_mean": 7.503759398496241,
+        "max_requests": 25,
+        "failed_samples": 0,
+        "acquire_mean_ms": 0.8814511278195489,
+        "begin_mean_ms": 0.5885639097744361,
+        "query_mean_ms": 3.796654135338346,
+        "update_mean_ms": 3.684563909774436,
+        "commit_mean_ms": 3.7912406015037594,
+        "total_mean_ms": 12.824684210526314
+      }
+    },
+    {
+      "case": "A2",
+      "mode": "off",
+      "sizes": [
+        {
+          "size": 2,
+          "ack_mean_ms": 20.426809133333332,
+          "all_mean_ms": 33.46323533333333,
+          "all_max_ms": 44.501322,
+          "confirmation_update_sql": [
+            {
+              "digest": "6b62b4491370e3013610f1ca7f1db3b905138e8ec2a51dac0021c90afb2e1a1f",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE `message_id` = ? AND `recipient_user_id` = ? AND `delivery_status` != ?",
+              "count": 33,
+              "total_ms": 127.709803,
+              "mean_ms": 3.8699940303030305,
+              "lock_ms": 3.741,
+              "errors": 0,
+              "affected": 33,
+              "examined": 33
+            }
+          ]
+        },
+        {
+          "size": 16,
+          "ack_mean_ms": 25.586136099999997,
+          "all_mean_ms": 55.36387843333335,
+          "all_max_ms": 73.773465,
+          "confirmation_update_sql": [
+            {
+              "digest": "6b62b4491370e3013610f1ca7f1db3b905138e8ec2a51dac0021c90afb2e1a1f",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE `message_id` = ? AND `recipient_user_id` = ? AND `delivery_status` != ?",
+              "count": 495,
+              "total_ms": 3771.757729,
+              "mean_ms": 7.619712583838384,
+              "lock_ms": 312.788,
+              "errors": 0,
+              "affected": 495,
+              "examined": 495
+            }
+          ]
+        },
+        {
+          "size": 65,
+          "ack_mean_ms": 33.26755303333333,
+          "all_mean_ms": 114.12590259999999,
+          "all_max_ms": 153.686216,
+          "confirmation_update_sql": [
+            {
+              "digest": "6b62b4491370e3013610f1ca7f1db3b905138e8ec2a51dac0021c90afb2e1a1f",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE `message_id` = ? AND `recipient_user_id` = ? AND `delivery_status` != ?",
+              "count": 2110,
+              "total_ms": 25372.497517,
+              "mean_ms": 12.024880339810426,
+              "lock_ms": 3888.259,
+              "errors": 0,
+              "affected": 2112,
+              "examined": 2112
+            }
+          ]
+        },
+        {
+          "size": 100,
+          "ack_mean_ms": 48.27418736666667,
+          "all_mean_ms": 241.10809359999996,
+          "all_max_ms": 299.600927,
+          "confirmation_update_sql": [
+            {
+              "digest": "6b62b4491370e3013610f1ca7f1db3b905138e8ec2a51dac0021c90afb2e1a1f",
+              "text": "UPDATE `im_group_message_deliveries` SET `delivery_status` = ? , `delivered_at` = COALESCE ( `delivered_at` , NOW (?) ) , `lease_owner` = ? , `lease_token` = ? , `lease_until` = ? , `last_error_code` = ? WHERE `message_id` = ? AND `recipient_user_id` = ? AND `delivery_status` != ?",
+              "count": 3267,
+              "total_ms": 32517.235122,
+              "mean_ms": 9.953240012855831,
+              "lock_ms": 2436.31,
+              "errors": 0,
+              "affected": 3266,
+              "examined": 3267
+            }
+          ]
+        }
+      ],
+      "confirm_samples": {}
+    }
+  ],
+  "biased_task_analysis_corrected": {
+    "head": "5f05f4cc544e48900d7ee1ee5cfaa08b6c3aa887",
+    "corrected_task_field_mapping": true,
+    "cases": [
+      {
+        "case": "A1",
+        "task_samples": {
+          "1": {
+            "biased_samples": 130,
+            "dispatch_age_mean_ms": 5.467030769230769,
+            "get_rpc_mean_ms": 8.585023076923077,
+            "total_mean_ms": 8.792792307692308,
+            "thread_cpu_mean_ms": 0.5771846153846154
+          },
+          "2": {
+            "biased_samples": 66,
+            "dispatch_age_mean_ms": 48.5865,
+            "get_rpc_mean_ms": 21.46422727272727,
+            "confirm_rpc_mean_ms": 27.567227272727273,
+            "total_mean_ms": 49.129045454545455,
+            "thread_cpu_mean_ms": 0.8003787878787879
+          }
+        }
+      },
+      {
+        "case": "B1",
+        "task_samples": {
+          "1": {
+            "biased_samples": 134,
+            "dispatch_age_mean_ms": 8.734611940298507,
+            "get_rpc_mean_ms": 7.633753731343283,
+            "total_mean_ms": 7.808962686567164,
+            "thread_cpu_mean_ms": 0.5723208955223881
+          },
+          "2": {
+            "biased_samples": 62,
+            "dispatch_age_mean_ms": 69.5296935483871,
+            "get_rpc_mean_ms": 12.259096774193548,
+            "confirm_rpc_mean_ms": 39.07119354838709,
+            "total_mean_ms": 51.40145161290322,
+            "thread_cpu_mean_ms": 0.7702258064516129
+          }
+        }
+      },
+      {
+        "case": "B2",
+        "task_samples": {
+          "1": {
+            "biased_samples": 135,
+            "dispatch_age_mean_ms": 8.068318518518518,
+            "get_rpc_mean_ms": 6.300681481481481,
+            "total_mean_ms": 6.417525925925926,
+            "thread_cpu_mean_ms": 0.5165407407407407
+          },
+          "2": {
+            "biased_samples": 59,
+            "dispatch_age_mean_ms": 49.556627118644066,
+            "get_rpc_mean_ms": 9.480254237288136,
+            "confirm_rpc_mean_ms": 33.043372881355936,
+            "total_mean_ms": 42.591389830508476,
+            "thread_cpu_mean_ms": 0.7739322033898305
+          }
+        }
+      },
+      {
+        "case": "A2",
+        "task_samples": {
+          "1": {
+            "biased_samples": 141,
+            "dispatch_age_mean_ms": 8.227609929078014,
+            "get_rpc_mean_ms": 8.158255319148935,
+            "total_mean_ms": 8.319326241134751,
+            "thread_cpu_mean_ms": 0.4969858156028369
+          },
+          "2": {
+            "biased_samples": 54,
+            "dispatch_age_mean_ms": 40.31344444444444,
+            "get_rpc_mean_ms": 19.2837962962963,
+            "confirm_rpc_mean_ms": 27.00937037037037,
+            "total_mean_ms": 46.40664814814815,
+            "thread_cpu_mean_ms": 0.7296666666666667
+          }
+        }
+      }
+    ]
+  },
+  "raw_sha256": {
+    "A1-all-requests.json": "cefcaae06e8cd251f5481d95137b043d2351c069c14c31b79a3099e6da07e01d",
+    "A1-confirm-phases.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+    "A1-fanout-phases.json": "a9e0453cc3ed156e30bb9abf2b6dc7d72af221663bbcb8ab267f8d43706a1e1e",
+    "A1-s100-sql-after.json": "c5a46d8df99f63c86a69c5350a3b439cbda80055b41accd1c2af79670eb945e9",
+    "A1-s100-sql-before.json": "b9a54017d1321c4671742b7b40d1204139cc7771a886c351860c3d2c39cce099",
+    "A1-s16-sql-after.json": "f1c9cb3b5dc084b7f11dd23fdddbb3d00a850a176349991e50152d71bc428d02",
+    "A1-s16-sql-before.json": "dd8373124611715dde8dc00c65be4093c1764284fc3bb77302e680b62b047cd7",
+    "A1-s2-sql-after.json": "6ea5aa31f4d56d4ac2e1b5876901b01efcd68423d25ba8e38f00633519235d5a",
+    "A1-s2-sql-before.json": "43e6d1535b8c98993137973f546bcd76af6d03b93310b21be660b324486a79db",
+    "A1-s65-sql-after.json": "98608f822b9b8e0b3db4b0a3f67791599fe95c722e5a8974924987f07f2ea31b",
+    "A1-s65-sql-before.json": "b71096248806f1dec96f430c0d8522efc9c21ca2044265f9f3e0f152e99e9f76",
+    "A2-all-requests.json": "47f38f82a32b46dcbccb8ba5143d44146b13e34cfea9d8ef2efd231dd87e1ce6",
+    "A2-confirm-phases.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+    "A2-fanout-phases.json": "6e047f5a182dd743d4f2dfab10746d9d0bb99d5ac8b42423471983fe554fd5ff",
+    "A2-s100-sql-after.json": "ee47f52496781e47c61834fc2d7dcdfc5215de64bba08ce5e104f5303fb83c86",
+    "A2-s100-sql-before.json": "92fb74e188d5b9002c3522f546660d3d2e8abb6000ff0f2227515b1de73c7749",
+    "A2-s16-sql-after.json": "e881e25976e34a35a565b7a778043806246b3a43c6baa28f0a1cb9e0877d6c19",
+    "A2-s16-sql-before.json": "57b3eb62c5bc9b4e27b053a52255fa009ad208622365d68799362381f106157c",
+    "A2-s2-sql-after.json": "7f4fbbb5bfc8e0610beb64797e04308e3197b5de5bee652a7008f71b39409777",
+    "A2-s2-sql-before.json": "6b27bc83636dee9f12903192739a4a8214c323b372894149c5a9e218816c8691",
+    "A2-s65-sql-after.json": "c1b102406e0d8cf7f94b836814acb64e78f1d894e57f5161c40f1c5af19f1a7d",
+    "A2-s65-sql-before.json": "923d93ef0a4d914fc61edbacf4e58754b2f9474c0fb787fc43b39f6f5ab34fe2",
+    "B1-all-requests.json": "86f6ca49d39274c24d52e6a000d096c8f3f93c7615ce5f92bc7983e6d9908719",
+    "B1-confirm-phases.json": "48dc5537c60345250f290f6d5d9b158e9d3f0ad21292e4711ee8b99df2eb5149",
+    "B1-fanout-phases.json": "52e917b8136a6445fde4f601782557ef74ed95c564ad84bd517d6cb36e60d921",
+    "B1-s100-sql-after.json": "af0d5b01956b2eb0870b2a2e6fd90488b6805bc0162b1c4a2c9b111adc93389f",
+    "B1-s100-sql-before.json": "c028f48248258688c480bab51f484926585f5fe170ea0db22b4af3426009c8ca",
+    "B1-s16-sql-after.json": "2e5bcff92bb5abb06444652033a65595a28350bf968fe2a5ba794ac3d58ecc80",
+    "B1-s16-sql-before.json": "4f91eff32556b6326931526a2f1518cc90db7af37504425199d02606b912b6a4",
+    "B1-s2-sql-after.json": "7c985253364826e069df4a4869b0296c737cacf22c6013f8237a474257a9dbf2",
+    "B1-s2-sql-before.json": "2701eab9712291ee88d3eec84a41590dc1eabe1c44837fa353d6f451077974b1",
+    "B1-s65-sql-after.json": "73a804cdc55ae020ddc8ac71f13ddeba630617d8e7024e5c51aa8b0ba0d74861",
+    "B1-s65-sql-before.json": "4088dca64fcccee334612a87c17e85db5e0cb5de7630a91caea5667e260d4c24",
+    "B2-all-requests.json": "5a95b86961020f82b638185934faf17cb47b9c2a45842d7b845b05b0ba2a8ab6",
+    "B2-confirm-phases.json": "362ea19845fc2ae0114a13eb15eaa68157d9cdeaf9d49c7bb93651a9a54f5377",
+    "B2-fanout-phases.json": "2aa408605c73b59d730f87115eab885ad55000d182a784d9e7619e06ae6ef419",
+    "B2-s100-sql-after.json": "60cead5fbb783fb016826620802aa898515532ff4514b00d3497a71cb210ddc0",
+    "B2-s100-sql-before.json": "2a8bfaaf242f48036aeff4b6d5e79551d33f9250f0532f7d08ba3fd69cef4cec",
+    "B2-s16-sql-after.json": "c52b7ad88683cc7c07a2e456ae5ad788af58e768a588aefc13e2a7bb37c93130",
+    "B2-s16-sql-before.json": "2a4c2def3e9d62b40f04b754a3da4129c6bc7333dacb012b46987a21a8c5565d",
+    "B2-s2-sql-after.json": "6836089af5bd88c88d9795c16adf6f050685bb40e07fca4f7ef996ca42cc0c22",
+    "B2-s2-sql-before.json": "b283bd132151b8fca4b1062c20c7bc27836006696be5caeff1fcd209c3d371be",
+    "B2-s65-sql-after.json": "10408c012ddaf2b509efc9f3b93f58a8d2b746e1697d2157af33ca7ec7d582e0",
+    "B2-s65-sql-before.json": "9795829fd183eaa8dc3ad003d7e814c8cb6631a1f259a631984bda44fed2fef8",
+    "restore-summary.json": "82116a6ade7b3021b5a868cc0c112a4ba51a7d02a9aa81eebf2bdb78b72637fb",
+    "summary.json": "d3da52f448ea988b944fe4285e4077cdc528ec8f99c5a80841560259fa394c1d"
+  },
+  "io_audit": {
+    "status": "OFFLINE_MEASUREMENT_CLIENT_IO_AUDIT_COMPLETE",
+    "head": "5f05f4cc544e48900d7ee1ee5cfaa08b6c3aa887",
+    "actual_message_workers": {
+      "/tinyimx-m21-gateway-a-1": 16,
+      "/tinyimx-m21-gateway-b-1": 16
+    },
+    "prefix_replay": [
+      {
+        "case": "A1",
+        "group_size": 2,
+        "prefix_rows": 31,
+        "encoded_bytes": 36165,
+        "samples": [
+          {
+            "encode_wall_ms": 0.891503,
+            "encode_cpu_ms": 0.6114,
+            "write_wall_ms": 0.151601,
+            "write_cpu_ms": 0.1507,
+            "total_wall_ms": 1.043104,
+            "total_cpu_ms": 0.7621
+          },
+          {
+            "encode_wall_ms": 0.717703,
+            "encode_cpu_ms": 0.7178,
+            "write_wall_ms": 0.230801,
+            "write_cpu_ms": 0.2314,
+            "total_wall_ms": 0.948504,
+            "total_cpu_ms": 0.9492
+          },
+          {
+            "encode_wall_ms": 0.673202,
+            "encode_cpu_ms": 0.6736,
+            "write_wall_ms": 0.338302,
+            "write_cpu_ms": 0.3394,
+            "total_wall_ms": 1.011504,
+            "total_cpu_ms": 1.013
+          },
+          {
+            "encode_wall_ms": 0.555301,
+            "encode_cpu_ms": 0.5562,
+            "write_wall_ms": 0.226101,
+            "write_cpu_ms": 0.2258,
+            "total_wall_ms": 0.781402,
+            "total_cpu_ms": 0.782
+          },
+          {
+            "encode_wall_ms": 0.561502,
+            "encode_cpu_ms": 0.5618,
+            "write_wall_ms": 0.144201,
+            "write_cpu_ms": 0.1443,
+            "total_wall_ms": 0.705703,
+            "total_cpu_ms": 0.7061
+          },
+          {
+            "encode_wall_ms": 0.635802,
+            "encode_cpu_ms": 0.6365,
+            "write_wall_ms": 0.142,
+            "write_cpu_ms": 0.141801,
+            "total_wall_ms": 0.777802,
+            "total_cpu_ms": 0.778301
+          },
+          {
+            "encode_wall_ms": 0.627202,
+            "encode_cpu_ms": 0.5795,
+            "write_wall_ms": 0.148801,
+            "write_cpu_ms": 0.1484,
+            "total_wall_ms": 0.776003,
+            "total_cpu_ms": 0.7279
+          },
+          {
+            "encode_wall_ms": 0.634602,
+            "encode_cpu_ms": 0.6354,
+            "write_wall_ms": 0.172601,
+            "write_cpu_ms": 0.1722,
+            "total_wall_ms": 0.807203,
+            "total_cpu_ms": 0.8076
+          }
+        ],
+        "statistics": {
+          "encode_wall_ms": {
+            "samples": 8,
+            "mean_ms": 0.662102125,
+            "min_ms": 0.555301,
+            "max_ms": 0.891503
+          },
+          "encode_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 0.621525,
+            "min_ms": 0.5562,
+            "max_ms": 0.7178
+          },
+          "write_wall_ms": {
+            "samples": 8,
+            "mean_ms": 0.19430099999999997,
+            "min_ms": 0.142,
+            "max_ms": 0.338302
+          },
+          "write_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 0.19425012500000002,
+            "min_ms": 0.141801,
+            "max_ms": 0.3394
+          },
+          "total_wall_ms": {
+            "samples": 8,
+            "mean_ms": 0.856403125,
+            "min_ms": 0.705703,
+            "max_ms": 1.043104
+          },
+          "total_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 0.8157751249999999,
+            "min_ms": 0.7061,
+            "max_ms": 1.013
+          }
+        }
+      },
+      {
+        "case": "A1",
+        "group_size": 16,
+        "prefix_rows": 64,
+        "encoded_bytes": 187662,
+        "samples": [
+          {
+            "encode_wall_ms": 6.396524,
+            "encode_cpu_ms": 6.397201,
+            "write_wall_ms": 0.855703,
+            "write_cpu_ms": 1.022501,
+            "total_wall_ms": 7.252227,
+            "total_cpu_ms": 7.419702
+          },
+          {
+            "encode_wall_ms": 6.118523,
+            "encode_cpu_ms": 6.127302,
+            "write_wall_ms": 1.048504,
+            "write_cpu_ms": 1.0418,
+            "total_wall_ms": 7.167027,
+            "total_cpu_ms": 7.169102
+          },
+          {
+            "encode_wall_ms": 3.763414,
+            "encode_cpu_ms": 3.7574,
+            "write_wall_ms": 0.505902,
+            "write_cpu_ms": 0.504401,
+            "total_wall_ms": 4.269316,
+            "total_cpu_ms": 4.261801
+          },
+          {
+            "encode_wall_ms": 4.214616,
+            "encode_cpu_ms": 4.218301,
+            "write_wall_ms": 0.533802,
+            "write_cpu_ms": 0.5314,
+            "total_wall_ms": 4.748418,
+            "total_cpu_ms": 4.749701
+          },
+          {
+            "encode_wall_ms": 3.967915,
+            "encode_cpu_ms": 3.970001,
+            "write_wall_ms": 0.416702,
+            "write_cpu_ms": 0.4157,
+            "total_wall_ms": 4.384617,
+            "total_cpu_ms": 4.385701
+          },
+          {
+            "encode_wall_ms": 4.908619,
+            "encode_cpu_ms": 4.920501,
+            "write_wall_ms": 0.828402,
+            "write_cpu_ms": 1.0117,
+            "total_wall_ms": 5.737021,
+            "total_cpu_ms": 5.932201
+          },
+          {
+            "encode_wall_ms": 5.788422,
+            "encode_cpu_ms": 5.791801,
+            "write_wall_ms": 0.967804,
+            "write_cpu_ms": 0.9647,
+            "total_wall_ms": 6.756226,
+            "total_cpu_ms": 6.756501
+          },
+          {
+            "encode_wall_ms": 6.247924,
+            "encode_cpu_ms": 6.250702,
+            "write_wall_ms": 0.960204,
+            "write_cpu_ms": 0.9584,
+            "total_wall_ms": 7.208128,
+            "total_cpu_ms": 7.209102
+          }
+        ],
+        "statistics": {
+          "encode_wall_ms": {
+            "samples": 8,
+            "mean_ms": 5.175744624999999,
+            "min_ms": 3.763414,
+            "max_ms": 6.396524
+          },
+          "encode_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 5.179151125000001,
+            "min_ms": 3.7574,
+            "max_ms": 6.397201
+          },
+          "write_wall_ms": {
+            "samples": 8,
+            "mean_ms": 0.764627875,
+            "min_ms": 0.416702,
+            "max_ms": 1.048504
+          },
+          "write_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 0.8063252500000001,
+            "min_ms": 0.4157,
+            "max_ms": 1.0418
+          },
+          "total_wall_ms": {
+            "samples": 8,
+            "mean_ms": 5.9403725,
+            "min_ms": 4.269316,
+            "max_ms": 7.252227
+          },
+          "total_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 5.985476375000001,
+            "min_ms": 4.261801,
+            "max_ms": 7.419702
+          }
+        }
+      },
+      {
+        "case": "A1",
+        "group_size": 65,
+        "prefix_rows": 97,
+        "encoded_bytes": 742226,
+        "samples": [
+          {
+            "encode_wall_ms": 38.801348,
+            "encode_cpu_ms": 38.78301,
+            "write_wall_ms": 2.090208,
+            "write_cpu_ms": 2.082001,
+            "total_wall_ms": 40.891556,
+            "total_cpu_ms": 40.865011
+          },
+          {
+            "encode_wall_ms": 43.872467,
+            "encode_cpu_ms": 42.996411,
+            "write_wall_ms": 1.676206,
+            "write_cpu_ms": 1.679601,
+            "total_wall_ms": 45.548673,
+            "total_cpu_ms": 44.676012
+          },
+          {
+            "encode_wall_ms": 39.54945,
+            "encode_cpu_ms": 39.54301,
+            "write_wall_ms": 1.119604,
+            "write_cpu_ms": 1.1187,
+            "total_wall_ms": 40.669054,
+            "total_cpu_ms": 40.66171
+          },
+          {
+            "encode_wall_ms": 29.07831,
+            "encode_cpu_ms": 29.050308,
+            "write_wall_ms": 1.009103,
+            "write_cpu_ms": 1.0089,
+            "total_wall_ms": 30.087413,
+            "total_cpu_ms": 30.059208
+          },
+          {
+            "encode_wall_ms": 31.57052,
+            "encode_cpu_ms": 31.572509,
+            "write_wall_ms": 0.972103,
+            "write_cpu_ms": 0.9715,
+            "total_wall_ms": 32.542623,
+            "total_cpu_ms": 32.544009
+          },
+          {
+            "encode_wall_ms": 26.665801,
+            "encode_cpu_ms": 26.668407,
+            "write_wall_ms": 0.965203,
+            "write_cpu_ms": 0.9637,
+            "total_wall_ms": 27.631004,
+            "total_cpu_ms": 27.632107
+          },
+          {
+            "encode_wall_ms": 35.207233,
+            "encode_cpu_ms": 35.217809,
+            "write_wall_ms": 1.597406,
+            "write_cpu_ms": 1.6013,
+            "total_wall_ms": 36.804639,
+            "total_cpu_ms": 36.819109
+          },
+          {
+            "encode_wall_ms": 28.691108,
+            "encode_cpu_ms": 28.644408,
+            "write_wall_ms": 1.192405,
+            "write_cpu_ms": 1.1831,
+            "total_wall_ms": 29.883513,
+            "total_cpu_ms": 29.827508
+          }
+        ],
+        "statistics": {
+          "encode_wall_ms": {
+            "samples": 8,
+            "mean_ms": 34.179529624999994,
+            "min_ms": 26.665801,
+            "max_ms": 43.872467
+          },
+          "encode_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 34.059484,
+            "min_ms": 26.668407,
+            "max_ms": 42.996411
+          },
+          "write_wall_ms": {
+            "samples": 8,
+            "mean_ms": 1.32777975,
+            "min_ms": 0.965203,
+            "max_ms": 2.090208
+          },
+          "write_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 1.3261002499999999,
+            "min_ms": 0.9637,
+            "max_ms": 2.082001
+          },
+          "total_wall_ms": {
+            "samples": 8,
+            "mean_ms": 35.507309375,
+            "min_ms": 27.631004,
+            "max_ms": 45.548673
+          },
+          "total_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 35.38558425,
+            "min_ms": 27.632107,
+            "max_ms": 44.676012
+          }
+        }
+      },
+      {
+        "case": "A1",
+        "group_size": 100,
+        "prefix_rows": 130,
+        "encoded_bytes": 1616206,
+        "samples": [
+          {
+            "encode_wall_ms": 61.412033,
+            "encode_cpu_ms": 61.412116,
+            "write_wall_ms": 1.679706,
+            "write_cpu_ms": 1.679001,
+            "total_wall_ms": 63.091739,
+            "total_cpu_ms": 63.091117
+          },
+          {
+            "encode_wall_ms": 56.371717,
+            "encode_cpu_ms": 55.773614,
+            "write_wall_ms": 2.358909,
+            "write_cpu_ms": 2.348901,
+            "total_wall_ms": 58.730626,
+            "total_cpu_ms": 58.122515
+          },
+          {
+            "encode_wall_ms": 55.594616,
+            "encode_cpu_ms": 55.605414,
+            "write_wall_ms": 2.068508,
+            "write_cpu_ms": 2.067901,
+            "total_wall_ms": 57.663124,
+            "total_cpu_ms": 57.673315
+          },
+          {
+            "encode_wall_ms": 58.289627,
+            "encode_cpu_ms": 58.283715,
+            "write_wall_ms": 1.737907,
+            "write_cpu_ms": 1.7379,
+            "total_wall_ms": 60.027534,
+            "total_cpu_ms": 60.021615
+          },
+          {
+            "encode_wall_ms": 52.729406,
+            "encode_cpu_ms": 52.731213,
+            "write_wall_ms": 1.781506,
+            "write_cpu_ms": 1.781601,
+            "total_wall_ms": 54.510912,
+            "total_cpu_ms": 54.512814
+          },
+          {
+            "encode_wall_ms": 45.150676,
+            "encode_cpu_ms": 45.155011,
+            "write_wall_ms": 2.130208,
+            "write_cpu_ms": 2.128501,
+            "total_wall_ms": 47.280884,
+            "total_cpu_ms": 47.283512
+          },
+          {
+            "encode_wall_ms": 49.971895,
+            "encode_cpu_ms": 49.972413,
+            "write_wall_ms": 1.907207,
+            "write_cpu_ms": 1.907101,
+            "total_wall_ms": 51.879102,
+            "total_cpu_ms": 51.879514
+          },
+          {
+            "encode_wall_ms": 53.737409,
+            "encode_cpu_ms": 53.748214,
+            "write_wall_ms": 2.287108,
+            "write_cpu_ms": 2.2877,
+            "total_wall_ms": 56.024517,
+            "total_cpu_ms": 56.035914
+          }
+        ],
+        "statistics": {
+          "encode_wall_ms": {
+            "samples": 8,
+            "mean_ms": 54.157172375,
+            "min_ms": 45.150676,
+            "max_ms": 61.412033
+          },
+          "encode_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 54.08521375,
+            "min_ms": 45.155011,
+            "max_ms": 61.412116
+          },
+          "write_wall_ms": {
+            "samples": 8,
+            "mean_ms": 1.9938823749999999,
+            "min_ms": 1.679706,
+            "max_ms": 2.358909
+          },
+          "write_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 1.99232575,
+            "min_ms": 1.679001,
+            "max_ms": 2.348901
+          },
+          "total_wall_ms": {
+            "samples": 8,
+            "mean_ms": 56.15105475,
+            "min_ms": 47.280884,
+            "max_ms": 63.091739
+          },
+          "total_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 56.07753949999999,
+            "min_ms": 47.283512,
+            "max_ms": 63.091117
+          }
+        }
+      },
+      {
+        "case": "B1",
+        "group_size": 2,
+        "prefix_rows": 31,
+        "encoded_bytes": 36166,
+        "samples": [
+          {
+            "encode_wall_ms": 1.001605,
+            "encode_cpu_ms": 1.0019,
+            "write_wall_ms": 0.1652,
+            "write_cpu_ms": 0.1637,
+            "total_wall_ms": 1.166805,
+            "total_cpu_ms": 1.1656
+          },
+          {
+            "encode_wall_ms": 0.564802,
+            "encode_cpu_ms": 0.5654,
+            "write_wall_ms": 0.247801,
+            "write_cpu_ms": 0.248,
+            "total_wall_ms": 0.812603,
+            "total_cpu_ms": 0.8134
+          },
+          {
+            "encode_wall_ms": 0.559303,
+            "encode_cpu_ms": 0.559801,
+            "write_wall_ms": 0.1533,
+            "write_cpu_ms": 0.153099,
+            "total_wall_ms": 0.712603,
+            "total_cpu_ms": 0.7129
+          },
+          {
+            "encode_wall_ms": 0.591103,
+            "encode_cpu_ms": 0.5914,
+            "write_wall_ms": 0.1354,
+            "write_cpu_ms": 0.1354,
+            "total_wall_ms": 0.726503,
+            "total_cpu_ms": 0.7268
+          },
+          {
+            "encode_wall_ms": 0.565602,
+            "encode_cpu_ms": 0.5658,
+            "write_wall_ms": 0.127601,
+            "write_cpu_ms": 0.1278,
+            "total_wall_ms": 0.693203,
+            "total_cpu_ms": 0.6936
+          },
+          {
+            "encode_wall_ms": 0.544002,
+            "encode_cpu_ms": 0.5442,
+            "write_wall_ms": 0.1202,
+            "write_cpu_ms": 0.1202,
+            "total_wall_ms": 0.664202,
+            "total_cpu_ms": 0.6644
+          },
+          {
+            "encode_wall_ms": 0.563202,
+            "encode_cpu_ms": 0.5633,
+            "write_wall_ms": 0.1224,
+            "write_cpu_ms": 0.1226,
+            "total_wall_ms": 0.685602,
+            "total_cpu_ms": 0.6859
+          },
+          {
+            "encode_wall_ms": 0.573103,
+            "encode_cpu_ms": 0.573601,
+            "write_wall_ms": 0.1368,
+            "write_cpu_ms": 0.1366,
+            "total_wall_ms": 0.709903,
+            "total_cpu_ms": 0.710201
+          }
+        ],
+        "statistics": {
+          "encode_wall_ms": {
+            "samples": 8,
+            "mean_ms": 0.6203402499999999,
+            "min_ms": 0.544002,
+            "max_ms": 1.001605
+          },
+          "encode_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 0.62067525,
+            "min_ms": 0.5442,
+            "max_ms": 1.0019
+          },
+          "write_wall_ms": {
+            "samples": 8,
+            "mean_ms": 0.15108775,
+            "min_ms": 0.1202,
+            "max_ms": 0.247801
+          },
+          "write_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 0.15092487500000001,
+            "min_ms": 0.1202,
+            "max_ms": 0.248
+          },
+          "total_wall_ms": {
+            "samples": 8,
+            "mean_ms": 0.771428,
+            "min_ms": 0.664202,
+            "max_ms": 1.166805
+          },
+          "total_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 0.7716001249999999,
+            "min_ms": 0.6644,
+            "max_ms": 1.1656
+          }
+        }
+      },
+      {
+        "case": "B1",
+        "group_size": 16,
+        "prefix_rows": 64,
+        "encoded_bytes": 187663,
+        "samples": [
+          {
+            "encode_wall_ms": 4.661218,
+            "encode_cpu_ms": 4.669801,
+            "write_wall_ms": 1.299905,
+            "write_cpu_ms": 1.2911,
+            "total_wall_ms": 5.961123,
+            "total_cpu_ms": 5.960901
+          },
+          {
+            "encode_wall_ms": 3.275613,
+            "encode_cpu_ms": 3.277601,
+            "write_wall_ms": 0.347001,
+            "write_cpu_ms": 0.3458,
+            "total_wall_ms": 3.622614,
+            "total_cpu_ms": 3.623401
+          },
+          {
+            "encode_wall_ms": 2.934212,
+            "encode_cpu_ms": 2.934501,
+            "write_wall_ms": 0.299801,
+            "write_cpu_ms": 0.2996,
+            "total_wall_ms": 3.234013,
+            "total_cpu_ms": 3.234101
+          },
+          {
+            "encode_wall_ms": 3.878715,
+            "encode_cpu_ms": 3.888201,
+            "write_wall_ms": 0.723703,
+            "write_cpu_ms": 0.7241,
+            "total_wall_ms": 4.602418,
+            "total_cpu_ms": 4.612301
+          },
+          {
+            "encode_wall_ms": 3.715215,
+            "encode_cpu_ms": 3.708601,
+            "write_wall_ms": 0.309701,
+            "write_cpu_ms": 0.309,
+            "total_wall_ms": 4.024916,
+            "total_cpu_ms": 4.017601
+          },
+          {
+            "encode_wall_ms": 3.699114,
+            "encode_cpu_ms": 3.701201,
+            "write_wall_ms": 0.395502,
+            "write_cpu_ms": 0.3943,
+            "total_wall_ms": 4.094616,
+            "total_cpu_ms": 4.095501
+          },
+          {
+            "encode_wall_ms": 3.068112,
+            "encode_cpu_ms": 3.0697,
+            "write_wall_ms": 0.348501,
+            "write_cpu_ms": 0.3474,
+            "total_wall_ms": 3.416613,
+            "total_cpu_ms": 3.4171
+          },
+          {
+            "encode_wall_ms": 2.976112,
+            "encode_cpu_ms": 2.976601,
+            "write_wall_ms": 0.317301,
+            "write_cpu_ms": 0.3171,
+            "total_wall_ms": 3.293413,
+            "total_cpu_ms": 3.293701
+          }
+        ],
+        "statistics": {
+          "encode_wall_ms": {
+            "samples": 8,
+            "mean_ms": 3.5260388750000002,
+            "min_ms": 2.934212,
+            "max_ms": 4.661218
+          },
+          "encode_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 3.5282758750000003,
+            "min_ms": 2.934501,
+            "max_ms": 4.669801
+          },
+          "write_wall_ms": {
+            "samples": 8,
+            "mean_ms": 0.505176875,
+            "min_ms": 0.299801,
+            "max_ms": 1.299905
+          },
+          "write_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 0.5035499999999999,
+            "min_ms": 0.2996,
+            "max_ms": 1.2911
+          },
+          "total_wall_ms": {
+            "samples": 8,
+            "mean_ms": 4.03121575,
+            "min_ms": 3.234013,
+            "max_ms": 5.961123
+          },
+          "total_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 4.031825875,
+            "min_ms": 3.234101,
+            "max_ms": 5.960901
+          }
+        }
+      },
+      {
+        "case": "B1",
+        "group_size": 65,
+        "prefix_rows": 97,
+        "encoded_bytes": 742336,
+        "samples": [
+          {
+            "encode_wall_ms": 18.836872,
+            "encode_cpu_ms": 18.836905,
+            "write_wall_ms": 1.373105,
+            "write_cpu_ms": 1.3631,
+            "total_wall_ms": 20.209977,
+            "total_cpu_ms": 20.200005
+          },
+          {
+            "encode_wall_ms": 21.068782,
+            "encode_cpu_ms": 21.071105,
+            "write_wall_ms": 1.036904,
+            "write_cpu_ms": 1.035401,
+            "total_wall_ms": 22.105686,
+            "total_cpu_ms": 22.106506
+          },
+          {
+            "encode_wall_ms": 15.070458,
+            "encode_cpu_ms": 15.072804,
+            "write_wall_ms": 0.903904,
+            "write_cpu_ms": 0.9028,
+            "total_wall_ms": 15.974362,
+            "total_cpu_ms": 15.975604
+          },
+          {
+            "encode_wall_ms": 14.729757,
+            "encode_cpu_ms": 14.731704,
+            "write_wall_ms": 1.347005,
+            "write_cpu_ms": 1.3549,
+            "total_wall_ms": 16.076762,
+            "total_cpu_ms": 16.086604
+          },
+          {
+            "encode_wall_ms": 17.281167,
+            "encode_cpu_ms": 17.275705,
+            "write_wall_ms": 0.984904,
+            "write_cpu_ms": 0.9837,
+            "total_wall_ms": 18.266071,
+            "total_cpu_ms": 18.259405
+          },
+          {
+            "encode_wall_ms": 15.982062,
+            "encode_cpu_ms": 15.984804,
+            "write_wall_ms": 1.348406,
+            "write_cpu_ms": 1.3496,
+            "total_wall_ms": 17.330468,
+            "total_cpu_ms": 17.334404
+          },
+          {
+            "encode_wall_ms": 14.695057,
+            "encode_cpu_ms": 14.698704,
+            "write_wall_ms": 1.109204,
+            "write_cpu_ms": 1.1081,
+            "total_wall_ms": 15.804261,
+            "total_cpu_ms": 15.806804
+          },
+          {
+            "encode_wall_ms": 17.645869,
+            "encode_cpu_ms": 17.649605,
+            "write_wall_ms": 1.004604,
+            "write_cpu_ms": 1.0025,
+            "total_wall_ms": 18.650473,
+            "total_cpu_ms": 18.652105
+          }
+        ],
+        "statistics": {
+          "encode_wall_ms": {
+            "samples": 8,
+            "mean_ms": 16.913753,
+            "min_ms": 14.695057,
+            "max_ms": 21.068782
+          },
+          "encode_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 16.915167,
+            "min_ms": 14.698704,
+            "max_ms": 21.071105
+          },
+          "write_wall_ms": {
+            "samples": 8,
+            "mean_ms": 1.1385045000000003,
+            "min_ms": 0.903904,
+            "max_ms": 1.373105
+          },
+          "write_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 1.1375126249999998,
+            "min_ms": 0.9028,
+            "max_ms": 1.3631
+          },
+          "total_wall_ms": {
+            "samples": 8,
+            "mean_ms": 18.0522575,
+            "min_ms": 15.804261,
+            "max_ms": 22.105686
+          },
+          "total_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 18.052679625,
+            "min_ms": 15.806804,
+            "max_ms": 22.106506
+          }
+        }
+      },
+      {
+        "case": "B1",
+        "group_size": 100,
+        "prefix_rows": 130,
+        "encoded_bytes": 1616270,
+        "samples": [
+          {
+            "encode_wall_ms": 52.291703,
+            "encode_cpu_ms": 51.101314,
+            "write_wall_ms": 1.753907,
+            "write_cpu_ms": 1.7521,
+            "total_wall_ms": 54.04561,
+            "total_cpu_ms": 52.853414
+          },
+          {
+            "encode_wall_ms": 54.383911,
+            "encode_cpu_ms": 54.386814,
+            "write_wall_ms": 1.832808,
+            "write_cpu_ms": 1.832001,
+            "total_wall_ms": 56.216719,
+            "total_cpu_ms": 56.218815
+          },
+          {
+            "encode_wall_ms": 51.3824,
+            "encode_cpu_ms": 51.297013,
+            "write_wall_ms": 3.076312,
+            "write_cpu_ms": 3.066401,
+            "total_wall_ms": 54.458712,
+            "total_cpu_ms": 54.363414
+          },
+          {
+            "encode_wall_ms": 71.540578,
+            "encode_cpu_ms": 70.078819,
+            "write_wall_ms": 2.979811,
+            "write_cpu_ms": 2.9799,
+            "total_wall_ms": 74.520389,
+            "total_cpu_ms": 73.058719
+          },
+          {
+            "encode_wall_ms": 56.966122,
+            "encode_cpu_ms": 56.968515,
+            "write_wall_ms": 2.893212,
+            "write_cpu_ms": 2.884101,
+            "total_wall_ms": 59.859334,
+            "total_cpu_ms": 59.852616
+          },
+          {
+            "encode_wall_ms": 56.138518,
+            "encode_cpu_ms": 56.141415,
+            "write_wall_ms": 2.41651,
+            "write_cpu_ms": 2.4156,
+            "total_wall_ms": 58.555028,
+            "total_cpu_ms": 58.557015
+          },
+          {
+            "encode_wall_ms": 44.157774,
+            "encode_cpu_ms": 44.160712,
+            "write_wall_ms": 2.452111,
+            "write_cpu_ms": 2.452301,
+            "total_wall_ms": 46.609885,
+            "total_cpu_ms": 46.613013
+          },
+          {
+            "encode_wall_ms": 42.185468,
+            "encode_cpu_ms": 42.196112,
+            "write_wall_ms": 2.789111,
+            "write_cpu_ms": 2.7791,
+            "total_wall_ms": 44.974579,
+            "total_cpu_ms": 44.975212
+          }
+        ],
+        "statistics": {
+          "encode_wall_ms": {
+            "samples": 8,
+            "mean_ms": 53.63080925,
+            "min_ms": 42.185468,
+            "max_ms": 71.540578
+          },
+          "encode_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 53.29133925000001,
+            "min_ms": 42.196112,
+            "max_ms": 70.078819
+          },
+          "write_wall_ms": {
+            "samples": 8,
+            "mean_ms": 2.52422275,
+            "min_ms": 1.753907,
+            "max_ms": 3.076312
+          },
+          "write_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 2.5201879999999997,
+            "min_ms": 1.7521,
+            "max_ms": 3.066401
+          },
+          "total_wall_ms": {
+            "samples": 8,
+            "mean_ms": 56.155032,
+            "min_ms": 44.974579,
+            "max_ms": 74.520389
+          },
+          "total_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 55.81152725,
+            "min_ms": 44.975212,
+            "max_ms": 73.058719
+          }
+        }
+      },
+      {
+        "case": "B2",
+        "group_size": 2,
+        "prefix_rows": 31,
+        "encoded_bytes": 36163,
+        "samples": [
+          {
+            "encode_wall_ms": 0.774403,
+            "encode_cpu_ms": 0.773101,
+            "write_wall_ms": 0.143901,
+            "write_cpu_ms": 0.1434,
+            "total_wall_ms": 0.918304,
+            "total_cpu_ms": 0.916501
+          },
+          {
+            "encode_wall_ms": 0.572102,
+            "encode_cpu_ms": 0.5722,
+            "write_wall_ms": 0.213001,
+            "write_cpu_ms": 0.2135,
+            "total_wall_ms": 0.785103,
+            "total_cpu_ms": 0.7857
+          },
+          {
+            "encode_wall_ms": 0.933704,
+            "encode_cpu_ms": 0.944,
+            "write_wall_ms": 0.397301,
+            "write_cpu_ms": 0.3966,
+            "total_wall_ms": 1.331005,
+            "total_cpu_ms": 1.3406
+          },
+          {
+            "encode_wall_ms": 1.293405,
+            "encode_cpu_ms": 1.293801,
+            "write_wall_ms": 0.346801,
+            "write_cpu_ms": 0.347,
+            "total_wall_ms": 1.640206,
+            "total_cpu_ms": 1.640801
+          },
+          {
+            "encode_wall_ms": 1.196805,
+            "encode_cpu_ms": 1.1973,
+            "write_wall_ms": 0.417602,
+            "write_cpu_ms": 0.4172,
+            "total_wall_ms": 1.614407,
+            "total_cpu_ms": 1.6145
+          },
+          {
+            "encode_wall_ms": 1.168905,
+            "encode_cpu_ms": 1.169601,
+            "write_wall_ms": 0.364201,
+            "write_cpu_ms": 0.3641,
+            "total_wall_ms": 1.533106,
+            "total_cpu_ms": 1.533701
+          },
+          {
+            "encode_wall_ms": 1.252405,
+            "encode_cpu_ms": 1.2461,
+            "write_wall_ms": 0.201701,
+            "write_cpu_ms": 0.2001,
+            "total_wall_ms": 1.454106,
+            "total_cpu_ms": 1.4462
+          },
+          {
+            "encode_wall_ms": 0.552102,
+            "encode_cpu_ms": 0.5533,
+            "write_wall_ms": 0.176601,
+            "write_cpu_ms": 0.1756,
+            "total_wall_ms": 0.728703,
+            "total_cpu_ms": 0.7289
+          }
+        ],
+        "statistics": {
+          "encode_wall_ms": {
+            "samples": 8,
+            "mean_ms": 0.967978875,
+            "min_ms": 0.552102,
+            "max_ms": 1.293405
+          },
+          "encode_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 0.9686753750000001,
+            "min_ms": 0.5533,
+            "max_ms": 1.293801
+          },
+          "write_wall_ms": {
+            "samples": 8,
+            "mean_ms": 0.28263862500000003,
+            "min_ms": 0.143901,
+            "max_ms": 0.417602
+          },
+          "write_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 0.28218750000000004,
+            "min_ms": 0.1434,
+            "max_ms": 0.4172
+          },
+          "total_wall_ms": {
+            "samples": 8,
+            "mean_ms": 1.2506175,
+            "min_ms": 0.728703,
+            "max_ms": 1.640206
+          },
+          "total_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 1.250862875,
+            "min_ms": 0.7289,
+            "max_ms": 1.640801
+          }
+        }
+      },
+      {
+        "case": "B2",
+        "group_size": 16,
+        "prefix_rows": 64,
+        "encoded_bytes": 187657,
+        "samples": [
+          {
+            "encode_wall_ms": 6.193525,
+            "encode_cpu_ms": 6.193502,
+            "write_wall_ms": 1.502506,
+            "write_cpu_ms": 1.4937,
+            "total_wall_ms": 7.696031,
+            "total_cpu_ms": 7.687202
+          },
+          {
+            "encode_wall_ms": 3.122313,
+            "encode_cpu_ms": 3.140301,
+            "write_wall_ms": 0.448802,
+            "write_cpu_ms": 0.4315,
+            "total_wall_ms": 3.571115,
+            "total_cpu_ms": 3.571801
+          },
+          {
+            "encode_wall_ms": 3.251913,
+            "encode_cpu_ms": 3.262001,
+            "write_wall_ms": 0.668602,
+            "write_cpu_ms": 0.6678,
+            "total_wall_ms": 3.920515,
+            "total_cpu_ms": 3.929801
+          },
+          {
+            "encode_wall_ms": 5.840723,
+            "encode_cpu_ms": 5.841301,
+            "write_wall_ms": 0.562302,
+            "write_cpu_ms": 0.5631,
+            "total_wall_ms": 6.403025,
+            "total_cpu_ms": 6.404401
+          },
+          {
+            "encode_wall_ms": 4.398218,
+            "encode_cpu_ms": 4.391601,
+            "write_wall_ms": 0.609702,
+            "write_cpu_ms": 0.6178,
+            "total_wall_ms": 5.00792,
+            "total_cpu_ms": 5.009401
+          },
+          {
+            "encode_wall_ms": 5.922124,
+            "encode_cpu_ms": 5.922802,
+            "write_wall_ms": 0.680403,
+            "write_cpu_ms": 0.6809,
+            "total_wall_ms": 6.602527,
+            "total_cpu_ms": 6.603702
+          },
+          {
+            "encode_wall_ms": 5.903024,
+            "encode_cpu_ms": 5.903601,
+            "write_wall_ms": 0.651002,
+            "write_cpu_ms": 0.6512,
+            "total_wall_ms": 6.554026,
+            "total_cpu_ms": 6.554801
+          },
+          {
+            "encode_wall_ms": 3.736715,
+            "encode_cpu_ms": 3.730301,
+            "write_wall_ms": 0.430202,
+            "write_cpu_ms": 0.4289,
+            "total_wall_ms": 4.166917,
+            "total_cpu_ms": 4.159201
+          }
+        ],
+        "statistics": {
+          "encode_wall_ms": {
+            "samples": 8,
+            "mean_ms": 4.796069374999999,
+            "min_ms": 3.122313,
+            "max_ms": 6.193525
+          },
+          "encode_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 4.798176249999999,
+            "min_ms": 3.140301,
+            "max_ms": 6.193502
+          },
+          "write_wall_ms": {
+            "samples": 8,
+            "mean_ms": 0.694190125,
+            "min_ms": 0.430202,
+            "max_ms": 1.502506
+          },
+          "write_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 0.6918624999999999,
+            "min_ms": 0.4289,
+            "max_ms": 1.4937
+          },
+          "total_wall_ms": {
+            "samples": 8,
+            "mean_ms": 5.4902595000000005,
+            "min_ms": 3.571115,
+            "max_ms": 7.696031
+          },
+          "total_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 5.49003875,
+            "min_ms": 3.571801,
+            "max_ms": 7.687202
+          }
+        }
+      },
+      {
+        "case": "B2",
+        "group_size": 65,
+        "prefix_rows": 97,
+        "encoded_bytes": 741892,
+        "samples": [
+          {
+            "encode_wall_ms": 19.498878,
+            "encode_cpu_ms": 19.504406,
+            "write_wall_ms": 1.579407,
+            "write_cpu_ms": 1.5778,
+            "total_wall_ms": 21.078285,
+            "total_cpu_ms": 21.082206
+          },
+          {
+            "encode_wall_ms": 14.717258,
+            "encode_cpu_ms": 14.711204,
+            "write_wall_ms": 1.569807,
+            "write_cpu_ms": 1.5689,
+            "total_wall_ms": 16.287065,
+            "total_cpu_ms": 16.280104
+          },
+          {
+            "encode_wall_ms": 16.261064,
+            "encode_cpu_ms": 16.272305,
+            "write_wall_ms": 1.645007,
+            "write_cpu_ms": 1.6438,
+            "total_wall_ms": 17.906071,
+            "total_cpu_ms": 17.916105
+          },
+          {
+            "encode_wall_ms": 18.166873,
+            "encode_cpu_ms": 18.161805,
+            "write_wall_ms": 0.904603,
+            "write_cpu_ms": 0.9029,
+            "total_wall_ms": 19.071476,
+            "total_cpu_ms": 19.064705
+          },
+          {
+            "encode_wall_ms": 17.080469,
+            "encode_cpu_ms": 17.091504,
+            "write_wall_ms": 1.588506,
+            "write_cpu_ms": 1.586901,
+            "total_wall_ms": 18.668975,
+            "total_cpu_ms": 18.678405
+          },
+          {
+            "encode_wall_ms": 15.550362,
+            "encode_cpu_ms": 15.471004,
+            "write_wall_ms": 0.923804,
+            "write_cpu_ms": 0.9217,
+            "total_wall_ms": 16.474166,
+            "total_cpu_ms": 16.392704
+          },
+          {
+            "encode_wall_ms": 19.850979,
+            "encode_cpu_ms": 19.861805,
+            "write_wall_ms": 1.568506,
+            "write_cpu_ms": 1.5671,
+            "total_wall_ms": 21.419485,
+            "total_cpu_ms": 21.428905
+          },
+          {
+            "encode_wall_ms": 17.146768,
+            "encode_cpu_ms": 17.139904,
+            "write_wall_ms": 0.983104,
+            "write_cpu_ms": 0.9821,
+            "total_wall_ms": 18.129872,
+            "total_cpu_ms": 18.122004
+          }
+        ],
+        "statistics": {
+          "encode_wall_ms": {
+            "samples": 8,
+            "mean_ms": 17.284081375,
+            "min_ms": 14.717258,
+            "max_ms": 19.850979
+          },
+          "encode_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 17.276742125000002,
+            "min_ms": 14.711204,
+            "max_ms": 19.861805
+          },
+          "write_wall_ms": {
+            "samples": 8,
+            "mean_ms": 1.3453429999999997,
+            "min_ms": 0.904603,
+            "max_ms": 1.645007
+          },
+          "write_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 1.3439001249999998,
+            "min_ms": 0.9029,
+            "max_ms": 1.6438
+          },
+          "total_wall_ms": {
+            "samples": 8,
+            "mean_ms": 18.629424375000003,
+            "min_ms": 16.287065,
+            "max_ms": 21.419485
+          },
+          "total_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 18.62064225,
+            "min_ms": 16.280104,
+            "max_ms": 21.428905
+          }
+        }
+      },
+      {
+        "case": "B2",
+        "group_size": 100,
+        "prefix_rows": 130,
+        "encoded_bytes": 1615545,
+        "samples": [
+          {
+            "encode_wall_ms": 36.657646,
+            "encode_cpu_ms": 36.642409,
+            "write_wall_ms": 1.798008,
+            "write_cpu_ms": 1.805501,
+            "total_wall_ms": 38.455654,
+            "total_cpu_ms": 38.44791
+          },
+          {
+            "encode_wall_ms": 48.339693,
+            "encode_cpu_ms": 48.244113,
+            "write_wall_ms": 2.54191,
+            "write_cpu_ms": 2.5334,
+            "total_wall_ms": 50.881603,
+            "total_cpu_ms": 50.777513
+          },
+          {
+            "encode_wall_ms": 47.391689,
+            "encode_cpu_ms": 47.402512,
+            "write_wall_ms": 2.50921,
+            "write_cpu_ms": 2.500901,
+            "total_wall_ms": 49.900899,
+            "total_cpu_ms": 49.903413
+          },
+          {
+            "encode_wall_ms": 38.777055,
+            "encode_cpu_ms": 38.78091,
+            "write_wall_ms": 2.28731,
+            "write_cpu_ms": 2.293601,
+            "total_wall_ms": 41.064365,
+            "total_cpu_ms": 41.074511
+          },
+          {
+            "encode_wall_ms": 42.606569,
+            "encode_cpu_ms": 42.601911,
+            "write_wall_ms": 1.939708,
+            "write_cpu_ms": 1.937701,
+            "total_wall_ms": 44.546277,
+            "total_cpu_ms": 44.539612
+          },
+          {
+            "encode_wall_ms": 45.08638,
+            "encode_cpu_ms": 45.097611,
+            "write_wall_ms": 2.60191,
+            "write_cpu_ms": 2.593401,
+            "total_wall_ms": 47.68829,
+            "total_cpu_ms": 47.691012
+          },
+          {
+            "encode_wall_ms": 49.363498,
+            "encode_cpu_ms": 49.374513,
+            "write_wall_ms": 2.936012,
+            "write_cpu_ms": 2.928301,
+            "total_wall_ms": 52.29951,
+            "total_cpu_ms": 52.302814
+          },
+          {
+            "encode_wall_ms": 51.735407,
+            "encode_cpu_ms": 51.736413,
+            "write_wall_ms": 1.908508,
+            "write_cpu_ms": 1.908001,
+            "total_wall_ms": 53.643915,
+            "total_cpu_ms": 53.644414
+          }
+        ],
+        "statistics": {
+          "encode_wall_ms": {
+            "samples": 8,
+            "mean_ms": 44.994742125,
+            "min_ms": 36.657646,
+            "max_ms": 51.735407
+          },
+          "encode_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 44.985049000000004,
+            "min_ms": 36.642409,
+            "max_ms": 51.736413
+          },
+          "write_wall_ms": {
+            "samples": 8,
+            "mean_ms": 2.315322,
+            "min_ms": 1.798008,
+            "max_ms": 2.936012
+          },
+          "write_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 2.312600875,
+            "min_ms": 1.805501,
+            "max_ms": 2.928301
+          },
+          "total_wall_ms": {
+            "samples": 8,
+            "mean_ms": 47.310064125000004,
+            "min_ms": 38.455654,
+            "max_ms": 53.643915
+          },
+          "total_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 47.297649875000005,
+            "min_ms": 38.44791,
+            "max_ms": 53.644414
+          }
+        }
+      },
+      {
+        "case": "A2",
+        "group_size": 2,
+        "prefix_rows": 31,
+        "encoded_bytes": 36160,
+        "samples": [
+          {
+            "encode_wall_ms": 1.440705,
+            "encode_cpu_ms": 1.4407,
+            "write_wall_ms": 0.266402,
+            "write_cpu_ms": 0.264701,
+            "total_wall_ms": 1.707107,
+            "total_cpu_ms": 1.705401
+          },
+          {
+            "encode_wall_ms": 1.148305,
+            "encode_cpu_ms": 1.148701,
+            "write_wall_ms": 0.409902,
+            "write_cpu_ms": 0.4099,
+            "total_wall_ms": 1.558207,
+            "total_cpu_ms": 1.558601
+          },
+          {
+            "encode_wall_ms": 1.112804,
+            "encode_cpu_ms": 1.1134,
+            "write_wall_ms": 0.487202,
+            "write_cpu_ms": 0.4869,
+            "total_wall_ms": 1.600006,
+            "total_cpu_ms": 1.6003
+          },
+          {
+            "encode_wall_ms": 1.112605,
+            "encode_cpu_ms": 1.1126,
+            "write_wall_ms": 0.340501,
+            "write_cpu_ms": 0.341001,
+            "total_wall_ms": 1.453106,
+            "total_cpu_ms": 1.453601
+          },
+          {
+            "encode_wall_ms": 1.301405,
+            "encode_cpu_ms": 1.2453,
+            "write_wall_ms": 0.330801,
+            "write_cpu_ms": 0.3309,
+            "total_wall_ms": 1.632206,
+            "total_cpu_ms": 1.5762
+          },
+          {
+            "encode_wall_ms": 1.156304,
+            "encode_cpu_ms": 1.156901,
+            "write_wall_ms": 0.407302,
+            "write_cpu_ms": 0.4071,
+            "total_wall_ms": 1.563606,
+            "total_cpu_ms": 1.564001
+          },
+          {
+            "encode_wall_ms": 1.143505,
+            "encode_cpu_ms": 1.1438,
+            "write_wall_ms": 0.316301,
+            "write_cpu_ms": 0.3166,
+            "total_wall_ms": 1.459806,
+            "total_cpu_ms": 1.4604
+          },
+          {
+            "encode_wall_ms": 0.907204,
+            "encode_cpu_ms": 0.9014,
+            "write_wall_ms": 0.188001,
+            "write_cpu_ms": 0.1855,
+            "total_wall_ms": 1.095205,
+            "total_cpu_ms": 1.0869
+          }
+        ],
+        "statistics": {
+          "encode_wall_ms": {
+            "samples": 8,
+            "mean_ms": 1.165354625,
+            "min_ms": 0.907204,
+            "max_ms": 1.440705
+          },
+          "encode_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 1.15785025,
+            "min_ms": 0.9014,
+            "max_ms": 1.4407
+          },
+          "write_wall_ms": {
+            "samples": 8,
+            "mean_ms": 0.3433015,
+            "min_ms": 0.188001,
+            "max_ms": 0.487202
+          },
+          "write_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 0.34282524999999997,
+            "min_ms": 0.1855,
+            "max_ms": 0.4869
+          },
+          "total_wall_ms": {
+            "samples": 8,
+            "mean_ms": 1.5086561250000001,
+            "min_ms": 1.095205,
+            "max_ms": 1.707107
+          },
+          "total_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 1.5006754999999998,
+            "min_ms": 1.0869,
+            "max_ms": 1.705401
+          }
+        }
+      },
+      {
+        "case": "A2",
+        "group_size": 16,
+        "prefix_rows": 64,
+        "encoded_bytes": 187643,
+        "samples": [
+          {
+            "encode_wall_ms": 4.516119,
+            "encode_cpu_ms": 4.472102,
+            "write_wall_ms": 0.532802,
+            "write_cpu_ms": 0.5404,
+            "total_wall_ms": 5.048921,
+            "total_cpu_ms": 5.012502
+          },
+          {
+            "encode_wall_ms": 3.547514,
+            "encode_cpu_ms": 3.540001,
+            "write_wall_ms": 0.349101,
+            "write_cpu_ms": 0.3487,
+            "total_wall_ms": 3.896615,
+            "total_cpu_ms": 3.888701
+          },
+          {
+            "encode_wall_ms": 3.083513,
+            "encode_cpu_ms": 3.087201,
+            "write_wall_ms": 0.400001,
+            "write_cpu_ms": 0.3965,
+            "total_wall_ms": 3.483514,
+            "total_cpu_ms": 3.483701
+          },
+          {
+            "encode_wall_ms": 2.902611,
+            "encode_cpu_ms": 2.902901,
+            "write_wall_ms": 0.317101,
+            "write_cpu_ms": 0.3174,
+            "total_wall_ms": 3.219712,
+            "total_cpu_ms": 3.220301
+          },
+          {
+            "encode_wall_ms": 2.976012,
+            "encode_cpu_ms": 2.9763,
+            "write_wall_ms": 0.288601,
+            "write_cpu_ms": 0.288201,
+            "total_wall_ms": 3.264613,
+            "total_cpu_ms": 3.264501
+          },
+          {
+            "encode_wall_ms": 2.941711,
+            "encode_cpu_ms": 2.9421,
+            "write_wall_ms": 0.271601,
+            "write_cpu_ms": 0.271101,
+            "total_wall_ms": 3.213312,
+            "total_cpu_ms": 3.213201
+          },
+          {
+            "encode_wall_ms": 4.505418,
+            "encode_cpu_ms": 4.506401,
+            "write_wall_ms": 0.304802,
+            "write_cpu_ms": 0.303499,
+            "total_wall_ms": 4.81022,
+            "total_cpu_ms": 4.8099
+          },
+          {
+            "encode_wall_ms": 3.085312,
+            "encode_cpu_ms": 3.086702,
+            "write_wall_ms": 0.414002,
+            "write_cpu_ms": 0.4133,
+            "total_wall_ms": 3.499314,
+            "total_cpu_ms": 3.500002
+          }
+        ],
+        "statistics": {
+          "encode_wall_ms": {
+            "samples": 8,
+            "mean_ms": 3.4447762500000003,
+            "min_ms": 2.902611,
+            "max_ms": 4.516119
+          },
+          "encode_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 3.4392134999999997,
+            "min_ms": 2.902901,
+            "max_ms": 4.506401
+          },
+          "write_wall_ms": {
+            "samples": 8,
+            "mean_ms": 0.359751375,
+            "min_ms": 0.271601,
+            "max_ms": 0.532802
+          },
+          "write_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 0.359887625,
+            "min_ms": 0.271101,
+            "max_ms": 0.5404
+          },
+          "total_wall_ms": {
+            "samples": 8,
+            "mean_ms": 3.8045276249999995,
+            "min_ms": 3.213312,
+            "max_ms": 5.048921
+          },
+          "total_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 3.7991011249999995,
+            "min_ms": 3.213201,
+            "max_ms": 5.012502
+          }
+        }
+      },
+      {
+        "case": "A2",
+        "group_size": 65,
+        "prefix_rows": 97,
+        "encoded_bytes": 747912,
+        "samples": [
+          {
+            "encode_wall_ms": 13.806456,
+            "encode_cpu_ms": 13.293504,
+            "write_wall_ms": 1.063804,
+            "write_cpu_ms": 1.0401,
+            "total_wall_ms": 14.87026,
+            "total_cpu_ms": 14.333604
+          },
+          {
+            "encode_wall_ms": 14.97066,
+            "encode_cpu_ms": 15.063904,
+            "write_wall_ms": 1.125405,
+            "write_cpu_ms": 1.033401,
+            "total_wall_ms": 16.096065,
+            "total_cpu_ms": 16.097305
+          },
+          {
+            "encode_wall_ms": 12.994052,
+            "encode_cpu_ms": 12.996203,
+            "write_wall_ms": 0.922003,
+            "write_cpu_ms": 0.9207,
+            "total_wall_ms": 13.916055,
+            "total_cpu_ms": 13.916903
+          },
+          {
+            "encode_wall_ms": 12.124949,
+            "encode_cpu_ms": 12.128104,
+            "write_wall_ms": 0.965204,
+            "write_cpu_ms": 0.9726,
+            "total_wall_ms": 13.090153,
+            "total_cpu_ms": 13.100704
+          },
+          {
+            "encode_wall_ms": 13.963956,
+            "encode_cpu_ms": 13.959103,
+            "write_wall_ms": 1.006504,
+            "write_cpu_ms": 1.004,
+            "total_wall_ms": 14.97046,
+            "total_cpu_ms": 14.963103
+          },
+          {
+            "encode_wall_ms": 13.967556,
+            "encode_cpu_ms": 13.971203,
+            "write_wall_ms": 1.301605,
+            "write_cpu_ms": 1.300501,
+            "total_wall_ms": 15.269161,
+            "total_cpu_ms": 15.271704
+          },
+          {
+            "encode_wall_ms": 17.807871,
+            "encode_cpu_ms": 17.819004,
+            "write_wall_ms": 1.207405,
+            "write_cpu_ms": 1.1983,
+            "total_wall_ms": 19.015276,
+            "total_cpu_ms": 19.017304
+          },
+          {
+            "encode_wall_ms": 16.107164,
+            "encode_cpu_ms": 16.120705,
+            "write_wall_ms": 1.259605,
+            "write_cpu_ms": 1.2477,
+            "total_wall_ms": 17.366769,
+            "total_cpu_ms": 17.368405
+          }
+        ],
+        "statistics": {
+          "encode_wall_ms": {
+            "samples": 8,
+            "mean_ms": 14.467833,
+            "min_ms": 12.124949,
+            "max_ms": 17.807871
+          },
+          "encode_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 14.418966250000002,
+            "min_ms": 12.128104,
+            "max_ms": 17.819004
+          },
+          "write_wall_ms": {
+            "samples": 8,
+            "mean_ms": 1.106441875,
+            "min_ms": 0.922003,
+            "max_ms": 1.301605
+          },
+          "write_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 1.08966275,
+            "min_ms": 0.9207,
+            "max_ms": 1.300501
+          },
+          "total_wall_ms": {
+            "samples": 8,
+            "mean_ms": 15.574274875,
+            "min_ms": 13.090153,
+            "max_ms": 19.015276
+          },
+          "total_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 15.508628999999999,
+            "min_ms": 13.100704,
+            "max_ms": 19.017304
+          }
+        }
+      },
+      {
+        "case": "A2",
+        "group_size": 100,
+        "prefix_rows": 130,
+        "encoded_bytes": 1621706,
+        "samples": [
+          {
+            "encode_wall_ms": 59.077841,
+            "encode_cpu_ms": 57.918913,
+            "write_wall_ms": 2.397509,
+            "write_cpu_ms": 2.397401,
+            "total_wall_ms": 61.47535,
+            "total_cpu_ms": 60.316314
+          },
+          {
+            "encode_wall_ms": 77.070517,
+            "encode_cpu_ms": 75.543819,
+            "write_wall_ms": 3.187813,
+            "write_cpu_ms": 3.185701,
+            "total_wall_ms": 80.25833,
+            "total_cpu_ms": 78.72952
+          },
+          {
+            "encode_wall_ms": 65.238067,
+            "encode_cpu_ms": 63.785216,
+            "write_wall_ms": 3.440214,
+            "write_cpu_ms": 3.438001,
+            "total_wall_ms": 68.678281,
+            "total_cpu_ms": 67.223217
+          },
+          {
+            "encode_wall_ms": 47.622195,
+            "encode_cpu_ms": 47.573512,
+            "write_wall_ms": 2.179409,
+            "write_cpu_ms": 2.178501,
+            "total_wall_ms": 49.801604,
+            "total_cpu_ms": 49.752013
+          },
+          {
+            "encode_wall_ms": 63.082058,
+            "encode_cpu_ms": 63.052716,
+            "write_wall_ms": 3.431514,
+            "write_cpu_ms": 3.430701,
+            "total_wall_ms": 66.513572,
+            "total_cpu_ms": 66.483417
+          },
+          {
+            "encode_wall_ms": 56.920233,
+            "encode_cpu_ms": 56.923715,
+            "write_wall_ms": 3.471414,
+            "write_cpu_ms": 3.461401,
+            "total_wall_ms": 60.391647,
+            "total_cpu_ms": 60.385116
+          },
+          {
+            "encode_wall_ms": 50.244506,
+            "encode_cpu_ms": 50.219213,
+            "write_wall_ms": 1.995808,
+            "write_cpu_ms": 1.9947,
+            "total_wall_ms": 52.240314,
+            "total_cpu_ms": 52.213913
+          },
+          {
+            "encode_wall_ms": 47.521195,
+            "encode_cpu_ms": 47.524212,
+            "write_wall_ms": 2.177609,
+            "write_cpu_ms": 2.1762,
+            "total_wall_ms": 49.698804,
+            "total_cpu_ms": 49.700412
+          }
+        ],
+        "statistics": {
+          "encode_wall_ms": {
+            "samples": 8,
+            "mean_ms": 58.3470765,
+            "min_ms": 47.521195,
+            "max_ms": 77.070517
+          },
+          "encode_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 57.8176645,
+            "min_ms": 47.524212,
+            "max_ms": 75.543819
+          },
+          "write_wall_ms": {
+            "samples": 8,
+            "mean_ms": 2.78516125,
+            "min_ms": 1.995808,
+            "max_ms": 3.471414
+          },
+          "write_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 2.7828257499999998,
+            "min_ms": 1.9947,
+            "max_ms": 3.461401
+          },
+          "total_wall_ms": {
+            "samples": 8,
+            "mean_ms": 61.13223775,
+            "min_ms": 49.698804,
+            "max_ms": 80.25833
+          },
+          "total_cpu_ms": {
+            "samples": 8,
+            "mean_ms": 60.60049024999999,
+            "min_ms": 49.700412,
+            "max_ms": 78.72952
+          }
+        }
+      }
+    ],
+    "timeline_replay": [
+      {
+        "case": "A1",
+        "repeat": 0,
+        "records": 99,
+        "wall_ms": 15.098962,
+        "cpu_ms": 15.097404
+      },
+      {
+        "case": "A1",
+        "repeat": 1,
+        "records": 99,
+        "wall_ms": 14.303459,
+        "cpu_ms": 14.386104
+      },
+      {
+        "case": "A1",
+        "repeat": 2,
+        "records": 99,
+        "wall_ms": 10.110842,
+        "cpu_ms": 9.619902
+      },
+      {
+        "case": "A1",
+        "repeat": 3,
+        "records": 99,
+        "wall_ms": 11.695848,
+        "cpu_ms": 11.706803
+      },
+      {
+        "case": "A1",
+        "repeat": 4,
+        "records": 99,
+        "wall_ms": 8.445535,
+        "cpu_ms": 8.447602
+      },
+      {
+        "case": "A1",
+        "repeat": 5,
+        "records": 99,
+        "wall_ms": 20.245083,
+        "cpu_ms": 20.248105
+      },
+      {
+        "case": "A1",
+        "repeat": 6,
+        "records": 99,
+        "wall_ms": 7.557331,
+        "cpu_ms": 7.559202
+      },
+      {
+        "case": "A1",
+        "repeat": 7,
+        "records": 99,
+        "wall_ms": 13.090653,
+        "cpu_ms": 13.093504
+      },
+      {
+        "case": "B1",
+        "repeat": 0,
+        "records": 99,
+        "wall_ms": 16.221867,
+        "cpu_ms": 16.220105
+      },
+      {
+        "case": "B1",
+        "repeat": 1,
+        "records": 99,
+        "wall_ms": 7.977833,
+        "cpu_ms": 7.980102
+      },
+      {
+        "case": "B1",
+        "repeat": 2,
+        "records": 99,
+        "wall_ms": 9.579739,
+        "cpu_ms": 9.128502
+      },
+      {
+        "case": "B1",
+        "repeat": 3,
+        "records": 99,
+        "wall_ms": 11.453047,
+        "cpu_ms": 11.455103
+      },
+      {
+        "case": "B1",
+        "repeat": 4,
+        "records": 99,
+        "wall_ms": 6.806028,
+        "cpu_ms": 6.807502
+      },
+      {
+        "case": "B1",
+        "repeat": 5,
+        "records": 99,
+        "wall_ms": 7.907833,
+        "cpu_ms": 7.910002
+      },
+      {
+        "case": "B1",
+        "repeat": 6,
+        "records": 99,
+        "wall_ms": 8.897436,
+        "cpu_ms": 8.907802
+      },
+      {
+        "case": "B1",
+        "repeat": 7,
+        "records": 99,
+        "wall_ms": 20.455683,
+        "cpu_ms": 20.458406
+      },
+      {
+        "case": "B2",
+        "repeat": 0,
+        "records": 99,
+        "wall_ms": 7.995432,
+        "cpu_ms": 7.994202
+      },
+      {
+        "case": "B2",
+        "repeat": 1,
+        "records": 99,
+        "wall_ms": 13.029954,
+        "cpu_ms": 11.993504
+      },
+      {
+        "case": "B2",
+        "repeat": 2,
+        "records": 99,
+        "wall_ms": 14.91836,
+        "cpu_ms": 14.929504
+      },
+      {
+        "case": "B2",
+        "repeat": 3,
+        "records": 99,
+        "wall_ms": 9.193238,
+        "cpu_ms": 9.186802
+      },
+      {
+        "case": "B2",
+        "repeat": 4,
+        "records": 99,
+        "wall_ms": 11.584948,
+        "cpu_ms": 11.586603
+      },
+      {
+        "case": "B2",
+        "repeat": 5,
+        "records": 99,
+        "wall_ms": 6.588927,
+        "cpu_ms": 6.590202
+      },
+      {
+        "case": "B2",
+        "repeat": 6,
+        "records": 99,
+        "wall_ms": 13.507855,
+        "cpu_ms": 13.509904
+      },
+      {
+        "case": "B2",
+        "repeat": 7,
+        "records": 99,
+        "wall_ms": 11.170746,
+        "cpu_ms": 11.172803
+      },
+      {
+        "case": "A2",
+        "repeat": 0,
+        "records": 99,
+        "wall_ms": 18.094974,
+        "cpu_ms": 17.698704
+      },
+      {
+        "case": "A2",
+        "repeat": 1,
+        "records": 99,
+        "wall_ms": 11.103045,
+        "cpu_ms": 11.111402
+      },
+      {
+        "case": "A2",
+        "repeat": 2,
+        "records": 99,
+        "wall_ms": 12.911454,
+        "cpu_ms": 12.913703
+      },
+      {
+        "case": "A2",
+        "repeat": 3,
+        "records": 99,
+        "wall_ms": 10.03284,
+        "cpu_ms": 10.034902
+      },
+      {
+        "case": "A2",
+        "repeat": 4,
+        "records": 99,
+        "wall_ms": 10.725644,
+        "cpu_ms": 10.736602
+      },
+      {
+        "case": "A2",
+        "repeat": 5,
+        "records": 99,
+        "wall_ms": 6.944129,
+        "cpu_ms": 6.944902
+      },
+      {
+        "case": "A2",
+        "repeat": 6,
+        "records": 99,
+        "wall_ms": 6.783628,
+        "cpu_ms": 6.784202
+      },
+      {
+        "case": "A2",
+        "repeat": 7,
+        "records": 99,
+        "wall_ms": 7.788031,
+        "cpu_ms": 7.798002
+      }
+    ],
+    "timeline_statistics": {
+      "wall_ms": {
+        "samples": 32,
+        "mean_ms": 11.319387,
+        "min_ms": 6.588927,
+        "max_ms": 20.455683
+      },
+      "cpu_ms": {
+        "samples": 32,
+        "mean_ms": 11.25037790625,
+        "min_ms": 6.590202,
+        "max_ms": 20.458406
+      }
+    },
+    "runtime_and_private_configs_preserved": true,
+    "raw_inputs_preserved": true,
+    "service_load_generated": false,
+    "limits": "Diagnostic offline replay on same guest and filesystem, 8 observations per size/case, in-memory warmup; completed previous rows include evidence already known at next send; timeline synthetic body shape, not exact packet. Does not observe network arrival or attribute server delay. No population P99, no subtraction/correction of historical times, no acceptance gates changed."
+  },
+  "io_raw_sha256": "4d784944908bb18088f942b33b4f46654169c9a1bbd95652f42caa18cf707601",
+  "io_audit_before_sha256": "ef8c27853b2fc334b8b44bb9776c5f12f81b55aff6cc5410f298f2927a08eb94",
+  "restore_receipt_sha256": "82116a6ade7b3021b5a868cc0c112a4ba51a7d02a9aa81eebf2bdb78b72637fb",
+  "record_corrections": [
+    "Actual Gateway message-worker env16 each, default8 is not runtime. Comparisons retain fixed Env.",
+    "Original offline audit scratch_limits text says64KiB timeline; executable bound was512KiB per own file; no unrelated writes, sources/audit retained; future helpers must align prose bound and executable bound.",
+    "Read-only hardware command first used nonexistent guessed Gateway names and returned error after hardware data; subsequent actual names confirmed16, no mutations."
+  ],
+  "official_sources": [
+    {
+      "url": "https://www.erlang-solutions.com/blog/mongooseim-6-1-handle-more-traffic-consume-less-resources/",
+      "published": "2023-05-10",
+      "comparability": "different nodes/hardware/5-recipient groups and timing semantics"
+    },
+    {
+      "url": "https://www.erlang-solutions.com/blog/updates-to-the-mim-inbox-in-version-5-1/",
+      "published": "2022-07-14",
+      "comparability": "hardware and durable confirm not fully equivalent"
+    },
+    {
+      "url": "https://openim.io/tutorials/",
+      "limit": "video titles verified, underlying videos failed to fetch; no equivalent P99 inferred"
+    },
+    {
+      "url": "https://github.com/openimsdk/open-im-server",
+      "limit": "product/SDK scope; no exact benchmark inferred"
+    },
+    {
+      "url": "https://github.com/tinode/chat/blob/master/README.md?plain=1",
+      "limit": "feature documentation, no equivalent performance ranking"
+    }
+  ]
+}

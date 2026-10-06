@@ -26,3 +26,31 @@
 封闭Message仅替换Repo TU；class fields/ctor/virtual/proto/API旧路径不变，原single Confirm body完全保持。其他所有封闭链接输入SHA不变、运行ELF无mysql wrapper；UID1000/network none/read-only/capdrop ldd-r、缺配置expected exit1通过。image tinyimx/runtime:codex-group-confirm-coalesce-message-v1-20261006，645e9cc183f42804933f660aded2a926d8ea8f16e32eb9119c98b5d3bd74a8ee，ELF08042d14e52373fc09c06f42b06d6d7e5ac6729a9811de9b19519cc6e7bb641f。387checks封闭build receipt group-confirm-coalesce-build-20261006-attempt3；19/私有配置/持久化和主机应用全部保持，未部署。
 
 下一同Gateway818bea35/066acab3和同Message645e9cc/08042，仅Message coalesce0/1/1/0；原Gateway message-runtime固定1、partial/route/completion/claim/recipient/defer/commitwake全部1，各messageRPC健康就绪固定、原3秒ACK/ALL及SQL8秒观察截止保持，四组33消息每case及四完整54op37assert链。保留限频coalescing阶段与每size只读SQL计数窗口，不给30样本估P99。完成后精确恢复原5c2645/be8全Env/Health/HostConfig/Mounts/其他16，所有失败保留。全功能万人混合/20kFAIL/50k全部feature及AI仍OPEN。
+
+
+## 真实ABBA完成：减少SQL但没有稳定端到端改善（最新结论）
+
+控制5f05f4c，group-confirm-coalesce-control-20261006；同818bea35/066acab34 Gateway和645e9cc/08042d14 Message，message-runtime固定1（实际16worker），partial/route/completion/claim/recipient/defer/commitwake固定1，仅确认coalesce0/1/1/0；trace两模式相同。每size33消息/3warm30测量，528消息/23628实际wire及最终SQL状态3、216完整链操作/148断言、0观察重复，原3秒ACK/ALL与SQL8秒观察期限保持。
+
+|case|2人ALL mean/max ms|16人|65人|100人|
+|---|---:|---:|---:|---:|
+|A1 off|37.557/44.252|61.193/111.798|130.368/196.95|261.2/388.006|
+|B1 on|37.712/45.183|58.237/72.692|119.478/149.103|247.59/299.913|
+|B2 on|38.059/44.296|53.835/71.487|104.878/142.381|223.36/275.073|
+|A2 off|33.463/44.501|55.364/73.773|114.126/153.686|241.108/299.601|
+
+全部30样本不估P99。最慢ON对最快OFF均值收益2/16/65/100分别-13.735/-5.190/-4.690/-2.688%，没有稳定端到端收益；65/100均FAIL，A1的16人max111.798ms失败保留。不能挑B2最快轮或SQL减少宣布突破。
+
+100人33消息窗口OFF3265/3267次确认UPDATE，ON57scalar+324batch=381、54scalar+336batch=390，约减少88%；并行累计确认语句时间OFF34.727/32.517秒、ON1.914/1.753秒。Get仍4915/4916次。全局P_S非原子且语句事件完成边界不同，affected/count小差保存，不认定丢消息或精确fsync映射，逐人wire+SQL3核对为准。确认阶段偏置样本ON每批平均约7.5–8.2caller，阶段总平均12.8–15.4ms；ACK Confirm RPC均值仍33–39ms。SQL减少不能替代排队/同步RPC/批等待关键路径分析，不把嵌套不同样本均值相加。
+
+analysis.json最初task字段映射不完整，task-analysis-v2.json用dispatch_age_us/get_rpc_us/confirm_rpc_us更正并保留旧版。结果与SHA收据保存于benchmark/local_capacity/results/group_confirm_coalesce_and_measurement_io_20261006.json。restore-summary状态ACCEPTED_GATEWAY_AND_MESSAGE_FULL_ENV_RESTORED，原5c2645/be8映像、全配置、其他16、持久化与宿主应用精确保持。候选默认OFF，尚未进入10k/20k容量验收。
+
+
+
+## 2026-10-06最终现状审查：实际线程与测量方法纠正
+
+实际两个Gateway环境TINYIMX_MESSAGE_WORKER_THREADS=16，每个消息执行器16worker；business4worker。前文8是代码默认值，错误地用于运行解释。runtime及SQL诊断实验同映像/完整配置固定，不影响单变量对照，但正确并发解释为4→16。原记录与数字保留，不按错误线程解释重复扩池或加线程。
+
+最新确认合并387验证PASS、实际528消息/23628逐人wire与SQL状态3、216操作/148断言。确认UPDATE约减少88%，100人ALL两ON247.590/223.360ms、OFF261.200/241.108ms；最慢ON对最快OFF没有稳定均值收益，65/100仍FAIL，未部署。原运行完整恢复。完整结果见[当前性能与竞争力评估](CURRENT_PERFORMANCE_ASSESSMENT_20261006.md)和GROUP_CONFIRM_COALESCE_20261006.md文末。
+
+群微测试send后同步重写累计证据，再读响应；同Guest离线重放100人后段约1.62MB写入平均47.310–61.132ms，编码CPU占大部分。99条合成接收记录逐条写平均11.319ms。不能从历史数字直接扣除或改FAIL，必须先移出测量关键路径并校验新旧观察，再定位全链。当前1万指定混合已通过，不等于每个功能高频/5万人容量，2万失败、文件高并发、AI原profile/推理、多端/故障/长期稳态未验收。

@@ -83,3 +83,12 @@ ACK排队ON30–45ms，对OFF92–100ms减少，但ON Get约20.6–20.8ms/Confir
 下一候选针对已经明确的每收件独立确认提交成本，审查有界并发合并；仍保留原Gateway durableGet在Tracker ACK之前、已登记attempt seq、认证UID、确认status<>3、每个RPC自己的affected_rows、0行幂等成功、持久化1/1/1/0/0和不确定提交不自动回放。不能简单用总affected_rows发给每个请求。先真实独立SQL/并发/重复/缺失/故障/关闭验证，再同镜像单变量实际对照与全功能交叉，候选尚未实现或验收。
 
 最终原Gateway5c2645/e687+Messagebe8/2548及全Env/HostConfig/Health/Mounts恢复，其他16实例/配置/持久化和主机应用保持；当前恢复实例以group-runtime-sql-diagnostic-20261006/restore-summary.json为准，旧receipt仅历史。当前全部功能目标仍OPEN：20k混合FAIL、50k高频全部功能、文件真实并发传输、离线恢复/故障长稳态、AI原profile地址模型/主体及CPU推理均未达标。本轮只读误读助手本地路径，未写目标；实际tracked helper由rg找到后读取，错误保留审计，之后不猜路径。
+
+
+## 2026-10-06最终现状审查：实际线程与测量方法纠正
+
+实际两个Gateway环境TINYIMX_MESSAGE_WORKER_THREADS=16，每个消息执行器16worker；business4worker。前文8是代码默认值，错误地用于运行解释。runtime及SQL诊断实验同映像/完整配置固定，不影响单变量对照，但正确并发解释为4→16。原记录与数字保留，不按错误线程解释重复扩池或加线程。
+
+最新确认合并387验证PASS、实际528消息/23628逐人wire与SQL状态3、216操作/148断言。确认UPDATE约减少88%，100人ALL两ON247.590/223.360ms、OFF261.200/241.108ms；最慢ON对最快OFF没有稳定均值收益，65/100仍FAIL，未部署。原运行完整恢复。完整结果见[当前性能与竞争力评估](CURRENT_PERFORMANCE_ASSESSMENT_20261006.md)和GROUP_CONFIRM_COALESCE_20261006.md文末。
+
+群微测试send后同步重写累计证据，再读响应；同Guest离线重放100人后段约1.62MB写入平均47.310–61.132ms，编码CPU占大部分。99条合成接收记录逐条写平均11.319ms。不能从历史数字直接扣除或改FAIL，必须先移出测量关键路径并校验新旧观察，再定位全链。当前1万指定混合已通过，不等于每个功能高频/5万人容量，2万失败、文件高并发、AI原profile/推理、多端/故障/长期稳态未验收。
