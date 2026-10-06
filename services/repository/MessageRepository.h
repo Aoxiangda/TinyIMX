@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <utility>
 
 namespace tinyimx {
 
@@ -648,6 +649,11 @@ public:
         std::uint64_t recipient_user_id
     );
 
+    // <=64 requests, original per-caller 0/1 result; sorted locked atomic commit.
+    std::vector<GroupDeliveryMutationResult> ConfirmGroupMessageDeliveryBatch(
+        const std::vector<std::pair<std::uint64_t, std::uint64_t>>& identities
+    );
+
     /*
      * M16 Transactional Outbox composition primitives.
      *
@@ -727,6 +733,10 @@ public:
     );
 
 private:
+    GroupDeliveryMutationResult ConfirmGroupMessageDeliveryDirect(
+        std::uint64_t message_id, std::uint64_t recipient_user_id
+    );
+
     static ListPrivateMessagesResult BuildMessagesFromResult(
         const MySqlQueryResult& result
     );

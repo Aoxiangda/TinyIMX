@@ -1,4 +1,10 @@
 #include "services/repository/MessageRepository.h"
+#include "common/runtime/BoundedCallerBatch.h"
+#include <atomic>
+#include <chrono>
+#include <map>
+#include <memory>
+#include <mutex>
 
 #include <algorithm>
 #include <cstdlib>
@@ -163,6 +169,85 @@ std::string GroupDeliverySelectColumns() {
         "m.message_id, m.client_message_id, m.group_id, m.from_user_id, m.message_type, "
         "m.content, m.membership_epoch, m.member_version, m.authorized_role, m.created_at ";
 }
+
+
+bool GroupConfirmCoalescingEnabled() noexcept {
+    static const bool enabled = [] {
+        const char* flag = std::getenv("TINYIMX_GROUP_CONFIRM_COALESCE_ENABLE");
+        return flag != nullptr && std::string_view(flag) == "1";
+    }();
+    return enabled;
+}
+
+using GroupConfirmIdentity = std::pair<std::uint64_t, std::uint64_t>;
+using GroupConfirmBatcher =
+    BoundedCallerBatch<GroupConfirmIdentity, GroupDeliveryMutationResult>;
+
+// Weak entries carry no repository ownership and no work after RPC return.
+// Existing repository layout remains unchanged. Calls on different repositories
+// never combine; pointer reuse after all calls complete creates a fresh batcher.
+std::shared_ptr<GroupConfirmBatcher> GroupConfirmBatcherFor(MessageRepository* repository) {
+    static std::mutex mutex;
+    static std::map<MessageRepository*, std::weak_ptr<GroupConfirmBatcher>> entries;
+    std::lock_guard<std::mutex> lock(mutex);
+    for (auto it = entries.begin(); it != entries.end();) {
+        if (it->second.expired()) it = entries.erase(it);
+        else ++it;
+    }
+    if (auto existing = entries[repository].lock()) return existing;
+    auto batcher = std::make_shared<GroupConfirmBatcher>();
+    entries[repository] = batcher;
+    return batcher;
+}
+
+class GroupConfirmBatchPhase {
+public:
+    GroupConfirmBatchPhase(std::size_t requests, std::size_t unique)
+        : requests_(requests), unique_(unique), selected_(Selected()) {
+        if (selected_) start_ = phase_ = Clock::now();
+    }
+    ~GroupConfirmBatchPhase() noexcept {
+        if (!selected_) return;
+        try {
+            LOG_WARN("group_confirm_batch_phase requests=" << requests_
+                << " unique=" << unique_ << " status=" << status_
+                << " affected=" << affected_ << " acquire_us=" << acquire_
+                << " begin_us=" << begin_ << " query_us=" << query_
+                << " update_us=" << update_ << " commit_us=" << commit_
+                << " started_us=" << Micros(start_.time_since_epoch())
+                << " total_us=" << Micros(Clock::now() - start_));
+        } catch (...) {}
+    }
+    template<class Call> bool Measure(std::int64_t& field, Call&& call) {
+        if (selected_) phase_ = Clock::now();
+        const bool result = call();
+        if (selected_) field = Micros(Clock::now() - phase_);
+        return result;
+    }
+    std::int64_t acquire_{0}, begin_{0}, query_{0}, update_{0}, commit_{0};
+    int status_{1};
+    std::uint64_t affected_{0};
+private:
+    using Clock = std::chrono::steady_clock;
+    template<class Duration> static std::int64_t Micros(Duration duration) {
+        return std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+    }
+    static bool Selected() noexcept {
+        static const bool enabled = [] {
+            const char* flag = std::getenv("TINYIMX_GROUP_CONFIRM_BATCH_TRACE_ENABLE");
+            return flag != nullptr && std::string_view(flag) == "1";
+        }();
+        if (!enabled) return false;
+        static std::atomic<std::int64_t> next{0};
+        const auto now = Micros(Clock::now().time_since_epoch());
+        auto prior = next.load(std::memory_order_relaxed);
+        return now >= prior && next.compare_exchange_strong(
+            prior, now + 125000, std::memory_order_relaxed);
+    }
+    std::size_t requests_, unique_;
+    bool selected_;
+    Clock::time_point start_{}, phase_{};
+};
 
 }  // namespace
 
@@ -2688,6 +2773,127 @@ GroupDeliveryMutationResult MessageRepository::CompleteGroupMessageDeliveryAttem
 }
 
 GroupDeliveryMutationResult MessageRepository::ConfirmGroupMessageDelivery(
+    std::uint64_t message_id,
+    std::uint64_t recipient_user_id
+) {
+    // Invalid calls retain the original result without queueing or acquiring.
+    if (!GroupConfirmCoalescingEnabled() || pool_ == nullptr ||
+        message_id == 0 || recipient_user_id == 0) {
+        return ConfirmGroupMessageDeliveryDirect(message_id, recipient_user_id);
+    }
+    GroupDeliveryMutationResult failure;
+    failure.status = MessageMutationStatus::kStorageError;
+    failure.message = "group confirmation batch unavailable";
+    return GroupConfirmBatcherFor(this)->Run(
+        GroupConfirmIdentity{message_id, recipient_user_id},
+        [this](const std::vector<GroupConfirmIdentity>& identities) {
+            return ConfirmGroupMessageDeliveryBatch(identities);
+        }, failure);
+}
+
+std::vector<GroupDeliveryMutationResult>
+MessageRepository::ConfirmGroupMessageDeliveryBatch(
+    const std::vector<std::pair<std::uint64_t, std::uint64_t>>& identities
+) {
+    std::vector<GroupDeliveryMutationResult> results(identities.size());
+    const auto fail = [&](MessageMutationStatus status, const std::string& message) {
+        for (auto& result : results) {
+            result.status = status;
+            result.affected_rows = 0;
+            result.message = message;
+        }
+        return results;
+    };
+    if (pool_ == nullptr || identities.empty() || identities.size() > 64 ||
+        std::any_of(identities.begin(), identities.end(), [](const auto& id) {
+            return id.first == 0 || id.second == 0;
+        })) {
+        return fail(MessageMutationStatus::kInvalidArgument,
+                    "invalid group confirmation batch arguments");
+    }
+    // A lone caller retains the original single-statement confirmation.
+    if (identities.size() == 1) {
+        results[0] = ConfirmGroupMessageDeliveryDirect(
+            identities[0].first, identities[0].second);
+        return results;
+    }
+    std::set<GroupConfirmIdentity> unique(identities.begin(), identities.end());
+    GroupConfirmBatchPhase trace(identities.size(), unique.size());
+    MySqlConnectionLease connection;
+    trace.Measure(trace.acquire_, [&] {
+        connection = pool_->Acquire(); return static_cast<bool>(connection);
+    });
+    if (!connection) {
+        return fail(MessageMutationStatus::kStorageError,
+                    "group confirmation batch failed to acquire connection");
+    }
+    if (!trace.Measure(trace.begin_, [&] { return connection->BeginTransaction(); })) {
+        return fail(MessageMutationStatus::kStorageError,
+                    "group confirmation batch begin failed: " + connection->LastError());
+    }
+    const auto rollback_failure = [&](const std::string& stage) {
+        const auto error = connection->LastError();
+        // A failed/uncertain COMMIT is reported to every caller without replay.
+        // Closing after failed cleanup prevents active transactions reentering
+        // the pool. The next normal Acquire keeps its original healthy check.
+        if (!connection->Rollback()) connection->Close();
+        return fail(MessageMutationStatus::kStorageError,
+                    "group confirmation batch " + stage + " failed: " + error);
+    };
+    std::string keys;
+    for (const auto& id : unique) {
+        if (!keys.empty()) keys += ",";
+        keys += "(" + std::to_string(id.first) + "," + std::to_string(id.second) + ")";
+    }
+    MySqlQueryResult rows;
+    const std::string select =
+        "SELECT message_id,recipient_user_id,delivery_status "
+        "FROM im_group_message_deliveries WHERE (message_id,recipient_user_id) IN (" +
+        keys + ") ORDER BY message_id,recipient_user_id FOR UPDATE";
+    if (!trace.Measure(trace.query_, [&] { return connection->Query(select, &rows); }))
+        return rollback_failure("read");
+    std::set<GroupConfirmIdentity> changed;
+    try {
+        for (const auto& row : rows.rows) {
+            if (row.size() != 3) throw std::runtime_error("invalid confirmation row");
+            GroupConfirmIdentity id{ToUInt64(row[0]), ToUInt64(row[1])};
+            if (!unique.contains(id))
+                throw std::runtime_error("unexpected confirmation identity");
+            // Preserve the original <>3 guard, including any legacy status.
+            if (ToUInt64(row[2]) != 3) changed.insert(id);
+        }
+    } catch (...) {
+        if (!connection->Rollback()) connection->Close();
+        return fail(MessageMutationStatus::kStorageError,
+                    "invalid group confirmation batch rows");
+    }
+    const std::string update =
+        "UPDATE im_group_message_deliveries SET delivery_status=3, "
+        "delivered_at=COALESCE(delivered_at,NOW(3)), "
+        "lease_owner=NULL, lease_token=NULL, lease_until=NULL, last_error_code=NULL "
+        "WHERE (message_id,recipient_user_id) IN (" + keys + ") AND delivery_status<>3";
+    if (!trace.Measure(trace.update_, [&] { return connection->Execute(update); }))
+        return rollback_failure("update");
+    const auto affected = connection->AffectedRows();
+    if (affected != changed.size()) {
+        if (!connection->Rollback()) connection->Close();
+        return fail(MessageMutationStatus::kStorageError,
+                    "group confirmation batch affected rows mismatch");
+    }
+    if (!trace.Measure(trace.commit_, [&] { return connection->Commit(); }))
+        return rollback_failure("commit");
+    trace.status_ = 0; trace.affected_ = affected;
+    for (std::size_t i = 0; i < identities.size(); ++i) {
+        results[i].status = MessageMutationStatus::kSucceeded;
+        // Lock/read/update/commit establishes each original 0/1 result.
+        // Concurrent duplicates in this batch linearize in FIFO input order.
+        results[i].affected_rows = changed.erase(identities[i]) ? 1 : 0;
+        results[i].message = "group delivery confirmed";
+    }
+    return results;
+}
+
+GroupDeliveryMutationResult MessageRepository::ConfirmGroupMessageDeliveryDirect(
     std::uint64_t message_id,
     std::uint64_t recipient_user_id
 ) {
