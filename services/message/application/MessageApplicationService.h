@@ -98,6 +98,10 @@ public:
         const std::string& error_code
     );
 
+    [[nodiscard]] MessageMutationApplicationResult CompleteGroupMessageDeliveryAttempts(
+        const std::vector<GroupDeliveryAttemptCompletion>& attempts
+    );
+
     [[nodiscard]] MessageMutationApplicationResult ConfirmGroupMessageDelivery(
         std::uint64_t message_id,
         std::uint64_t recipient_user_id

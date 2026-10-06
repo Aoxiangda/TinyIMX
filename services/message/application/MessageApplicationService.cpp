@@ -1,4 +1,5 @@
 #include "services/message/application/MessageApplicationService.h"
+#include "services/message/application/GroupDeliveryCompletionValidation.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -290,6 +291,28 @@ MessageApplicationService::CompleteGroupMessageDeliveryAttempt(
     }
     auto result = repository_->CompleteGroupMessageDeliveryAttempt(
         message_id, recipient_user_id, lease_token, outcome, gateway_id, retry_after_ms, error_code);
+    output.status = result.status;
+    output.affected_rows = result.affected_rows;
+    output.message = std::move(result.message);
+    return output;
+}
+
+MessageMutationApplicationResult
+MessageApplicationService::CompleteGroupMessageDeliveryAttempts(
+    const std::vector<GroupDeliveryAttemptCompletion>& attempts
+) {
+    MessageMutationApplicationResult output;
+    if (!ValidGroupDeliveryAttemptCompletions(attempts)) {
+        output.status = MessageApplicationStatus::kInvalidArgument;
+        output.message = "invalid CompleteGroupMessageDeliveryAttempts application request";
+        return output;
+    }
+    if (repository_ == nullptr) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "message repository port is unavailable";
+        return output;
+    }
+    auto result = repository_->CompleteGroupMessageDeliveryAttempts(attempts);
     output.status = result.status;
     output.affected_rows = result.affected_rows;
     output.message = std::move(result.message);

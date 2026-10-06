@@ -13,6 +13,7 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <set>
 
 namespace tinyimx::rpc {
 namespace {
@@ -627,6 +628,95 @@ MessageMutationRpcCallResult MessageRpcClient::CompleteGroupMessageDeliveryAttem
     tinyimx::message::v1::CompleteGroupMessageDeliveryAttemptRequest in; FillMeta(options,in.mutable_meta()); in.set_message_id(request.message_id); in.set_recipient_user_id(request.recipient_user_id); in.set_lease_token(request.lease_token); in.set_gateway_id(request.gateway_id); in.set_retry_after_ms(request.retry_after_ms); in.set_error_code(request.error_code);
     switch(request.outcome){case GroupDeliveryAttemptRpcOutcome::kSubmitted:in.set_outcome(tinyimx::message::v1::GROUP_DELIVERY_ATTEMPT_OUTCOME_SUBMITTED);break;case GroupDeliveryAttemptRpcOutcome::kOffline:in.set_outcome(tinyimx::message::v1::GROUP_DELIVERY_ATTEMPT_OUTCOME_OFFLINE);break;case GroupDeliveryAttemptRpcOutcome::kRetryableFailure:in.set_outcome(tinyimx::message::v1::GROUP_DELIVERY_ATTEMPT_OUTCOME_RETRYABLE_FAILURE);break;}
     tinyimx::message::v1::MessageMutationResponse out; grpc::ClientContext context; context.set_deadline(std::chrono::system_clock::now()+options.remaining_timeout); const auto status=stub->CompleteGroupMessageDeliveryAttempt(&context,in,&out); if(!status.ok()){const auto mapped=MapGrpcStatus(status); return MessageMutationRpcCallResult::Failure(mapped.code,mapped.message,true);} MessageMutationRpcResponse response; response.affected_rows=out.affected_rows(); return MessageMutationRpcCallResult::Success(std::move(response));
+}
+
+MessageMutationRpcCallResult MessageRpcClient::CompleteGroupMessageDeliveryAttempts(
+    const std::vector<CompleteGroupMessageDeliveryAttemptRpcRequest>& attempts,
+    const RpcCallOptions& options
+) const {
+    using Result = MessageMutationRpcCallResult;
+    if (options.remaining_timeout <= std::chrono::milliseconds::zero()) {
+        return Result::Failure(RpcErrorCode::kDeadlineExceeded,
+                               "group completion RPC budget exhausted", false);
+    }
+    const auto deadline = std::chrono::system_clock::now() + options.remaining_timeout;
+    const auto steady_deadline = std::chrono::steady_clock::now() + options.remaining_timeout;
+    if (attempts.empty() || attempts.size() > 256) {
+        return Result::Failure(RpcErrorCode::kInvalidArgument,
+                               "invalid bounded group completion request", false);
+    }
+    std::set<std::pair<std::uint64_t, std::uint64_t>> identities;
+    for (const auto& item : attempts) {
+        if (item.message_id == 0 || item.recipient_user_id == 0 ||
+            item.lease_token.empty() || item.lease_token.size() > 128 ||
+            item.gateway_id.size() > 128 || item.error_code.size() > 128 ||
+            item.retry_after_ms > 600000 ||
+            !identities.emplace(item.message_id, item.recipient_user_id).second) {
+            return Result::Failure(RpcErrorCode::kInvalidArgument,
+                                   "invalid group completion item", false);
+        }
+        switch (item.outcome) {
+            case GroupDeliveryAttemptRpcOutcome::kSubmitted:
+            case GroupDeliveryAttemptRpcOutcome::kOffline:
+            case GroupDeliveryAttemptRpcOutcome::kRetryableFailure:
+                break;
+            default:
+                return Result::Failure(RpcErrorCode::kInvalidArgument,
+                                       "invalid group completion outcome", false);
+        }
+    }
+    if (!endpoint_provider_) {
+        return Result::Failure(RpcErrorCode::kUnavailable,
+                               "MessageService endpoint provider is not configured", false);
+    }
+    const auto endpoint = endpoint_provider_->Resolve(ServiceKind::kMessage);
+    if (!endpoint || endpoint->target.empty()) {
+        return Result::Failure(RpcErrorCode::kUnavailable,
+                               "MessageService endpoint is unavailable", false);
+    }
+    auto stub = GetOrCreateStub(*endpoint);
+    if (!stub) {
+        return Result::Failure(RpcErrorCode::kUnavailable,
+                               "MessageService gRPC stub could not be created", false);
+    }
+    tinyimx::message::v1::CompleteGroupMessageDeliveryAttemptsRequest in;
+    FillMeta(options, in.mutable_meta());
+    for (const auto& item : attempts) {
+        auto* entry = in.add_attempts();
+        entry->set_message_id(item.message_id);
+        entry->set_recipient_user_id(item.recipient_user_id);
+        entry->set_lease_token(item.lease_token);
+        entry->set_gateway_id(item.gateway_id);
+        entry->set_retry_after_ms(item.retry_after_ms);
+        entry->set_error_code(item.error_code);
+        switch (item.outcome) {
+            case GroupDeliveryAttemptRpcOutcome::kSubmitted:
+                entry->set_outcome(tinyimx::message::v1::GROUP_DELIVERY_ATTEMPT_OUTCOME_SUBMITTED); break;
+            case GroupDeliveryAttemptRpcOutcome::kOffline:
+                entry->set_outcome(tinyimx::message::v1::GROUP_DELIVERY_ATTEMPT_OUTCOME_OFFLINE); break;
+            case GroupDeliveryAttemptRpcOutcome::kRetryableFailure:
+                entry->set_outcome(tinyimx::message::v1::GROUP_DELIVERY_ATTEMPT_OUTCOME_RETRYABLE_FAILURE); break;
+        }
+    }
+    if (std::chrono::steady_clock::now() >= steady_deadline) {
+        return Result::Failure(RpcErrorCode::kDeadlineExceeded,
+                               "group completion budget exhausted before transport", false);
+    }
+    tinyimx::message::v1::MessageMutationResponse out;
+    grpc::ClientContext context;
+    context.set_deadline(deadline);
+    const auto status = stub->CompleteGroupMessageDeliveryAttempts(&context, in, &out);
+    if (!status.ok()) {
+        const auto mapped = MapGrpcStatus(status);
+        return Result::Failure(mapped.code, mapped.message, true);
+    }
+    if (out.affected_rows() > attempts.size()) {
+        return Result::Failure(RpcErrorCode::kDataLoss,
+                               "group completion response exceeds requested count", true);
+    }
+    MessageMutationRpcResponse response;
+    response.affected_rows = out.affected_rows();
+    return Result::Success(std::move(response));
 }
 
 MessageMutationRpcCallResult MessageRpcClient::ConfirmGroupMessageDelivery(

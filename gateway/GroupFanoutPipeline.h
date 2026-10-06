@@ -22,6 +22,13 @@ inline bool GroupFanoutPartialDrainEnabled() noexcept {
     }();
     return enabled;
 }
+inline bool GroupFanoutCompletionBatchEnabled() noexcept {
+    static const bool enabled = [] {
+        const char* value = std::getenv("TINYIMX_GROUP_FANOUT_COMPLETION_BATCH_ENABLE");
+        return value && std::strcmp(value, "1") == 0;
+    }();
+    return enabled;
+}
 namespace diagnostics {
 inline bool GroupFanoutPhaseTraceEnabled() noexcept {
     static const bool enabled = [] {
@@ -57,7 +64,8 @@ public:
             LOG_WARN("group_fanout_phase deferred=" << deferred_
                 << " first_mid=" << first_mid_ << " last_mid=" << last_mid_
                 << " claimed=" << count_ << " dispatched=" << dispatched_
-                << " completed=" << completed_ << " started_us=" << started_
+                << " completed=" << completed_ << " complete_rpc_calls=" << complete_calls_
+                << " completion_batch=" << completion_batch_ << " started_us=" << started_
                 << " total_us=" << total << " thread_cpu_us=" << cpu
                 << " claim_rpc_us=" << claim_ << " dispatch_sum_us=" << dispatch_sum_
                 << " dispatch_max_us=" << dispatch_max_
@@ -80,12 +88,19 @@ public:
     void CompleteDone(std::int64_t start) noexcept {
         if (!selected_) return;
         const auto elapsed = SteadyMicros() - start;
-        ++completed_; complete_sum_ += elapsed;
+        ++completed_; ++complete_calls_; complete_sum_ += elapsed;
+        if (elapsed > complete_max_) complete_max_ = elapsed;
+    }
+    void CompleteBatchDone(std::int64_t start, std::size_t count) noexcept {
+        if (!selected_) return;
+        const auto elapsed = SteadyMicros() - start;
+        completed_ += count; ++complete_calls_; completion_batch_ = true;
+        complete_sum_ += elapsed;
         if (elapsed > complete_max_) complete_max_ = elapsed;
     }
 private:
-    bool selected_{false}, deferred_;
-    std::size_t count_{0}, dispatched_{0}, completed_{0};
+    bool selected_{false}, deferred_, completion_batch_{false};
+    std::size_t count_{0}, dispatched_{0}, completed_{0}, complete_calls_{0};
     std::uint64_t first_mid_{0}, last_mid_{0};
     std::int64_t started_{0}, cpu_start_{-1}, claim_{0};
     std::int64_t dispatch_sum_{0}, dispatch_max_{0}, complete_sum_{0}, complete_max_{0};

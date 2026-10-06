@@ -63,6 +63,16 @@ enum class GroupDeliveryAttemptOutcome : std::uint32_t {
     kRetryableFailure = 3,
 };
 
+struct GroupDeliveryAttemptCompletion {
+    std::uint64_t message_id{0};
+    std::uint64_t recipient_user_id{0};
+    std::string lease_token;
+    GroupDeliveryAttemptOutcome outcome{GroupDeliveryAttemptOutcome::kRetryableFailure};
+    std::string gateway_id;
+    std::uint32_t retry_after_ms{0};
+    std::string error_code;
+};
+
 struct GroupDeliveryView {
     std::uint64_t message_id{0};
     std::uint64_t group_id{0};

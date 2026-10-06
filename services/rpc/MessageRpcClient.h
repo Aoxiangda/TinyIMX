@@ -49,6 +49,9 @@ public:
         const RpcCallOptions&) const;
     [[nodiscard]] MessageMutationRpcCallResult CompleteGroupMessageDeliveryAttempt(
         const CompleteGroupMessageDeliveryAttemptRpcRequest&, const RpcCallOptions&) const;
+    [[nodiscard]] MessageMutationRpcCallResult CompleteGroupMessageDeliveryAttempts(
+        const std::vector<CompleteGroupMessageDeliveryAttemptRpcRequest>&,
+        const RpcCallOptions&) const;
     [[nodiscard]] MessageMutationRpcCallResult ConfirmGroupMessageDelivery(
         const ConfirmGroupMessageDeliveryRpcRequest&, const RpcCallOptions&) const;
 

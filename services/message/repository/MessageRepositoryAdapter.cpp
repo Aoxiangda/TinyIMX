@@ -1,4 +1,5 @@
 #include "services/message/repository/MessageRepositoryAdapter.h"
+#include "services/message/application/GroupDeliveryCompletionValidation.h"
 #include "services/message/repository/PrivatePersistenceTrace.h"
 
 #include "services/repository/MessageRepository.h"
@@ -750,6 +751,43 @@ MessageRepositoryAdapter::CompleteGroupMessageDeliveryAttempt(
     output.status = MapStatus(result.status);
     output.affected_rows = result.affected_rows;
     output.message = result.message;
+    return output;
+}
+
+MessageRepositoryMutationResult
+MessageRepositoryAdapter::CompleteGroupMessageDeliveryAttempts(
+    const std::vector<GroupDeliveryAttemptCompletion>& attempts
+) {
+    MessageRepositoryMutationResult output;
+    if (!ValidGroupDeliveryAttemptCompletions(attempts)) {
+        output.status = MessageApplicationStatus::kInvalidArgument;
+        output.message = "invalid group delivery batch completion";
+        return output;
+    }
+    if (repository_ == nullptr) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "message repository is unavailable";
+        return output;
+    }
+    std::vector<tinyimx::GroupDeliveryAttemptCompletion> completions;
+    completions.reserve(attempts.size());
+    for (const auto& item : attempts) {
+        tinyimx::GroupDeliveryAttemptCompletion completion;
+        completion.message_id = item.message_id;
+        completion.recipient_user_id = item.recipient_user_id;
+        completion.lease_token = item.lease_token;
+        completion.next_status = item.outcome == GroupDeliveryAttemptOutcome::kOffline
+            ? tinyimx::GroupDeliveryStatus::kDeferredOffline
+            : tinyimx::GroupDeliveryStatus::kPending;
+        completion.gateway_id = item.gateway_id;
+        completion.retry_after_ms = item.retry_after_ms;
+        completion.error_code = item.error_code;
+        completions.push_back(std::move(completion));
+    }
+    auto result = repository_->CompleteGroupMessageDeliveryAttempts(completions);
+    output.status = MapStatus(result.status);
+    output.affected_rows = result.affected_rows;
+    output.message = std::move(result.message);
     return output;
 }
 

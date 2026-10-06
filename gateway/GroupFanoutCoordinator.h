@@ -10,6 +10,7 @@
 #include <functional>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace tinyimx {
 
@@ -46,9 +47,15 @@ struct GroupFanoutCoordinatorDependencies {
     using DispatchCallback = std::function<
         GroupFanoutDispatchResult(const rpc::GroupDeliveryWorkRpcRecord&)>;
 
+    using CompleteBatchCallback = std::function<
+        rpc::MessageMutationRpcCallResult(
+            const std::vector<rpc::CompleteGroupMessageDeliveryAttemptRpcRequest>&,
+            const rpc::RpcCallOptions&)>;
+
     ClaimCallback claim;
     CompleteCallback complete;
     DispatchCallback dispatch;
+    CompleteBatchCallback complete_batch;
 
     [[nodiscard]] bool Valid() const noexcept {
         return static_cast<bool>(claim) &&

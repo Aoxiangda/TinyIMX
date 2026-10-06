@@ -154,6 +154,10 @@ public:
         TransactionalPreInsertHookForTest hook
     );
 
+    [[nodiscard]] MessageRepositoryMutationResult CompleteGroupMessageDeliveryAttempts(
+        const std::vector<GroupDeliveryAttemptCompletion>& attempts
+    ) override;
+
 private:
     tinyimx::MessageRepository* repository_{nullptr};       // non-owning
     tinyimx::MySqlConnectionPool* pool_{nullptr};           // non-owning

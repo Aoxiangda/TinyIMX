@@ -134,6 +134,16 @@ public:
         std::uint64_t reader_user_id,
         std::uint64_t peer_user_id
     ) = 0;
+    // Appended virtual slot. Unsupported ports fail explicitly rather than
+    // silently substituting a partially successful sequence of mutations.
+    [[nodiscard]] virtual MessageRepositoryMutationResult CompleteGroupMessageDeliveryAttempts(
+        const std::vector<GroupDeliveryAttemptCompletion>&
+    ) {
+        MessageRepositoryMutationResult result;
+        result.status = MessageApplicationStatus::kFailedPrecondition;
+        result.message = "group delivery batch completion is unavailable";
+        return result;
+    }
 };
 
 }  // namespace tinyimx::message

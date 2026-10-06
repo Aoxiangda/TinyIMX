@@ -58,6 +58,9 @@ service MessageService {
     // Durable receiver-centric discovery, appended after the frozen 16 RPCs.
     rpc ListPendingRecipientsAfter(ListPendingRecipientsAfterRequest)
         returns (ListPendingRecipientsAfterResponse);
+    // Bounded completion appended after all 17 existing RPCs.
+    rpc CompleteGroupMessageDeliveryAttempts(CompleteGroupMessageDeliveryAttemptsRequest)
+        returns (MessageMutationResponse);
 }
 
 message ListPendingRecipientsAfterRequest {
@@ -356,4 +359,11 @@ message MarkDialogReadRequest {
 
 message MessageMutationResponse {
     uint64 affected_rows = 1;
+}
+
+// Every item retains the original single-attempt field numbers. Only the outer
+// meta is used. Completion remains guarded by each durable lease token/status.
+message CompleteGroupMessageDeliveryAttemptsRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    repeated CompleteGroupMessageDeliveryAttemptRequest attempts = 2;
 }

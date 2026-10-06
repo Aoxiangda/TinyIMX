@@ -56,6 +56,12 @@ public:
         tinyimx::message::v1::MessageMutationResponse*
     ) override;
 
+    grpc::Status CompleteGroupMessageDeliveryAttempts(
+        grpc::ServerContext*,
+        const tinyimx::message::v1::CompleteGroupMessageDeliveryAttemptsRequest*,
+        tinyimx::message::v1::MessageMutationResponse*
+    ) override;
+
     grpc::Status ConfirmGroupMessageDelivery(
         grpc::ServerContext*,
         const tinyimx::message::v1::ConfirmGroupMessageDeliveryRequest*,

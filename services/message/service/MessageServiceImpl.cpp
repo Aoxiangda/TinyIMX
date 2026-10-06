@@ -527,6 +527,49 @@ grpc::Status MessageServiceImpl::CompleteGroupMessageDeliveryAttempt(
     return grpc::Status::OK;
 }
 
+grpc::Status MessageServiceImpl::CompleteGroupMessageDeliveryAttempts(
+    grpc::ServerContext* context,
+    const tinyimx::message::v1::CompleteGroupMessageDeliveryAttemptsRequest* request,
+    tinyimx::message::v1::MessageMutationResponse* response
+) {
+    if (!ValidateRpcArguments(context, request, response) ||
+        request->attempts_size() < 1 || request->attempts_size() > 256) {
+        return {grpc::StatusCode::INVALID_ARGUMENT, "invalid bounded group completion RPC"};
+    }
+    if (!application_service_) {
+        return {grpc::StatusCode::UNAVAILABLE, "MessageService application service is unavailable"};
+    }
+    if (context->IsCancelled()) {
+        return {grpc::StatusCode::CANCELLED, "group completion cancelled before mutation"};
+    }
+    std::vector<GroupDeliveryAttemptCompletion> attempts;
+    attempts.reserve(static_cast<std::size_t>(request->attempts_size()));
+    for (const auto& item : request->attempts()) {
+        GroupDeliveryAttemptCompletion completion;
+        completion.message_id = item.message_id();
+        completion.recipient_user_id = item.recipient_user_id();
+        completion.lease_token = item.lease_token();
+        completion.gateway_id = item.gateway_id();
+        completion.retry_after_ms = item.retry_after_ms();
+        completion.error_code = item.error_code();
+        switch (item.outcome()) {
+            case tinyimx::message::v1::GROUP_DELIVERY_ATTEMPT_OUTCOME_SUBMITTED:
+                completion.outcome = GroupDeliveryAttemptOutcome::kSubmitted; break;
+            case tinyimx::message::v1::GROUP_DELIVERY_ATTEMPT_OUTCOME_OFFLINE:
+                completion.outcome = GroupDeliveryAttemptOutcome::kOffline; break;
+            case tinyimx::message::v1::GROUP_DELIVERY_ATTEMPT_OUTCOME_RETRYABLE_FAILURE:
+                completion.outcome = GroupDeliveryAttemptOutcome::kRetryableFailure; break;
+            default:
+                return {grpc::StatusCode::INVALID_ARGUMENT, "invalid group delivery attempt outcome"};
+        }
+        attempts.push_back(std::move(completion));
+    }
+    const auto result = application_service_->CompleteGroupMessageDeliveryAttempts(attempts);
+    if (!result.Succeeded()) return MapApplicationFailure(result.status, result.message);
+    response->set_affected_rows(result.affected_rows);
+    return grpc::Status::OK;
+}
+
 grpc::Status MessageServiceImpl::ConfirmGroupMessageDelivery(
     grpc::ServerContext* context,
     const tinyimx::message::v1::ConfirmGroupMessageDeliveryRequest* request,

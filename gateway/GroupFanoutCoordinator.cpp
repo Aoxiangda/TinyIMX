@@ -35,6 +35,15 @@ GroupFanoutCoordinatorDependencies MakeProductionDependencies(
         };
     }
 
+    if (message_rpc_client != nullptr) {
+        dependencies.complete_batch = [message_rpc_client](
+            const std::vector<rpc::CompleteGroupMessageDeliveryAttemptRpcRequest>& attempts,
+            const rpc::RpcCallOptions& options
+        ) {
+            return message_rpc_client->CompleteGroupMessageDeliveryAttempts(attempts, options);
+        };
+    }
+
     if (gateway != nullptr) {
         dependencies.dispatch = [gateway](const rpc::GroupDeliveryWorkRpcRecord& work) {
             return gateway->DispatchGroupFanoutDelivery(work);
@@ -260,7 +269,22 @@ std::size_t GroupFanoutCoordinator::RunOneIteration() {
     }
     // Original lease/status fence prevents completion from reverting an ACK's
     // DELIVERED state. Every dispatch follows the original committed claim.
-    for (const auto& complete : pending) finish(complete);
+    if (!pending.empty() && GroupFanoutCompletionBatchEnabled() && dependencies_.complete_batch) {
+        const auto begin = trace.Mark();
+        const auto completed = dependencies_.complete_batch(
+            pending, MakeCallOptions("complete-group-delivery-attempts"));
+        trace.CompleteBatchDone(begin, pending.size());
+        if (!completed.ok()) {
+            // A transport error may follow a committed statement. Do not replay
+            // single completions here; the unchanged lease/recovery path owns it.
+            LOG_WARN("group fanout batch completion uncertain"
+                     << ", count=" << pending.size()
+                     << ", attempted=" << completed.attempted
+                     << ", error=" << completed.status.message);
+        }
+    } else {
+        for (const auto& complete : pending) finish(complete);
+    }
 
     return processed;
 }
