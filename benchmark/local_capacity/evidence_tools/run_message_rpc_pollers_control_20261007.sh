@@ -11,7 +11,7 @@ def run(a,timeout=30):return subprocess.check_output(a,text=True,timeout=timeout
 def sha(p):return hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
 def envmap(c):return dict(x.split('=',1) for x in c['Config']['Env'] if '=' in x)
 def ident(c):return {'id':c['Id'],'image':c['Image'],'started':c['State']['StartedAt']}
-source=json.loads((b/'message-rpc-pollers-build-repair-source-20261007/summary.json').read_text())
+source=json.loads((b/'message-rpc-pollers-provenance-source-20261007/summary.json').read_text())
 head=run(['git','rev-parse','HEAD']).strip();assert head==source['head'] and all(sha(r/p)==h for p,h in source['files'].items())
 candidate=json.loads((b/'group-message-runtime-build-20261006/summary.json').read_text())
 message_proof=json.loads((b/'group-completion-rpc-build-20261006-attempt6/summary.json').read_text())

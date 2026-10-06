@@ -7,7 +7,8 @@ import pathlib,json,subprocess,hashlib,shlex,shutil,os,signal,re,datetime
 r=pathlib.Path.cwd();b=r/'.local/codex';d=b/'message-rpc-pollers-build-20261007-attempt2';assert not d.exists()
 run=lambda a:subprocess.check_output(a,text=True,stderr=subprocess.STDOUT,timeout=30)
 sha=lambda p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
-source=json.loads((b/'message-rpc-pollers-build-repair-source-20261007/summary.json').read_text());head=run(['git','rev-parse','HEAD']).strip();assert head==source['head'] and all(sha(r/n)==h for n,h in source['files'].items())
+source=json.loads((b/'message-rpc-pollers-provenance-source-20261007/summary.json').read_text());head=run(['git','rev-parse','HEAD']).strip();assert head==source['head'] and all(sha(r/n)==h for n,h in source['files'].items())
+initial=json.loads((b/'message-rpc-pollers-source-20261007/summary.json').read_text());repair=json.loads((b/'message-rpc-pollers-build-repair-source-20261007/summary.json').read_text());all_source={**initial['files'],**repair['files'],**source['files']};assert all(sha(r/n)==h for n,h in all_source.items());source['files']=all_source
 base=json.loads((b/'group-get-boundary-build-20261007-attempt2/summary.json').read_text());assert base['status']=='GROUP_GET_BOUNDARY_NATIVE_AND_IMAGES_PASS' and base['native_checks']==145
 frozen=b/'group-get-boundary-build-20261007';oldargv=json.loads((frozen/'message-runtime-link-process.json').read_text())['argv'];assert '--wrap' not in ' '.join(oldargv)
 cache=r/'build/linux-release';resolve=lambda x:pathlib.Path(x).resolve() if pathlib.Path(x).is_absolute() else (cache/x).resolve()
