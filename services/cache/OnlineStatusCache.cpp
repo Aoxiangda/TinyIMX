@@ -873,6 +873,97 @@ GetOnlineStatusResult OnlineStatusCache::GetOnlineStatus(
     );
 }
 
+std::vector<GetOnlineStatusResult> OnlineStatusCache::GetOnlineStatusBatch(
+    const std::vector<std::uint64_t>& user_ids
+) {
+    std::vector<GetOnlineStatusResult> results(user_ids.size());
+    if (user_ids.size() > kMaxGetBatchSize) {
+        for (auto& result : results) {
+            result.status = GetOnlineStatusStatus::kInvalidArgument;
+            result.error_message = "online status batch failed: batch exceeds 256 users";
+        }
+        return results;
+    }
+    std::vector<std::string> keys;
+    std::vector<std::size_t> positions;
+    keys.reserve(user_ids.size());
+    positions.reserve(user_ids.size());
+    for (std::size_t i = 0; i < user_ids.size(); ++i) {
+        if (user_ids[i] == 0) {
+            results[i].status = GetOnlineStatusStatus::kInvalidArgument;
+            results[i].error_message = "online status get failed: invalid user_id";
+        } else {
+            keys.push_back(BuildKey(user_ids[i]));
+            positions.push_back(i);
+        }
+    }
+    if (keys.empty()) return results;
+    const auto fail_valid = [&](const std::string& error) {
+        for (const auto i : positions) {
+            results[i].status = GetOnlineStatusStatus::kRedisError;
+            results[i].error_message = error;
+        }
+    };
+    if (pool_ == nullptr) {
+        fail_valid("online status get failed: redis pool is null");
+        return results;
+    }
+    auto connection = pool_->Acquire(); // Preserve the original healthy PING.
+    if (!connection) {
+        fail_valid("online status get failed: acquire redis connection failed");
+        return results;
+    }
+    // Read-only and bounded for the configured standalone Redis. Raw JSON
+    // bytes go to the original C++ Deserialize; Lua never rounds uint64 IDs.
+    static constexpr const char* script = R"lua(
+        local output = {}
+        for i = 1, #KEYS do
+            local value = redis.pcall('GET', KEYS[i])
+            if type(value) == 'table' and value.err then
+                output[#output + 1] = 'error'
+                output[#output + 1] = ''
+            elseif value == false then
+                output[#output + 1] = 'missing'
+                output[#output + 1] = ''
+            else
+                output[#output + 1] = 'value'
+                output[#output + 1] = value
+            end
+        end
+        return output
+    )lua";
+    const auto values = connection->EvalStringArray(script, keys, {});
+    if (!values) {
+        fail_valid(connection->LastError());
+        return results;
+    }
+    if (values->size() != positions.size() * 2) {
+        fail_valid("online status batch failed: unexpected result cardinality");
+        return results;
+    }
+    // Validate all tags before associating any value with a user.
+    for (std::size_t j = 0; j < positions.size(); ++j) {
+        const auto& tag = (*values)[j * 2];
+        if (tag != "value" && tag != "missing" && tag != "error") {
+            fail_valid("online status batch failed: invalid result tag");
+            return results;
+        }
+    }
+    for (std::size_t j = 0; j < positions.size(); ++j) {
+        auto& result = results[positions[j]];
+        const auto& tag = (*values)[j * 2];
+        if (tag == "missing") {
+            result.status = GetOnlineStatusStatus::kNotFound;
+        } else if (tag == "error") {
+            result.status = GetOnlineStatusStatus::kRedisError;
+            result.error_message = "redis get failed: invalid reply type";
+        } else {
+            result = Deserialize(user_ids[positions[j]], (*values)[j * 2 + 1]);
+        }
+    }
+    return results;
+}
+
 std::string OnlineStatusCache::BuildKey(std::uint64_t user_id) const {
     return key_prefix_ + std::to_string(user_id);
 }

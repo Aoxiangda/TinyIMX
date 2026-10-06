@@ -193,6 +193,14 @@ public:
         std::uint64_t user_id
     );
 
+    // Bounded read-only snapshot for the configured standalone Redis.
+    // Keep input order, per-key failures, original uint64 parsing and TTL.
+    // Invalid-only/empty/oversized inputs perform no connection I/O.
+    static constexpr std::size_t kMaxGetBatchSize = 256;
+    std::vector<GetOnlineStatusResult> GetOnlineStatusBatch(
+        const std::vector<std::uint64_t>& user_ids
+    );
+
 private:
     std::string BuildKey(
         std::uint64_t user_id
