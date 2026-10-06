@@ -362,6 +362,17 @@ struct ListGroupDeliveryWorkResult {
     [[nodiscard]] bool Succeeded() const noexcept { return status == MessageQueryStatus::kSucceeded; }
 };
 
+// A bounded completion entry retains the original per-row token/status fence.
+struct GroupDeliveryAttemptCompletion {
+    std::uint64_t message_id{0};
+    std::uint64_t recipient_user_id{0};
+    std::string lease_token;
+    GroupDeliveryStatus next_status{GroupDeliveryStatus::kPending};
+    std::string gateway_id;
+    std::uint32_t retry_after_ms{0};
+    std::string error_code;
+};
+
 struct GroupDeliveryMutationResult {
     MessageMutationStatus status{MessageMutationStatus::kStorageError};
     std::uint64_t affected_rows{0};
@@ -624,6 +635,12 @@ public:
         const std::string& gateway_id,
         std::uint32_t retry_after_ms,
         const std::string& error_code
+    );
+
+    // One atomic statement, <=256 unique identities; ACK/token losers count as
+    // successful no-ops exactly as in the single-row completion primitive.
+    GroupDeliveryMutationResult CompleteGroupMessageDeliveryAttempts(
+        const std::vector<GroupDeliveryAttemptCompletion>& completions
     );
 
     GroupDeliveryMutationResult ConfirmGroupMessageDelivery(

@@ -5,6 +5,7 @@
 #include <string_view>
 #include "common/logging/LogMacros.h"
 
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -2615,6 +2616,74 @@ GroupDeliveryMutationResult MessageRepository::CompleteGroupMessageDeliveryAttem
     result.status = MessageMutationStatus::kSucceeded;
     result.affected_rows = connection->AffectedRows();
     result.message = "group delivery attempt completed";
+    return result;
+}
+
+GroupDeliveryMutationResult MessageRepository::CompleteGroupMessageDeliveryAttempts(
+    const std::vector<GroupDeliveryAttemptCompletion>& completions
+) {
+    GroupDeliveryMutationResult result;
+    if (pool_ == nullptr || completions.empty() || completions.size() > 256) {
+        result.status = MessageMutationStatus::kInvalidArgument;
+        result.message = "invalid group delivery completion batch";
+        return result;
+    }
+    std::set<std::pair<std::uint64_t, std::uint64_t>> identities;
+    for (const auto& item : completions) {
+        if (item.message_id == 0 || item.recipient_user_id == 0 ||
+            item.lease_token.empty() || item.lease_token.size() > 128 ||
+            item.gateway_id.size() > 128 || item.error_code.size() > 128 ||
+            (item.next_status != GroupDeliveryStatus::kPending &&
+             item.next_status != GroupDeliveryStatus::kDeferredOffline) ||
+            item.retry_after_ms > 600000 ||
+            !identities.emplace(item.message_id, item.recipient_user_id).second) {
+            result.status = MessageMutationStatus::kInvalidArgument;
+            result.message = "invalid group delivery completion batch entry";
+            return result;
+        }
+    }
+    auto connection = pool_->Acquire();
+    if (!connection) {
+        result.status = MessageMutationStatus::kStorageError;
+        result.message = "group completion batch failed to acquire connection";
+        return result;
+    }
+    const auto quoted = [&](const std::string& value) {
+        return "'" + connection->EscapeString(value) + "'";
+    };
+    std::string entries;
+    for (const auto& item : completions) {
+        if (!entries.empty()) entries += " UNION ALL ";
+        // Explicit unsigned casts retain uint64 identities across all UNION rows.
+        entries += "SELECT CAST(" + std::to_string(item.message_id) +
+            " AS UNSIGNED) AS message_id, CAST(" +
+            std::to_string(item.recipient_user_id) +
+            " AS UNSIGNED) AS recipient_user_id, " + quoted(item.lease_token) +
+            " AS lease_token, " +
+            std::to_string(static_cast<std::uint32_t>(item.next_status)) +
+            " AS next_status, " +
+            (item.gateway_id.empty() ? std::string("NULL") : quoted(item.gateway_id)) +
+            " AS gateway_id, " +
+            (item.error_code.empty() ? std::string("NULL") : quoted(item.error_code)) +
+            " AS error_code, " +
+            std::to_string(static_cast<std::uint64_t>(item.retry_after_ms) * 1000ULL) +
+            " AS retry_us";
+    }
+    const std::string sql =
+        "UPDATE im_group_message_deliveries AS d JOIN (" + entries +
+        ") AS b ON d.message_id=b.message_id AND d.recipient_user_id=b.recipient_user_id "
+        "SET d.delivery_status=b.next_status, d.last_gateway_id=b.gateway_id, "
+        "d.last_error_code=b.error_code, d.lease_owner=NULL, d.lease_token=NULL, "
+        "d.lease_until=NULL, d.next_retry_at=DATE_ADD(NOW(3), INTERVAL b.retry_us MICROSECOND) "
+        "WHERE d.delivery_status=1 AND d.lease_token=b.lease_token";
+    if (!connection->Execute(sql)) {
+        result.status = MessageMutationStatus::kStorageError;
+        result.message = "group completion batch failed: " + connection->LastError();
+        return result;
+    }
+    result.status = MessageMutationStatus::kSucceeded;
+    result.affected_rows = connection->AffectedRows();
+    result.message = "group delivery attempts completed";
     return result;
 }
 
