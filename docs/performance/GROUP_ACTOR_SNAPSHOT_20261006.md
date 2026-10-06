@@ -19,3 +19,9 @@ group-actor-snapshot-build-20261006三处TU/两archive副本/Group与native ELF�
 原生时段波动仍在：pool1 GetGroup B2 P99 2.086436ms，高于A1 1.950633/A2 1.488125；Prepare B1 5.645296，高于A1 5.081486。不能挑pool4改善数字当四接口极致收益。成员列表两pool候选P99均较两控制低，仍只组件证据。必须下一真实端到端对照及交互回归。
 
 首镜像FROM使用物理image SHA，Docker将它误解为docker.io/library/sha256:...，metadata引用失败；未生成候选镜像，未部署，不是C++回归失败。原Dockerfile/log/全部成功对象及八组数据保存。已只读确认实际已有tinyimx/runtime:m21-final物理ID38dca459...与Group原镜像相同；新attempt2仅新目录引用此tag，build前后核对physicalID，无pull/SDK安装。7个成功产物在首失败后、复用前精确SHA冻结，不伪称为原编译前记录。新镜像v2/加载probe本提交时NOT_RUN。
+
+## 首实际控制守卫中止与恢复复核
+
+group-actor-snapshot-endpoint-control-20261006在首次OFF切换健康后，被HostConfig严格JSON守卫中止，endpoint/cross操作均0，不能算协议或性能结果。finally恢复原Group镜像38dca459/ELF8fe7eab8及全部Env后，再因同一表示守卫中止。所有original inspect/override/切换与恢复日志/failed.json保留。只读group-control-abort-review-20261006确认19 healthy、other18 IDs/images/start精确保持、Env/mount/Cmd/User/health相等、原Group ELF正确；当前GroupCID130c810f703db21f362d6674240d439a73e6a2774a969845dd5b5bf6590100ec。
+
+只读group-control-dns-representation-20261006确认HostConfig仅Dns/DnsOptions/DnsSearch原[]、恢复后null，其余全部字段精确相等，无具体DNS值变化。新attempt2只将这3项的null规范化为[]，任何非空值和全部其他HostConfig仍精确比较；不是忽略DNS/资源/安全/挂载。新stage、新runid，原失败不覆盖；核对最新GroupCID并保留other18，不假设preflight旧CID仍当前。wrapper原54操作/37断言、期限/字段/全部功能测试不变。新控制本提交时NOT_RUN，候选未保留运行或接受性能。
