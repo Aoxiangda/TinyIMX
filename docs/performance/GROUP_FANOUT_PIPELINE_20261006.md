@@ -16,3 +16,9 @@
 TINYIMX_GROUP_FANOUT_PHASE_TRACE_ENABLE=1为每批MID区间/数量/claimRPC/dispatchsum+max/completesum+max/wholebatch/threadCPU数值≤8/s/process，默认OFF不读clock。相同ELF OFF/ON/ON/OFF两模式相同诊断，同四Group100连接，不放宽期限、失败保留。
 
 新增6native含原2租约检查覆盖混合结果/无效work/lease/budget/uncertain completion/ACKwinner affectedRows0/claim失败/oversizedfallback，另保留旧6wake检查，各OFF/ON/invalid。尚未运行，不能标候选PASS/接受。
+
+## 构建实际通过与下一对照
+
+70461a73源码已Git提交。36native（6wake+6pipeline × OFF/ON/invalid）全部PASS；隔离编译仅coordinatorTU，复用接受的原GatewayServer/main/cache及其精确静态链接顺序。候选image bfe65e732629f9620bfa906eb3f7abffdc987a7286eb899581af1358135daa95，GatewayELF4ba5d0ce8f2ceac90ecde77d811d4c61e0b948e2f4fd22349aba8700b0408fc7，loaderPASS/missingconfig原exit1PASS。19运行/原库/私有配置保持，尚未部署接受。
+
+准备同Group57/58/59/60，OFF/ON/ON/OFF4case，每size13msgs(3warm10measured)，总208msgs/9308实际recipient confirmations，另216操作148断言原全功能链。仅2Gateway候选/fullEnv只增deferflag及两模式均trace1，commitwake1保留；最后恢复5c2645及原完整Env，其他17实例不变。低样本规模观察不假称全功能容量。
