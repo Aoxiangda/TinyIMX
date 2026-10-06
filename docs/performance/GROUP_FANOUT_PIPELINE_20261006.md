@@ -95,3 +95,7 @@ b2b1fd30的新Gateway/coordinator编译和42native（旧36+recipient6）全部PA
 准确核对当前executor源码SHA3b707e2e5a63cd7671a92c977ea75fc7fcaad29de1c90e92e41bcb8f9017cb22，原while-drain队列至空；ROOT_CAUSE_REVIEW此前已记录公平候选性能FAIL/回退及该源码恢复。测试faircase却遗留期望1,0,2,3,4,5，原实现实际1,2,3,4,5,0。这不是recipient身份FIFO错误，也不允许绕过其他13失败。
 
 修正只更新该fixture的显式调度契约：默认验证当前原drain顺序/同stripeFIFO/全部6task计数；保留 --expect-fair-handoff 模式验证原公平顺序，原executor应仅该项FAIL。全部14默认必须PASS；历史模式exact1FAIL必须保留。executor源码/库不变，不重新接受拒绝过的fair方案。attempt2复用本任务已经成功且源/flags逐SHA验证的两个TU对象，重新编译测试；先检查56native再封新镜像，仍未性能接受。
+
+## 对象复用审计attempt2前置FAIL
+
+attempt2在本任务已编译对象的dependency guard停止、尚未重跑native/封镜像/部署。复用对象.d真实记录第一次构建的originalmacro overlay，guard误要求attempt2新overlay路径而FAIL。attempt3只修正助手，验证旧overlay SHA仍原macro1d4e7adc…，保留实际编译路径、对象/.d均不重写；整个先前失败stage保留。不是业务超时/数据正确性失败，不修改产品或放宽native检查。
