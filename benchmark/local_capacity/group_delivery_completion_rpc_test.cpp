@@ -84,6 +84,7 @@ public:
 #include "services/message/service/MessageServiceImpl.h"
 #include "services/rpc/MessageRpcClient.h"
 #include <grpcpp/grpcpp.h>
+#include <memory>
 namespace {
 class Endpoint final:public tinyimx::rpc::ServiceEndpointProvider {
 public:
@@ -113,15 +114,15 @@ try {
     users+=",(18446744073709551614,'rpc-high','Owned',1)";
     f.Exec("INSERT INTO im_users(user_id,username,nickname,status) VALUES "+users);
     f.Exec("INSERT INTO im_groups(group_id,name,owner_user_id,max_members) VALUES (9001,'Owned RPC completion',10001,500)");
-    tinyimx::message::MessageRepositoryAdapter adapter(&f.repo);
+    tinyimx::message::MessageRepositoryAdapter adapter(&f.repo,&f.pool,nullptr);
     tinyimx::message::MessageApplicationService app(&adapter);
     tinyimx::message::MessageServiceImpl impl(&app);
     grpc::ServerBuilder builder;int port=0;
     builder.AddListeningPort("127.0.0.1:0",grpc::InsecureServerCredentials(),&port);
     builder.RegisterService(&impl);OwnServer own;own.server=builder.BuildAndStart();
     Check(own.server&&port>0,"own_loopback_rpc_server_ready");
-    Endpoint endpoint;endpoint.target="127.0.0.1:"+std::to_string(port);
-    tinyimx::rpc::MessageRpcClient client(&endpoint);
+    auto endpoint=std::make_shared<Endpoint>();endpoint->target="127.0.0.1:"+std::to_string(port);
+    tinyimx::rpc::MessageRpcClient client(endpoint);
     tinyimx::rpc::RpcCallOptions options;options.remaining_timeout=std::chrono::milliseconds(5000);
     options.caller_service="native-test";options.caller_instance="owned-rpc";
     using Entry=tinyimx::rpc::CompleteGroupMessageDeliveryAttemptRpcRequest;
@@ -158,7 +159,7 @@ try {
     auto absent=fenced[0];absent.message_id=999999;
     result=client.CompleteGroupMessageDeliveryAttempts({absent},options);
     Check(result.ok()&&result.value->affected_rows==0,"RPC_missing_identity_noop");
-    updates=pings=0;int discovery=endpoint.calls;
+    updates=pings=0;int discovery=endpoint->calls;
     const auto rejected=[&](const std::vector<Entry>& v) {
         auto x=client.CompleteGroupMessageDeliveryAttempts(v,options);
         return !x.ok()&&!x.attempted&&x.status.code==tinyimx::rpc::RpcErrorCode::kInvalidArgument;
@@ -174,14 +175,14 @@ try {
     for(int i=0;i<3;++i){bad=fenced[0];(i==0?bad.lease_token:i==1?bad.gateway_id:bad.error_code)=std::string(129,'x');longbad=longbad&&rejected({bad});}
     Check(longbad,"client_all_metadata_bounds_rejected");
     std::vector<Entry> over(257,fenced[0]);Check(rejected(over),"client_257_rejected");
-    Check(endpoint.calls==discovery&&updates==0&&pings==0,"client_validation_before_discovery_or_SQL");
+    Check(endpoint->calls==discovery&&updates==0&&pings==0,"client_validation_before_discovery_or_SQL");
     auto exhausted=options;exhausted.remaining_timeout=std::chrono::milliseconds(0);
     result=client.CompleteGroupMessageDeliveryAttempts(fenced,exhausted);
-    Check(!result.ok()&&!result.attempted&&result.status.code==tinyimx::rpc::RpcErrorCode::kDeadlineExceeded&&endpoint.calls==discovery,
+    Check(!result.ok()&&!result.attempted&&result.status.code==tinyimx::rpc::RpcErrorCode::kDeadlineExceeded&&endpoint->calls==discovery,
         "client_expired_budget_before_discovery");
     tinyimx::rpc::MessageRpcClient missing(nullptr);
     Check(!missing.CompleteGroupMessageDeliveryAttempts(fenced,options).attempted,"client_missing_provider_no_attempt");
-    auto stub=tinyimx::message::v1::MessageService::NewStub(grpc::CreateChannel(endpoint.target,grpc::InsecureChannelCredentials()));
+    auto stub=tinyimx::message::v1::MessageService::NewStub(grpc::CreateChannel(endpoint->target,grpc::InsecureChannelCredentials()));
     const auto raw=[&](int variant) {
         tinyimx::message::v1::CompleteGroupMessageDeliveryAttemptsRequest req;
         if(variant!=0) {
