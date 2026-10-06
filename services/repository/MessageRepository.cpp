@@ -1,6 +1,8 @@
 #include "services/repository/MessageRepository.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <string_view>
 #include "common/logging/LogMacros.h"
 
 #include <sstream>
@@ -112,6 +114,43 @@ bool BuildGroupDeliveryWorkRecord(
            record->message.from_user_id != 0 &&
            record->message.membership_epoch != 0 &&
            record->message.member_version != 0;
+}
+
+bool GroupDeliveryClaimBatchEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("TINYIMX_GROUP_DELIVERY_CLAIM_BATCH_ENABLE");
+        return value != nullptr && std::string_view(value) == "1";
+    }();
+    return enabled;
+}
+
+// Records are validated and locked in the original bounded transaction.
+// No work leaves the repository until the same durable Commit succeeds.
+bool ClaimGroupDeliveryLeaseBatch(
+    MySqlConnection* connection,
+    const std::vector<GroupDeliveryWorkRecord>& records,
+    const std::string& lease_owner,
+    const std::string& lease_token,
+    std::uint32_t lease_ms,
+    GroupDeliveryStatus status
+) {
+    if (records.empty()) return true;
+    if (connection == nullptr || records.size() > 256) return false;
+    std::string sql =
+        "UPDATE im_group_message_deliveries SET lease_owner='" + connection->EscapeString(lease_owner) +
+        "', lease_token='" + connection->EscapeString(lease_token) +
+        "', lease_until=DATE_ADD(NOW(3), INTERVAL " +
+        std::to_string(static_cast<std::uint64_t>(lease_ms) * 1000ULL) +
+        " MICROSECOND), attempt_count=attempt_count+1 WHERE delivery_status=" +
+        std::to_string(static_cast<std::uint32_t>(status)) +
+        " AND (message_id,recipient_user_id) IN (";
+    for (std::size_t i = 0; i < records.size(); ++i) {
+        if (i != 0) sql += ",";
+        sql += "(" + std::to_string(records[i].delivery.message_id) + "," +
+               std::to_string(records[i].delivery.recipient_user_id) + ")";
+    }
+    sql += ")";
+    return connection->Execute(sql) && connection->AffectedRows() == records.size();
 }
 
 std::string GroupDeliverySelectColumns() {
@@ -2370,6 +2409,7 @@ ListGroupDeliveryWorkResult MessageRepository::ClaimGroupMessageDeliveries(
         result.message = "group delivery claim select failed: " + connection->LastError();
         return result;
     }
+    const bool batch_enabled = GroupDeliveryClaimBatchEnabled();
     result.records.reserve(query.rows.size());
     for (const auto& row : query.rows) {
         GroupDeliveryWorkRecord work;
@@ -2380,24 +2420,35 @@ ListGroupDeliveryWorkResult MessageRepository::ClaimGroupMessageDeliveries(
             result.message = "group delivery claim returned invalid row";
             return result;
         }
-        const std::string update =
-            "UPDATE im_group_message_deliveries SET lease_owner='" + connection->EscapeString(lease_owner) +
-            "', lease_token='" + connection->EscapeString(lease_token) +
-            "', lease_until=DATE_ADD(NOW(3), INTERVAL " + std::to_string(static_cast<std::uint64_t>(lease_ms) * 1000ULL) +
-            " MICROSECOND), attempt_count=attempt_count+1 WHERE message_id=" +
-            std::to_string(work.delivery.message_id) + " AND recipient_user_id=" +
-            std::to_string(work.delivery.recipient_user_id) + " AND delivery_status=1";
-        if (!connection->Execute(update) || connection->AffectedRows() != 1) {
-            rollback();
-            result.status = MessageQueryStatus::kStorageError;
-            result.records.clear();
-            result.message = "group delivery claim update failed: " + connection->LastError();
-            return result;
+        if (!batch_enabled) {
+            const std::string update =
+                "UPDATE im_group_message_deliveries SET lease_owner='" + connection->EscapeString(lease_owner) +
+                "', lease_token='" + connection->EscapeString(lease_token) +
+                "', lease_until=DATE_ADD(NOW(3), INTERVAL " + std::to_string(static_cast<std::uint64_t>(lease_ms) * 1000ULL) +
+                " MICROSECOND), attempt_count=attempt_count+1 WHERE message_id=" +
+                std::to_string(work.delivery.message_id) + " AND recipient_user_id=" +
+                std::to_string(work.delivery.recipient_user_id) + " AND delivery_status=1";
+            if (!connection->Execute(update) || connection->AffectedRows() != 1) {
+                rollback();
+                result.status = MessageQueryStatus::kStorageError;
+                result.records.clear();
+                result.message = "group delivery claim update failed: " + connection->LastError();
+                return result;
+            }
         }
         ++work.delivery.attempt_count;
         work.delivery.lease_owner = lease_owner;
         work.delivery.lease_token = lease_token;
         result.records.push_back(std::move(work));
+    }
+    if (batch_enabled && !ClaimGroupDeliveryLeaseBatch(
+            &*connection, result.records, lease_owner, lease_token, lease_ms,
+            GroupDeliveryStatus::kPending)) {
+        rollback();
+        result.status = MessageQueryStatus::kStorageError;
+        result.records.clear();
+        result.message = "group delivery claim batch update failed: " + connection->LastError();
+        return result;
     }
     if (!connection->Commit()) {
         rollback();
@@ -2457,6 +2508,7 @@ ListGroupDeliveryWorkResult MessageRepository::ClaimGroupMessageDeliveriesForRec
         return result;
     }
 
+    const bool batch_enabled = GroupDeliveryClaimBatchEnabled();
     result.records.reserve(query.rows.size());
     for (const auto& row : query.rows) {
         GroupDeliveryWorkRecord work;
@@ -2470,33 +2522,43 @@ ListGroupDeliveryWorkResult MessageRepository::ClaimGroupMessageDeliveriesForRec
             return result;
         }
 
-        const std::string update =
-            "UPDATE im_group_message_deliveries SET lease_owner='" +
-            connection->EscapeString(lease_owner) +
-            "', lease_token='" + connection->EscapeString(lease_token) +
-            "', lease_until=DATE_ADD(NOW(3), INTERVAL " +
-            std::to_string(static_cast<std::uint64_t>(lease_ms) * 1000ULL) +
-            " MICROSECOND), attempt_count=attempt_count+1 "
-            "WHERE message_id=" + std::to_string(work.delivery.message_id) +
-            " AND recipient_user_id=" + std::to_string(recipient_user_id) +
-            " AND delivery_status=2 "
-            "AND (lease_until IS NULL OR lease_until<=NOW(3))";
+        if (!batch_enabled) {
+            const std::string update =
+                "UPDATE im_group_message_deliveries SET lease_owner='" +
+                connection->EscapeString(lease_owner) +
+                "', lease_token='" + connection->EscapeString(lease_token) +
+                "', lease_until=DATE_ADD(NOW(3), INTERVAL " +
+                std::to_string(static_cast<std::uint64_t>(lease_ms) * 1000ULL) +
+                " MICROSECOND), attempt_count=attempt_count+1 "
+                "WHERE message_id=" + std::to_string(work.delivery.message_id) +
+                " AND recipient_user_id=" + std::to_string(recipient_user_id) +
+                " AND delivery_status=2 "
+                "AND (lease_until IS NULL OR lease_until<=NOW(3))";
 
-        if (!connection->Execute(update) || connection->AffectedRows() != 1) {
-            rollback();
-            result.status = MessageQueryStatus::kStorageError;
-            result.records.clear();
-            result.message = "recipient group delivery claim update failed: " +
-                connection->LastError();
-            return result;
+            if (!connection->Execute(update) || connection->AffectedRows() != 1) {
+                rollback();
+                result.status = MessageQueryStatus::kStorageError;
+                result.records.clear();
+                result.message = "recipient group delivery claim update failed: " +
+                    connection->LastError();
+                return result;
+            }
         }
-
         ++work.delivery.attempt_count;
         work.delivery.lease_owner = lease_owner;
         work.delivery.lease_token = lease_token;
         result.records.push_back(std::move(work));
     }
 
+    if (batch_enabled && !ClaimGroupDeliveryLeaseBatch(
+            &*connection, result.records, lease_owner, lease_token, lease_ms,
+            GroupDeliveryStatus::kDeferredOffline)) {
+        rollback();
+        result.status = MessageQueryStatus::kStorageError;
+        result.records.clear();
+        result.message = "recipient group delivery claim batch update failed: " + connection->LastError();
+        return result;
+    }
     if (!connection->Commit()) {
         rollback();
         result.status = MessageQueryStatus::kStorageError;
