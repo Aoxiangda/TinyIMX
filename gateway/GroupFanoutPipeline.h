@@ -15,6 +15,13 @@ inline bool GroupFanoutDeferCompletionEnabled() noexcept {
     }();
     return enabled;
 }
+inline bool GroupFanoutPartialDrainEnabled() noexcept {
+    static const bool enabled = [] {
+        const char* value = std::getenv("TINYIMX_GROUP_FANOUT_PARTIAL_DRAIN_ENABLE");
+        return value && std::strcmp(value, "1") == 0;
+    }();
+    return enabled;
+}
 namespace diagnostics {
 inline bool GroupFanoutPhaseTraceEnabled() noexcept {
     static const bool enabled = [] {

@@ -116,11 +116,15 @@ void GroupFanoutCoordinator::Run(std::stop_token token) {
         while (!token.stop_requested() && running_.load(std::memory_order_acquire)) {
             const auto processed = RunOneIteration();
             const bool full = processed >= std::min<std::size_t>(options_.batch_size, 256);
+            // SKIP LOCKED can return a nonempty partial batch while other
+            // eligible rows are locked. Recheck within the same bounded burst.
+            const bool drain = full ||
+                (GroupFanoutPartialDrainEnabled() && processed != 0);
             // Drain a bounded number of full batches before yielding. Work still
             // uses the original durable claim, lease token and completion fence.
-            if (full && ++full_batches < 4) continue;
+            if (drain && ++full_batches < 4) continue;
             std::unique_lock<std::mutex> lock(wake.mutex);
-            if (full) {
+            if (drain) {
                 wake.cv.wait_for(lock, std::chrono::milliseconds(25), [&] {
                     return token.stop_requested() ||
                            !running_.load(std::memory_order_acquire);
