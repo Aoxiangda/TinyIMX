@@ -162,3 +162,10 @@ MID2895前48人189.004ms收到，网关B partial48批后，网关A直到1060.946
 route/completion/claim固定1，仅partial0/1/1/0，528消息/23628真实收件及SQL状态3、216全链操作/148断言、0观察重复正确。100人ON334.490/321.398ms，OFF327.232/315.551；65人ON139.113/136.124ms，OFF130.720/131.576，均FAIL，未显示稳定平均收益。两模式均未重现902ms空档，不以长尾缺失宣称修复实测因果。已恢复原运行，最新restore为group-route-partial-drain-control-20261006/restore-summary.json。见GROUP_FANOUT_PARTIAL_DRAIN_20261006.md。
 
 新源码审查确认群peer和ACK都仍提交business_executor_4worker；现有私聊使用message_executor_原默认8worker，并且已有优雅drain。原控制功能与群慢RPC因此竞争；下一只移动两入口至现有消息执行器并同identity排序，保持无新增线程、鉴权/SQL/持久化/重试/全功能交互及私聊共用压力验证。该方向尚未实现/测量，不宣称达到全部功能目标。20k混合FAIL、50k全功能、文件容量/故障/AI仍OPEN。
+
+
+## 群执行器已修正接线并完成真实对照（当前结果）
+
+严格默认OFF候选04a95c6复用既有message_executor，只有群peer/ACK两个提交入口变化，其余执行/授权/序号/SQL/类layout逐字节保持，无新增线程。144原生隔离/FIFO/原tracker/拒绝/关闭检查通过。真实同镜像0/1/1/0，528消息/23628真实收件与SQL状态3、216完整交互操作148断言、0观察重复正确。100人ON221.367/240.540ms，OFF252.403/278.067，保守均值改善4.700%；65人ON113.247/123.273ms没有稳定收益，65/100全部FAIL保留，30样本不估P99。原运行/全配置/其他16/持久化/宿主应用已恢复，以group-message-runtime-control-20261006/restore-summary.json为准。完整复盘GROUP_MESSAGE_RUNTIME_20261006.md。
+
+ACK抽样排队92–100→30–45ms，但原durableGet/Confirm RPC分别约6/11→21/25ms，说明并发成本转移下游；不能继续盲扩线程或改低持久化。下一当前Message现成池阶段诊断+Performance Schema窗口delta，准确定位slot/PING/SQL/锁/提交。只读累计SQL平均Get0.674/Confirm6.774ms是历史提示，不代替本次阶段证明。私聊与群共享message执行器后的10k混合、2万FAIL复测，以及全部50k/各功能高频/文件并发/离线故障/AI目标仍OPEN。
