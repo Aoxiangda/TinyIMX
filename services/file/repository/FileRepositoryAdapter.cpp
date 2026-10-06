@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <climits>
+#include <cstdlib>
+#include <cstring>
 #include <iomanip>
 #include <optional>
 #include <sstream>
@@ -329,19 +331,18 @@ GetDownloadFileResult DownloadFileFailure(
     return result;
 }
 
-BeginUploadResult ResolveExistingUpload(
-    tinyimx::FileRepository* repository,
-    std::uint64_t actor_user_id,
-    const std::string& client_upload_id,
+bool FileBeginSnapshotEnabled() noexcept {
+    static const bool enabled = [] {
+        const char* value = std::getenv("TINYIMX_FILE_BEGIN_UPLOAD_SNAPSHOT_ENABLE");
+        return value && std::strcmp(value, "1") == 0;
+    }();
+    return enabled;
+}
+
+BeginUploadResult ResolveExistingUploadResult(
+    const tinyimx::FileUploadBundleFindResult& existing,
     const std::string& fingerprint
 ) {
-    if (repository == nullptr) {
-        return BeginStorageFailure(
-            FileApplicationStatus::kStorageError,
-            "file repository is unavailable"
-        );
-    }
-    const auto existing = repository->FindByClientUploadId(actor_user_id, client_upload_id);
     if (!existing.Succeeded()) {
         return BeginStorageFailure(MapStorageStatus(existing.status), existing.message);
     }
@@ -367,6 +368,22 @@ BeginUploadResult ResolveExistingUpload(
     result.bundle = *view;
     result.message = "upload safely reused from durable session";
     return result;
+}
+
+BeginUploadResult ResolveExistingUpload(
+    tinyimx::FileRepository* repository,
+    std::uint64_t actor_user_id,
+    const std::string& client_upload_id,
+    const std::string& fingerprint
+) {
+    if (repository == nullptr) {
+        return BeginStorageFailure(
+            FileApplicationStatus::kStorageError,
+            "file repository is unavailable"
+        );
+    }
+    const auto existing = repository->FindByClientUploadId(actor_user_id, client_upload_id);
+    return ResolveExistingUploadResult(existing, fingerprint);
 }
 
 }  // namespace
@@ -403,6 +420,11 @@ BeginUploadResult FileRepositoryAdapter::BeginUpload(
         return BeginStorageFailure(MapStorageStatus(precheck.status), precheck.message);
     }
     if (precheck.found) {
+        // Reuse this request's already durable, owner-scoped complete snapshot.
+        // Concurrent insert losers and ambiguous commits still re-read below.
+        if (FileBeginSnapshotEnabled()) {
+            return ResolveExistingUploadResult(precheck, fingerprint);
+        }
         return ResolveExistingUpload(
             repository_, command.actor_user_id, command.client_upload_id, fingerprint
         );

@@ -181,3 +181,13 @@ target_link_libraries(file_download_stress_client PRIVATE
   gRPC::grpc++
   OpenSSL::Crypto
 )
+
+# Manual real-MySQL regression: requires a fresh audited owned schema/config.
+# Fault wrappers are test-only and are never linked into file_service_demo.
+add_executable(file_begin_upload_snapshot_tests
+  benchmark/local_capacity/file_begin_upload_snapshot_test.cpp)
+target_compile_features(file_begin_upload_snapshot_tests PRIVATE cxx_std_20)
+target_link_libraries(file_begin_upload_snapshot_tests PRIVATE
+  tinyimx_file_core tinyimx_repository tinyimx_config tinyimx_logging)
+target_link_options(file_begin_upload_snapshot_tests PRIVATE
+  "-Wl,--wrap=mysql_query" "-Wl,--wrap=mysql_ping" "-Wl,--wrap=mysql_commit")
