@@ -87,3 +87,11 @@ TINYIMX_GROUP_FANOUT_PHASE_TRACE_ENABLE=1为每批MID区间/数量/claimRPC/disp
 Strict TINYIMX_GROUP_DELIVERY_RECIPIENT_ORDER_ENABLE=1令group peerreceive和receiverACK按相同GroupDeliveryIdentity(MID,recipient)的原hash排序；OFF/非1仍MID原key。ACK recipient来自已鉴权session。相同收件的重复peer/ACK保持顺序，不同收件允许不同stripe；队列/worker数/限流/取消期限/epoch fence/peerlease验证/durable Get/Confirm/tracker mutex均保留，私聊/群写操作key不改。
 
 共享max8/s/process数值诊断补充peer(kind1)/ACK(kind2) dispatch_age/work/getRPC/confirmRPC/threadCPU，将排队与工作耗时分开，OFF无clock。原生测试实际hold一个deliverytask，检查同identity重复仍等待，不同recipient ON可独立运行，另完整原14executor tests。候选尚未构建/实测，不假标PASS。
+
+## recipient构建首次检查FAIL及修正审计
+
+b2b1fd30的新Gateway/coordinator编译和42native（旧36+recipient6）全部PASS。完整executor14检查中13PASS，唯一FAIL是历史fairhandoff顺序；无runtime部署/配置改动/数据库写。本任务build-20261006/failed.json和original-executor-native.log保留。
+
+准确核对当前executor源码SHA3b707e2e5a63cd7671a92c977ea75fc7fcaad29de1c90e92e41bcb8f9017cb22，原while-drain队列至空；ROOT_CAUSE_REVIEW此前已记录公平候选性能FAIL/回退及该源码恢复。测试faircase却遗留期望1,0,2,3,4,5，原实现实际1,2,3,4,5,0。这不是recipient身份FIFO错误，也不允许绕过其他13失败。
+
+修正只更新该fixture的显式调度契约：默认验证当前原drain顺序/同stripeFIFO/全部6task计数；保留 --expect-fair-handoff 模式验证原公平顺序，原executor应仅该项FAIL。全部14默认必须PASS；历史模式exact1FAIL必须保留。executor源码/库不变，不重新接受拒绝过的fair方案。attempt2复用本任务已经成功且源/flags逐SHA验证的两个TU对象，重新编译测试；先检查56native再封新镜像，仍未性能接受。
