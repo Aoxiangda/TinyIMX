@@ -4023,6 +4023,47 @@ void GatewayServer::HandleGroupMessageDeliveryAckTimeout(
 GroupFanoutDispatchResult GatewayServer::DispatchGroupFanoutDelivery(
     const rpc::GroupDeliveryWorkRpcRecord& work
 ) {
+    return DispatchGroupFanoutDeliveryUsingRoute(work, nullptr);
+}
+
+std::vector<GroupFanoutDispatchResult> GatewayServer::DispatchGroupFanoutDeliveries(
+    const std::vector<rpc::GroupDeliveryWorkRpcRecord>& items
+) {
+    std::vector<GroupFanoutDispatchResult> results;
+    if (items.size() > OnlineStatusCache::kMaxGetBatchSize) {
+        results.resize(items.size());
+        for (auto& result : results) result.error_code = "fanout_dispatch_batch_oversized";
+        return results;
+    }
+    std::vector<GatewayRouteResult> routes;
+    if (HasGatewayRouteResolver()) {
+        std::vector<std::uint64_t> recipients;
+        recipients.reserve(items.size());
+        for (const auto& work : items) {
+            const bool needs_route = work.message.message_id != 0 &&
+                work.delivery.recipient_user_id != 0 && work.message.group_id != 0 &&
+                work.delivery.delivery_state != rpc::GroupDeliveryRpcState::kDelivered;
+            recipients.push_back(needs_route ? work.delivery.recipient_user_id : 0);
+        }
+        // Snapshot lifetime ends with this one already committed claim.
+        routes = gateway_route_resolver_->ResolveBatch(recipients);
+        if (routes.size() != items.size()) {
+            results.resize(items.size());
+            for (auto& result : results) result.error_code = "fanout_route_batch_mismatch";
+            return results; // No speculative scalar replay.
+        }
+    }
+    results.reserve(items.size());
+    for (std::size_t i = 0; i < items.size(); ++i)
+        results.push_back(DispatchGroupFanoutDeliveryUsingRoute(
+            items[i], routes.empty() ? nullptr : &routes[i]));
+    return results;
+}
+
+GroupFanoutDispatchResult GatewayServer::DispatchGroupFanoutDeliveryUsingRoute(
+    const rpc::GroupDeliveryWorkRpcRecord& work,
+    const GatewayRouteResult* prefetched_route
+) {
     GroupFanoutDispatchResult result;
     const std::uint64_t message_id = work.message.message_id;
     const UserId recipient = work.delivery.recipient_user_id;
@@ -4038,7 +4079,10 @@ GroupFanoutDispatchResult GatewayServer::DispatchGroupFanoutDelivery(
 
     GatewayRouteResult route;
     bool have_route = false;
-    if (HasGatewayRouteResolver()) {
+    if (prefetched_route != nullptr) {
+        route = *prefetched_route;
+        have_route = true;
+    } else if (HasGatewayRouteResolver()) {
         route = gateway_route_resolver_->Resolve(recipient);
         have_route = true;
     } else {

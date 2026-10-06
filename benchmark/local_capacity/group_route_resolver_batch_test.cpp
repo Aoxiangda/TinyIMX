@@ -1,0 +1,39 @@
+#include "gateway/GatewayRouteResolver.h"
+#include "common/logging/Logger.h"
+#include <nlohmann/json.hpp>
+#include <filesystem>
+#include <algorithm>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <stdexcept>
+#include <vector>
+namespace resolver_test {
+using J=nlohmann::json;namespace fs=std::filesystem;fs::path out;J checks=J::array();
+void save(const std::string& n,const J& j){auto p=out/(n+".tmp");{std::ofstream f(p);f<<j.dump(2)<<'\n';if(!f)throw std::runtime_error("OwnEvidenceWrite");}fs::rename(p,out/n);}
+void check(const std::string& n,bool ok){checks.push_back({{"name",n},{"pass",ok}});save("checks.json",checks);if(!ok)throw std::runtime_error("OwnResolverCheck:"+n);}
+J view(const tinyimx::GatewayRouteResult&r){J x={{"status",static_cast<int>(r.status)},{"error",r.error_message}};if(r.online_status)x["online"]={{"uid",r.online_status->user_id},{"gw",r.online_status->gateway_id},{"cn",r.online_status->connection_name},{"login",r.online_status->login_time}};if(r.remote_gateway)x["remote"]={{"id",r.remote_gateway->gateway_id},{"lease",r.remote_gateway->lease_token},{"host",r.remote_gateway->listen_host},{"port",r.remote_gateway->listen_port},{"start",r.remote_gateway->started_at}};return x;}
+std::string bytes(std::uint64_t u,const std::string& gw){return J{{"user_id",u},{"gateway_id",gw},{"connection_name","own-connection"},{"login_time",1710000000}}.dump();}
+void absent(tinyimx::RedisConnection&c,const std::string& k){auto v=c.EvalInteger("return redis.call('EXISTS',KEYS[1])",{k},{});if(!v||*v!=0)throw std::runtime_error("OwnExistingKeyPreserved");}
+void run(tinyimx::RedisConnectionPool&pool,const std::string& root){
+ const auto prefix=root+"presence:",regprefix=root+"registry:";std::vector<std::uint64_t> ids{100,101,102,103,104,105,0,9007199254740993ULL,std::numeric_limits<std::uint64_t>::max(),100};
+ {auto c=pool.Acquire();if(!c)throw std::runtime_error("OwnFixtureLease");for(auto id:ids)absent(*c,prefix+std::to_string(id));for(auto name:{"remote-alpha","remote-beta","__index__"})absent(*c,regprefix+name);
+  for(std::uint64_t id:std::vector<std::uint64_t>{100,101,102,9007199254740993ULL,std::numeric_limits<std::uint64_t>::max()}){std::string gateway=id==100?"local":id==102?"absent-gateway":"remote-alpha";if(!c->SetEx(prefix+std::to_string(id),bytes(id,gateway),900))throw std::runtime_error("OwnFixtureCreate");}
+  if(!c->SetEx(prefix+"103","{broken",900))throw std::runtime_error("OwnFixtureCreate");auto v=c->EvalInteger("redis.call('LPUSH',KEYS[1],'own');redis.call('EXPIRE',KEYS[1],900);return 1",{prefix+"104"},{});if(!v||*v!=1)throw std::runtime_error("OwnWrongtypeFixture");
+ }
+ tinyimx::GatewayRegistry registry(&pool,regprefix);tinyimx::GatewayInstanceRecord alpha{"remote-alpha","own-alpha-token","127.0.0.1",10999,1710000000},beta{"remote-beta","own-beta-token","127.0.0.1",10998,1710000000};
+ check("own-registered-alpha",registry.Register(alpha,900).Succeeded());check("own-registered-beta",registry.Register(beta,900).Succeeded());{auto c=pool.Acquire();if(!c||!c->Expire(regprefix+"__index__",900))throw std::runtime_error("OwnIndexTTL");}
+ tinyimx::GatewayDiscovery discovery(&registry,3);check("own-discovery-refresh",discovery.RefreshNow());tinyimx::OnlineStatusCache cache(&pool,prefix);tinyimx::GatewayRouteResolver resolver("local",&cache,&discovery);
+ std::vector<tinyimx::GatewayRouteResult> singles;for(auto id:ids)singles.push_back(resolver.Resolve(id));auto batch=resolver.ResolveBatch(ids);check("exact-count",batch.size()==ids.size());J rows=J::array();for(std::size_t i=0;i<ids.size();++i){check("original-status-record-route-error-"+std::to_string(i),view(batch[i])==view(singles[i]));rows.push_back({{"uid",ids[i]},{"original",view(singles[i])},{"batch",view(batch[i])}});}save("conformance.json",rows);
+ check("local-keeps-ownership-only",batch[0].IsLocal()&&!batch[0].remote_gateway);check("actual-remote-discovery-record",batch[1].IsRemote()&&batch[1].remote_gateway->gateway_id=="remote-alpha");check("missing-gateway-is-unavailable",batch[2].status==tinyimx::GatewayRouteStatus::kGatewayUnavailable);check("malformed-and-wrongtype-independent",batch[3].status==tinyimx::GatewayRouteStatus::kOnlineStatusError&&batch[4].status==tinyimx::GatewayRouteStatus::kOnlineStatusError&&batch[7].IsRemote());check("missing-presence-offline",batch[5].IsOffline());check("zero-is-original-invalid",batch[6].status==tinyimx::GatewayRouteStatus::kInvalidArgument);check("uint64-max-route-exact",batch[8].IsRemote()&&batch[8].online_status->user_id==std::numeric_limits<std::uint64_t>::max());
+ check("empty",resolver.ResolveBatch({}).empty());auto over=resolver.ResolveBatch(std::vector<std::uint64_t>(257,100));check("257-rejected",over.size()==257&&std::all_of(over.begin(),over.end(),[](auto&r){return r.status==tinyimx::GatewayRouteStatus::kInvalidArgument;}));
+ for(auto which:{0,1,2}){tinyimx::GatewayRouteResolver missing(which==0?"":"local",which==1?nullptr:&cache,which==2?nullptr:&discovery);auto v=missing.ResolveBatch(ids);for(std::size_t i=0;i<ids.size();++i)check("dependency-original-priority-"+std::to_string(which)+"-"+std::to_string(i),view(v[i])==view(missing.Resolve(ids[i])));}
+ // Change only this fixture's endpoint and presence; next call must re-read.
+ alpha.listen_port=10997;check("owned-registry-same-lease-renewal",registry.Register(alpha,900).Succeeded());check("own-discovery-new-snapshot",discovery.RefreshNow());auto endpoint=resolver.ResolveBatch({101});check("fresh-discovery-endpoint",endpoint.size()==1&&endpoint[0].IsRemote()&&endpoint[0].remote_gateway->listen_port==10997);
+ {auto c=pool.Acquire();if(!c||!c->SetEx(prefix+"101",bytes(101,"remote-beta"),900))throw std::runtime_error("OwnPresenceReplacement");}
+ auto next=resolver.ResolveBatch({101});check("no-cross-iteration-online-cache",next.size()==1&&next[0].IsRemote()&&next[0].remote_gateway->gateway_id=="remote-beta");
+ {auto c=pool.Acquire();if(!c)throw std::runtime_error("OwnVerifyLease");auto stored=c->Get(prefix+"101");check("replacement-bytes-preserved",stored&&*stored==bytes(101,"remote-beta"));for(auto k:{prefix+"100",prefix+"104",regprefix+"remote-alpha",regprefix+"remote-beta",regprefix+"__index__"}){auto ttl=c->EvalInteger("return redis.call('PTTL',KEYS[1])",{k},{});check("TTL-preserved-"+k,ttl&&*ttl>750000&&*ttl<=900000);}}
+ check("all-own-leases-returned",pool.AvailableCount()==pool.Size());
+}
+}
+int main(int argc,char**argv){namespace t=resolver_test;try{if(argc!=5)throw std::runtime_error("OwnArguments");std::string mode=argv[1];if(mode!="p1"&&mode!="p4")throw std::runtime_error("OwnPoolMode");t::out=argv[4];t::fs::path root="/home/jackson7/projects/TinyIMX_publish/.local/codex/group-route-integration-build-20261006";if(t::out.parent_path()!=root||t::out.filename()!=mode||!t::fs::is_directory(t::out))throw std::runtime_error("OwnStagePath");tinyimx::LoggerConfig logs;logs.level="warn";logs.file="";if(!tinyimx::Logger::Instance().Init(logs))throw std::runtime_error("OwnLoggerInit");std::ifstream f(t::fs::path(argv[2])/"gateway-a.json");auto j=t::J::parse(f)["redis"];tinyimx::RedisConfig config;config.enable=j.at("enable").get<bool>();config.host=argv[3];config.port=j.at("port").get<int>();config.db=j.at("db").get<int>();config.password=j.at("password").get<std::string>();config.pool_size=mode=="p1"?1:4;tinyimx::RedisConnectionPool pool;if(!pool.Initialize(config))throw std::runtime_error("OwnPoolInit");t::run(pool,"codex:group-route-resolver-native-20261006:"+mode+":");pool.Shutdown();t::save("result.json",{{"status","GROUP_ROUTE_RESOLVER_NATIVE_PASS"},{"checks",t::checks.size()},{"pool",config.pool_size},{"production_keys_changed",false},{"runtime_deployed",false}});return 0;}catch(const std::exception&e){if(!t::out.empty()&&t::fs::is_directory(t::out))t::save("failed.json",{{"status","FAIL"},{"message",e.what()},{"checks",t::checks.size()}});std::cerr<<"OWN_RESOLVER_FAILURE="<<e.what()<<'\n';return 2;}}

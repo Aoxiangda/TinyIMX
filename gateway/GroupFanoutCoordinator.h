@@ -52,10 +52,15 @@ struct GroupFanoutCoordinatorDependencies {
             const std::vector<rpc::CompleteGroupMessageDeliveryAttemptRpcRequest>&,
             const rpc::RpcCallOptions&)>;
 
+    using DispatchBatchCallback = std::function<
+        std::vector<GroupFanoutDispatchResult>(
+            const std::vector<rpc::GroupDeliveryWorkRpcRecord>&)>;
+
     ClaimCallback claim;
     CompleteCallback complete;
     DispatchCallback dispatch;
     CompleteBatchCallback complete_batch;
+    DispatchBatchCallback dispatch_batch;
 
     [[nodiscard]] bool Valid() const noexcept {
         return static_cast<bool>(claim) &&

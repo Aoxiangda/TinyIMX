@@ -19,6 +19,7 @@
 #include <memory>
 #include <string>
 #include <chrono>
+#include <vector>
 
 namespace tinyimx {
 
@@ -26,6 +27,7 @@ class OnlineStatusCache;
 class OnlineStatusMaintenance;
 class UnreadCountCache;
 class GatewayRouteResolver;
+struct GatewayRouteResult;
 class GatewayPeerTransportManager;
 
 class EventLoop;
@@ -193,6 +195,9 @@ public:
     GroupFanoutDispatchResult DispatchGroupFanoutDelivery(
         const rpc::GroupDeliveryWorkRpcRecord& work
     );
+    std::vector<GroupFanoutDispatchResult> DispatchGroupFanoutDeliveries(
+        const std::vector<rpc::GroupDeliveryWorkRpcRecord>& work
+    );
 
     const std::string& Name() const;
     const InetAddress& ListenAddress() const;
@@ -261,6 +266,11 @@ public:
 
 
 private:
+    GroupFanoutDispatchResult DispatchGroupFanoutDeliveryUsingRoute(
+        const rpc::GroupDeliveryWorkRpcRecord& work,
+        const GatewayRouteResult* route
+    );
+
     void HandleConnection(const TcpConnectionPtr& connection);
     void HandleMessage(const TcpConnectionPtr& connection,
                        Buffer* buffer);

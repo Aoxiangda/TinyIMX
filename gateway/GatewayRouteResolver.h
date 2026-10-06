@@ -78,10 +78,18 @@ public:
         std::uint64_t user_id
     ) const;
 
+    std::vector<GatewayRouteResult> ResolveBatch(
+        const std::vector<std::uint64_t>& user_ids
+    ) const;
+
     const std::string&
     LocalGatewayId() const noexcept;
 
 private:
+    GatewayRouteResult ResolveOnlineStatus(
+        const GetOnlineStatusResult& online_result
+    ) const;
+
     std::string local_gateway_id_;
 
     OnlineStatusCache*

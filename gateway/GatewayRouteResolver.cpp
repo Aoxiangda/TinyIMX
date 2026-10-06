@@ -85,6 +85,13 @@ GatewayRouteResolver::Resolve(
                     user_id
                 );
 
+    return ResolveOnlineStatus(online_result);
+}
+
+GatewayRouteResult GatewayRouteResolver::ResolveOnlineStatus(
+    const GetOnlineStatusResult& online_result
+) const {
+    GatewayRouteResult result;
     if (online_result.NotFound()) {
         result.status =
             GatewayRouteStatus::
@@ -161,6 +168,38 @@ GatewayRouteResolver::Resolve(
 
     return result;
 }
+std::vector<GatewayRouteResult> GatewayRouteResolver::ResolveBatch(
+    const std::vector<std::uint64_t>& user_ids
+) const {
+    std::vector<GatewayRouteResult> results(user_ids.size());
+    if (user_ids.size() > OnlineStatusCache::kMaxGetBatchSize) {
+        for (auto& result : results) {
+            result.status = GatewayRouteStatus::kInvalidArgument;
+            result.error_message = "route batch failed: batch exceeds 256 users";
+        }
+        return results;
+    }
+    if (user_ids.empty()) return results;
+    if (local_gateway_id_.empty() || online_status_cache_ == nullptr ||
+        gateway_discovery_ == nullptr) {
+        // These scalar paths reject dependencies/UIDs before cache I/O.
+        for (std::size_t i = 0; i < user_ids.size(); ++i)
+            results[i] = Resolve(user_ids[i]);
+        return results;
+    }
+    const auto online = online_status_cache_->GetOnlineStatusBatch(user_ids);
+    if (online.size() != user_ids.size()) {
+        for (auto& result : results) {
+            result.status = GatewayRouteStatus::kOnlineStatusError;
+            result.error_message = "route batch failed: unexpected result cardinality";
+        }
+        return results;
+    }
+    for (std::size_t i = 0; i < user_ids.size(); ++i)
+        results[i] = user_ids[i] == 0 ? Resolve(0) : ResolveOnlineStatus(online[i]);
+    return results;
+}
+
 
 
 const std::string&

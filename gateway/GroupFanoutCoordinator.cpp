@@ -45,6 +45,10 @@ GroupFanoutCoordinatorDependencies MakeProductionDependencies(
     }
 
     if (gateway != nullptr) {
+        dependencies.dispatch_batch = [gateway](
+            const std::vector<rpc::GroupDeliveryWorkRpcRecord>& work) {
+            return gateway->DispatchGroupFanoutDeliveries(work);
+        };
         dependencies.dispatch = [gateway](const rpc::GroupDeliveryWorkRpcRecord& work) {
             return gateway->DispatchGroupFanoutDelivery(work);
         };
@@ -217,6 +221,33 @@ std::size_t GroupFanoutCoordinator::RunOneIteration() {
         std::this_thread::sleep_for(options_.fault_pause_after_claim);
     }
 
+    std::vector<rpc::GroupDeliveryWorkRpcRecord> dispatch_items;
+    std::vector<GroupFanoutDispatchResult> batch_dispatch;
+    const bool use_route_batch = defer && GroupFanoutRouteBatchEnabled() &&
+        static_cast<bool>(dependencies_.dispatch_batch);
+    if (use_route_batch) {
+        dispatch_items.reserve(items.size());
+        for (const auto& work : items) {
+            if (work.message.message_id != 0 &&
+                work.delivery.message_id == work.message.message_id &&
+                work.delivery.recipient_user_id != 0)
+                dispatch_items.push_back(work);
+        }
+        if (!dispatch_items.empty()) {
+            const auto begin = trace.Mark();
+            batch_dispatch = dependencies_.dispatch_batch(dispatch_items);
+            trace.DispatchBatchDone(begin, dispatch_items.size());
+            if (batch_dispatch.size() != dispatch_items.size()) {
+                // Submission can already have happened. Preserve the original
+                // retry/lease path instead of dispatching any recipient twice.
+                batch_dispatch.assign(dispatch_items.size(), GroupFanoutDispatchResult{});
+                for (auto& result : batch_dispatch)
+                    result.error_code = "batch_dispatch_result_mismatch";
+                LOG_WARN("group fanout batch dispatch result mismatch");
+            }
+        }
+    }
+    std::size_t dispatch_index = 0;
     std::size_t processed = 0;
     for (const auto& work : claimed.value->work_items) {
         if (work.message.message_id == 0 ||
@@ -230,9 +261,14 @@ std::size_t GroupFanoutCoordinator::RunOneIteration() {
             continue;
         }
 
-        const auto dispatch_start = trace.Mark();
-        const GroupFanoutDispatchResult dispatched = dependencies_.dispatch(work);
-        trace.DispatchDone(dispatch_start);
+        GroupFanoutDispatchResult dispatched;
+        if (use_route_batch) {
+            dispatched = batch_dispatch[dispatch_index++];
+        } else {
+            const auto dispatch_start = trace.Mark();
+            dispatched = dependencies_.dispatch(work);
+            trace.DispatchDone(dispatch_start);
+        }
 
         // Receiver ACK can race and move the row to DELIVERED before this RPC.
         // Completion is guarded by lease/status in MessageService and therefore
