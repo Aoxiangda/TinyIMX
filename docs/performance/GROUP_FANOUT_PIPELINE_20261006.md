@@ -99,3 +99,164 @@ b2b1fd30的新Gateway/coordinator编译和42native（旧36+recipient6）全部PA
 ## 对象复用审计attempt2前置FAIL
 
 attempt2在本任务已编译对象的dependency guard停止、尚未重跑native/封镜像/部署。复用对象.d真实记录第一次构建的originalmacro overlay，guard误要求attempt2新overlay路径而FAIL。attempt3只修正助手，验证旧overlay SHA仍原macro1d4e7adc…，保留实际编译路径、对象/.d均不重写；整个先前失败stage保留。不是业务超时/数据正确性失败，不修改产品或放宽native检查。
+
+## recipient排序实际56native/真实ABBA已完成
+
+attempt3成功：56native全部PASS（原wake18+pipeline18+recipient6+当前executor14），历史 --expect-fair-handoff exact1FAIL按原契约验证且原FAIL日志保留。candidate image1b70a623e1b2a14d91aeb6c2244b8249d904108e48e99fd155fc245a8c59b557，ELFc246657a6152909b3fd8a780703123dbccc78a8b9d087f20970e52a83f864103。代码b2b1fd30、fixture修正c911fc04、provenancecf5c3aab、真实控制2298c259。
+
+相同ELF recipient OFF/ON/ON/OFF，defer1/commitwake1和max8/s共享trace均固定：208新群消息/9308recipient wire+SQLstate3正确、0重复；216操作148交互断言全通过。16人两ON10样本全部<100ms；65/100仍FAIL，不声称总体P99/容量/全部功能极致。
+
+|case|recipient order|2/16/65/100全收件mean ms|2/16/65/100全收件max ms|
+|---|---|---|---|
+|A1|off|28.780 / 87.161 / 270.567 / 565.423|36.116 / 125.078 / 313.558 / 685.429|
+|B1|on|33.533 / 67.093 / 195.464 / 443.023|40.989 / 78.005 / 215.147 / 568.035|
+|B2|on|29.979 / 66.224 / 200.280 / 424.176|38.074 / 73.387 / 235.080 / 547.335|
+|A2|off|32.835 / 82.812 / 256.807 / 538.983|35.689 / 100.835 / 332.403 / 637.360|
+
+抽样阶段（包含四规模/warm，ON/OFF采样人口不同、不是全请求P99或纯CPU；queueage到方法入口，Get/Confirm包含于worktotal，不能重复相加）：
+{
+  "A1": {
+    "peer": {
+      "samples": 82,
+      "mean_ms": {
+        "dispatch_age_us": 33.84118292682927,
+        "total_us": 2.8830243902439023,
+        "get_rpc_us": 2.7697073170731707,
+        "thread_cpu_us": 0.4846585365853659
+      }
+    },
+    "ACK": {
+      "samples": 137,
+      "mean_ms": {
+        "dispatch_age_us": 133.63586861313868,
+        "total_us": 9.848036496350366,
+        "get_rpc_us": 3.261678832116788,
+        "thread_cpu_us": 0.8590875912408759,
+        "confirm_rpc_us": 6.520394160583942
+      }
+    },
+    "coordinator64": {
+      "samples": 26,
+      "mean_ms": {
+        "claim_rpc_us": 68.67265384615385,
+        "dispatch_sum_us": 47.37530769230769,
+        "complete_rpc_sum_us": 289.377,
+        "total_us": 406.44196153846156,
+        "thread_cpu_us": 43.116692307692304
+      }
+    }
+  },
+  "B1": {
+    "peer": {
+      "samples": 58,
+      "mean_ms": {
+        "dispatch_age_us": 3.0561724137931034,
+        "total_us": 3.3553793103448273,
+        "get_rpc_us": 3.2512931034482757,
+        "thread_cpu_us": 0.4839655172413793
+      }
+    },
+    "ACK": {
+      "samples": 61,
+      "mean_ms": {
+        "dispatch_age_us": 47.496754098360654,
+        "total_us": 15.060901639344262,
+        "get_rpc_us": 5.476049180327869,
+        "thread_cpu_us": 0.8137213114754098,
+        "confirm_rpc_us": 9.485672131147542
+      }
+    },
+    "coordinator64": {
+      "samples": 12,
+      "mean_ms": {
+        "claim_rpc_us": 66.64783333333332,
+        "dispatch_sum_us": 40.468916666666665,
+        "complete_rpc_sum_us": 278.82125,
+        "total_us": 387.05608333333333,
+        "thread_cpu_us": 39.302
+      }
+    }
+  },
+  "B2": {
+    "peer": {
+      "samples": 64,
+      "mean_ms": {
+        "dispatch_age_us": 5.98428125,
+        "total_us": 3.275953125,
+        "get_rpc_us": 3.17946875,
+        "thread_cpu_us": 0.4659375
+      }
+    },
+    "ACK": {
+      "samples": 62,
+      "mean_ms": {
+        "dispatch_age_us": 42.25835483870967,
+        "total_us": 15.699790322580645,
+        "get_rpc_us": 6.049596774193549,
+        "thread_cpu_us": 0.7843870967741935,
+        "confirm_rpc_us": 9.578548387096774
+      }
+    },
+    "coordinator64": {
+      "samples": 12,
+      "mean_ms": {
+        "claim_rpc_us": 63.11575,
+        "dispatch_sum_us": 50.68675,
+        "complete_rpc_sum_us": 265.7105,
+        "total_us": 380.67175,
+        "thread_cpu_us": 40.94108333333334
+      }
+    }
+  },
+  "A2": {
+    "peer": {
+      "samples": 76,
+      "mean_ms": {
+        "dispatch_age_us": 37.9495,
+        "total_us": 2.8175263157894737,
+        "get_rpc_us": 2.705407894736842,
+        "thread_cpu_us": 0.46131578947368423
+      }
+    },
+    "ACK": {
+      "samples": 141,
+      "mean_ms": {
+        "dispatch_age_us": 146.21160283687942,
+        "total_us": 10.583758865248226,
+        "get_rpc_us": 3.407858156028369,
+        "thread_cpu_us": 0.845113475177305,
+        "confirm_rpc_us": 7.09377304964539
+      }
+    },
+    "coordinator64": {
+      "samples": 25,
+      "mean_ms": {
+        "claim_rpc_us": 58.264480000000006,
+        "dispatch_sum_us": 44.352,
+        "complete_rpc_sum_us": 307.00932,
+        "total_us": 410.66459999999995,
+        "thread_cpu_us": 43.199160000000006
+      }
+    }
+  }
+}
+
+peer queueage OFFmean33.841/37.950ms vsON3.056/5.984；ACK OFF133.636/146.212 vsON47.497/42.258。ON工作阶段RPC也增加，符合更并发后下游竞争，不能只报queue减少或把所有等待当CPU。63–67ms claim与265–279ms completion仍形成64batch跨界等待，100人群剩余400ms不靠继续降低指标/取消确认掩盖。
+
+最后精确恢复5c2645/e6873156及完整原Env（仅commitwake1/unread1/onlinebatch1，recipient/defer/trace无）。当前runtime receipt源 .local/codex/group-delivery-ordering-control-20261006/restore-summary.json，Gateway identities：
+{
+  "/tinyimx-m21-gateway-a-1": {
+    "id": "0b50e204e6c9a12d43e7b1c4a4a0e1b32f832c23ea20d67ecdaf35f966a25a81",
+    "image": "sha256:5c2645b1e8512bdd3fe68d4fea229a9418a5e115c9d96d636871639dba41a405",
+    "started": "2026-10-06T09:24:17.434650107Z"
+  },
+  "/tinyimx-m21-gateway-b-1": {
+    "id": "72302670006f1bf86edc784361965d764b6e4d29d7fb60a6a58b0f693dff5b4b",
+    "image": "sha256:5c2645b1e8512bdd3fe68d4fea229a9418a5e115c9d96d636871639dba41a405",
+    "started": "2026-10-06T09:24:17.83239962Z"
+  }
+}
+
+其他17 IDs/images/starts、私有配置SHA和durability1/1/1/0/0不变；原host apps保持。候选目前未选用运行/未跑万人混合，不宣称运行等于当前Git全部源码。
+
+下一进一步压缩已锁定recipient租约逐行UPDATE往返，必须原SELECT锁/状态/全部AffectedRows/rollback/COMMIT/lease/token保持，先隔离真实MySQL故障/ACKrace/concurrentclaims，再相同ELF控制。文件Begin原SQLowner/idempotency/readback/COMMIT和AI原production endpoint/model仍需独立阶段与启动修正；未把群改动外推到它们。

@@ -110,3 +110,9 @@ accepted-group-fanout-wake-20261006实际receipt已PASS：当前两个Gateway im
 ## 群完成RPC迭代真实结果
 
 36native和同ELF4case208群消息/9308收件/216操作148断言正确。defer ON把65人mean481–508ms降至244–273ms、100人774–788ms降至536–559ms，仍FAIL保留。原accepted5c2645全Env已恢复，未把大群失败标成极致验收。下一strictOFF recipient排序+低频dispatch_age诊断，保持同收件重复顺序/鉴权/lease/SQL确认和原executor；准确阶段与Git见GROUP_FANOUT_PIPELINE_20261006.md。全部功能极致验收OPEN。
+
+## recipient排序真实结果与全功能边界
+
+56native/原executor契约修正及historicalfair exact1FAIL均保存；同ELF recipient OFF/ON/ON/OFF且defer1固定，208群消息/9308实际recipientconfirmations/216操作148断言正确。16人两ONmean67.093/66.224ms，max78.005/73.387ms，65人mean195.464/200.280、100人443.023/424.176ms仍FAIL。原5c2645完整Env最终恢复；新候选尚未运行万人混合/未接受。
+
+低频peerqueueage OFF33.841/37.950→ON3.056/5.984ms，ACK133.636/146.212→47.497/42.258ms，阶段抽样人口/温身不同不估P99；更并发时RPC变慢同样记录。继续减少groupclaim逐行UPDATE和跨batch completion必要等待，保留durable/auth/确认；文件/AI/其他所有feature容量和交叉仍OPEN。完整实际镜像/ELF/CIDs/失败/Git见GROUP_FANOUT_PIPELINE_20261006.md。
