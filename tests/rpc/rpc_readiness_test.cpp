@@ -4,14 +4,19 @@
 #include "services/message/server/MessageServiceServer.h"
 #include "services/group/server/GroupServiceServer.h"
 #include "services/file/server/FileServiceServer.h"
+#include "tinyimx/user/v1/user_service.grpc.pb.h"
+#include "tinyimx/social/v1/social_service.grpc.pb.h"
+#include "tinyimx/message/v1/message_service.grpc.pb.h"
+#include "tinyimx/group/v1/group_service.grpc.pb.h"
+#include "tinyimx/file/v1/file_service.grpc.pb.h"
 #include <grpcpp/grpcpp.h>
 #include <iostream>
 #include <stdexcept>
 namespace {
 int checks = 0;
 void Require(bool ok, const char* name) { if (!ok) throw std::runtime_error(name); ++checks; }
-template<class Server> void Check(const char* domain) {
-    grpc::Service service;
+template<class Server, class Service> void Check(const char* domain) {
+    Service service;
     Server server(&service);
     Require(!server.SetReady(true), "unstarted rejected");
     Require(server.Start("127.0.0.1:0"), "Start");
@@ -35,11 +40,11 @@ int main() {
     try {
         Require(!tinyimx::runtime::CheckRpcReadiness(""), "empty rejected");
         Require(!tinyimx::runtime::CheckRpcReadiness("127.0.0.1:1"), "unreachable rejected");
-        Check<tinyimx::user::UserServiceServer>("user");
-        Check<tinyimx::social::SocialServiceServer>("social");
-        Check<tinyimx::message::MessageServiceServer>("message");
-        Check<tinyimx::group::GroupServiceServer>("group");
-        Check<tinyimx::file::FileServiceServer>("file");
+        Check<tinyimx::user::UserServiceServer, tinyimx::user::v1::UserService::Service>("user");
+        Check<tinyimx::social::SocialServiceServer, tinyimx::social::v1::SocialService::Service>("social");
+        Check<tinyimx::message::MessageServiceServer, tinyimx::message::v1::MessageService::Service>("message");
+        Check<tinyimx::group::GroupServiceServer, tinyimx::group::v1::GroupService::Service>("group");
+        Check<tinyimx::file::FileServiceServer, tinyimx::file::v1::FileService::Service>("file");
         std::cout << "{\"status\":\"RPC_READINESS_NATIVE_PASS\",\"checks\":" << checks << "}\n";
         return 0;
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

@@ -18,3 +18,8 @@ https://grpc.io/docs/guides/health-checking/
 https://github.com/grpc/grpc-proto/blob/master/grpc/health/v1/health.proto
 
 不改业务SQL/权限/事务ACK、临时节点所有权、快照失效策略、超时或主机VM设置。计划编译五入口和五server，真实原生五server就绪测试；首先只部署Group候选验证注册/退出与四轮跨功能控制。其他四运行镜像需绑定原优化对象后再验证，不声称已部署。动态注册恢复和单副本切换零丢请求仍未验证。本提交状态：待构建及实测，无性能接受。
+
+
+## 原生测试夹具失败与更正
+
+隔离5入口/5服务器及探针编译通过；首次原生测试空grpc::Service没有同步业务方法，gRPC报 At least one of the completion queues must be frequently polled，Start拒绝。真实业务接口有同步方法；修正夹具为各服务真实生成的Service接口，其方法默认UNIMPLEMENTED，不调用DB或业务应用。首次日志/对象/FAIL保持。新attempt2仅重编测试夹具，冻结并复用已成功的10个入口/服务器对象及探针/群grpc归档，运行实例不变，不把验证夹具失败计为业务端点失败。
