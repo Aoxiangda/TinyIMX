@@ -1,6 +1,7 @@
 #include "gateway/GatewayServer.h"
 #include "gateway/GroupFanoutWakeup.h"
 #include "gateway/GroupDeliveryOrdering.h"
+#include "gateway/GroupMessageRuntime.h"
 #include "gateway/GroupFanoutPipeline.h"
 #include <limits>
 
@@ -4191,10 +4192,11 @@ void GatewayServer::HandleGroupMessageDeliveryAck(
                  << ", seq=" << packet.seq << ", error=" << error);
         return;
     }
+    auto* executor = SelectGroupDeliveryExecutor(business_executor_, message_executor_);
     const auto session = session_manager_.FindSessionByConnection(connection);
-    if (!session.has_value() || !HasBusinessExecutor()) return;
+    if (!session.has_value() || executor == nullptr) return;
     const auto submit = SubmitSessionBusinessTask(
-        business_executor_, &session_manager_, connection, *session,
+        executor, &session_manager_, connection, *session,
         packet.seq, BusinessClock::now(), "gateway.group_delivery_ack",
         BusinessCancellationPolicy::kMustRun,
         GroupDeliveryOrderingKey(ack.message_id, session->user_id),
@@ -4303,9 +4305,10 @@ void GatewayServer::HandleGatewayForwardGroupMessageRequest(
         }
         return;
     }
-    if (!HasBusinessExecutor()) return;
+    auto* executor = SelectGroupDeliveryExecutor(business_executor_, message_executor_);
+    if (executor == nullptr) return;
     const auto submit = SubmitMustRunConnectionBusinessTask(
-        business_executor_, connection, packet.seq, BusinessClock::now(),
+        executor, connection, packet.seq, BusinessClock::now(),
         "gateway.peer_forward_group", GroupDeliveryOrderingKey(request.message_id, request.recipient_user_id),
         [this, connection, packet](const BusinessExecutor::ExecutionContext& context)
             -> BusinessExecutor::Completion {
