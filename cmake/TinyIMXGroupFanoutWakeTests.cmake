@@ -15,3 +15,10 @@ target_link_libraries(group_fanout_pipeline_tests PRIVATE tinyimx_gateway)
 add_test(NAME group_fanout_pipeline_tests COMMAND group_fanout_pipeline_tests 1)
 set_tests_properties(group_fanout_pipeline_tests PROPERTIES
     LABELS "unit;group;fanout" ENVIRONMENT "TINYIMX_GROUP_FANOUT_DEFER_COMPLETION_ENABLE=1")
+
+add_executable(group_delivery_ordering_tests benchmark/local_capacity/group_delivery_ordering_test.cpp)
+target_include_directories(group_delivery_ordering_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(group_delivery_ordering_tests PRIVATE tinyimx_gateway)
+add_test(NAME group_delivery_ordering_tests COMMAND group_delivery_ordering_tests 1)
+set_tests_properties(group_delivery_ordering_tests PROPERTIES
+    LABELS "unit;group;concurrency" ENVIRONMENT "TINYIMX_GROUP_DELIVERY_RECIPIENT_ORDER_ENABLE=1")

@@ -22,3 +22,68 @@ TINYIMX_GROUP_FANOUT_PHASE_TRACE_ENABLE=1为每批MID区间/数量/claimRPC/disp
 70461a73源码已Git提交。36native（6wake+6pipeline × OFF/ON/invalid）全部PASS；隔离编译仅coordinatorTU，复用接受的原GatewayServer/main/cache及其精确静态链接顺序。候选image bfe65e732629f9620bfa906eb3f7abffdc987a7286eb899581af1358135daa95，GatewayELF4ba5d0ce8f2ceac90ecde77d811d4c61e0b948e2f4fd22349aba8700b0408fc7，loaderPASS/missingconfig原exit1PASS。19运行/原库/私有配置保持，尚未部署接受。
 
 准备同Group57/58/59/60，OFF/ON/ON/OFF4case，每size13msgs(3warm10measured)，总208msgs/9308实际recipient confirmations，另216操作148断言原全功能链。仅2Gateway候选/fullEnv只增deferflag及两模式均trace1，commitwake1保留；最后恢复5c2645及原完整Env，其他17实例不变。低样本规模观察不假称全功能容量。
+
+## 原候选真实ABBA结果（全部保存）
+
+49c4ca33控制208群消息/9308逻辑收件逐项wire+SQLstate3正确、0重复；216操作148断言全功能链正确；2Gateway最后恢复5c2645原完整Env（defer/trace均无），其他17实例/配置/durability保持。
+
+|case|defer|2/16/65/100成员全收件mean ms|
+|---|---|---|
+|A1|off|28.929 / 129.987 / 508.262 / 788.122|
+|B1|on|28.566 / 85.315 / 244.309 / 536.071|
+|B2|on|32.661 / 90.394 / 273.236 / 559.205|
+|A2|off|32.591 / 148.668 / 481.102 / 774.455|
+
+两ON65成员mean244.309/273.236ms vsOFF508.262/481.102，100成员536.071/559.205 vs788.122/774.455；有稳定方向收益但16/65/100仍至少一次>100ms，不接受为极致/总体P99/万人容量。发送ACK/首收件重叠，不宣称这些得到因果改善。全部逐消息、逐收件、每size10测量及3warm retained。
+
+64收件批次阶段抽样（含warm，两规模26批/case或预算采样更少），exclusive协调器阶段不是端到端人口P99；A1claim63.076ms/dispatch54.787ms/complete369.292ms/whole488.257ms。完整按case数值：
+{
+  "A1": {
+    "samples": 26,
+    "mean_ms": {
+      "claim_rpc_us": 63.0761923076923,
+      "dispatch_sum_us": 54.7865,
+      "complete_rpc_sum_us": 369.29173076923075,
+      "total_us": 488.25711538461536,
+      "thread_cpu_us": 50.18934615384616
+    }
+  },
+  "B1": {
+    "samples": 26,
+    "mean_ms": {
+      "claim_rpc_us": 64.80053846153847,
+      "dispatch_sum_us": 45.662615384615385,
+      "complete_rpc_sum_us": 286.4925769230769,
+      "total_us": 397.935,
+      "thread_cpu_us": 41.9451923076923
+    }
+  },
+  "B2": {
+    "samples": 24,
+    "mean_ms": {
+      "claim_rpc_us": 63.892916666666665,
+      "dispatch_sum_us": 47.379041666666666,
+      "complete_rpc_sum_us": 297.1609166666667,
+      "total_us": 409.497125,
+      "thread_cpu_us": 44.593666666666664
+    }
+  },
+  "A2": {
+    "samples": 26,
+    "mean_ms": {
+      "claim_rpc_us": 63.630307692307696,
+      "dispatch_sum_us": 53.636346153846155,
+      "complete_rpc_sum_us": 358.88192307692304,
+      "total_us": 477.36565384615386,
+      "thread_cpu_us": 48.079807692307696
+    }
+  }
+}
+
+默认64batch下100成员第二批必须等第一批complete，所以延期同批complete不是跨批完整消除等待。receiver-side peer/ACK同MID有真实代码串行证据，但本轮尚无queueage计时，不能唯一断言全部剩余延迟由它造成。
+
+## 下一recipient排序候选
+
+Strict TINYIMX_GROUP_DELIVERY_RECIPIENT_ORDER_ENABLE=1令group peerreceive和receiverACK按相同GroupDeliveryIdentity(MID,recipient)的原hash排序；OFF/非1仍MID原key。ACK recipient来自已鉴权session。相同收件的重复peer/ACK保持顺序，不同收件允许不同stripe；队列/worker数/限流/取消期限/epoch fence/peerlease验证/durable Get/Confirm/tracker mutex均保留，私聊/群写操作key不改。
+
+共享max8/s/process数值诊断补充peer(kind1)/ACK(kind2) dispatch_age/work/getRPC/confirmRPC/threadCPU，将排队与工作耗时分开，OFF无clock。原生测试实际hold一个deliverytask，检查同identity重复仍等待，不同recipient ON可独立运行，另完整原14executor tests。候选尚未构建/实测，不假标PASS。

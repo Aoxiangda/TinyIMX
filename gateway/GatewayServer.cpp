@@ -1,5 +1,7 @@
 #include "gateway/GatewayServer.h"
 #include "gateway/GroupFanoutWakeup.h"
+#include "gateway/GroupDeliveryOrdering.h"
+#include "gateway/GroupFanoutPipeline.h"
 #include <limits>
 
 #include "common/logging/LogMacros.h"
@@ -4151,7 +4153,7 @@ void GatewayServer::HandleGroupMessageDeliveryAck(
         business_executor_, &session_manager_, connection, *session,
         packet.seq, BusinessClock::now(), "gateway.group_delivery_ack",
         BusinessCancellationPolicy::kMustRun,
-        static_cast<BusinessOrderingKey>(ack.message_id),
+        GroupDeliveryOrderingKey(ack.message_id, session->user_id),
         [this, connection, packet,
          user_id = session->user_id, epoch = session->epoch]
         (const BusinessExecutor::ExecutionContext& context) -> BusinessExecutor::Completion {
@@ -4174,6 +4176,7 @@ void GatewayServer::ExecuteGroupMessageDeliveryAck(
     if (!DeserializeGroupMessageDeliveryAck(packet.body, &ack, nullptr)) return;
     const auto receiver = ResolveBusinessUser(session_manager_, connection);
     if (!receiver.has_value() || !HasMessageRpcClient()) return;
+    diagnostics::GroupDeliveryTaskTrace trace(2, ack.message_id, *receiver, business_request);
 
     auto options = rpc::RpcCallOptions{};
     const auto rpc_id = next_internal_rpc_id_.fetch_add(1, std::memory_order_relaxed);
@@ -4188,7 +4191,9 @@ void GatewayServer::ExecuteGroupMessageDeliveryAck(
     rpc::GetGroupMessageDeliveryRpcRequest get;
     get.message_id = ack.message_id;
     get.recipient_user_id = *receiver;
+    const auto get_start = trace.Mark();
     const auto durable = message_rpc_client_->GetGroupMessageDelivery(get, options);
+    trace.GetDone(get_start);
     if (!durable.ok()) {
         LOG_WARN("gateway group ack durable validation failed"
                  << ", message_id=" << ack.message_id
@@ -4216,7 +4221,9 @@ void GatewayServer::ExecuteGroupMessageDeliveryAck(
     rpc::ConfirmGroupMessageDeliveryRpcRequest confirm;
     confirm.message_id = ack.message_id;
     confirm.recipient_user_id = *receiver;
+    const auto confirm_start = trace.Mark();
     const auto confirmed = message_rpc_client_->ConfirmGroupMessageDelivery(confirm, options);
+    trace.ConfirmDone(confirm_start);
     if (!confirmed.ok()) {
         LOG_WARN("gateway group delivery durable confirmation uncertain"
                  << ", message_id=" << ack.message_id
@@ -4255,7 +4262,7 @@ void GatewayServer::HandleGatewayForwardGroupMessageRequest(
     if (!HasBusinessExecutor()) return;
     const auto submit = SubmitMustRunConnectionBusinessTask(
         business_executor_, connection, packet.seq, BusinessClock::now(),
-        "gateway.peer_forward_group", static_cast<BusinessOrderingKey>(request.message_id),
+        "gateway.peer_forward_group", GroupDeliveryOrderingKey(request.message_id, request.recipient_user_id),
         [this, connection, packet](const BusinessExecutor::ExecutionContext& context)
             -> BusinessExecutor::Completion {
             ScopedBusinessDispatchContext scope(connection, 0, 0);
@@ -4275,6 +4282,7 @@ void GatewayServer::ExecuteGatewayForwardGroupMessageRequest(
 ) {
     GatewayForwardGroupMessageRequest request;
     if (!DeserializeGatewayForwardGroupMessageRequest(packet.body, &request, nullptr)) return;
+    diagnostics::GroupDeliveryTaskTrace trace(1, request.message_id, request.recipient_user_id, business_request);
     GatewayForwardGroupMessageResponse response;
     response.message_id = request.message_id;
     response.recipient_user_id = request.recipient_user_id;
@@ -4347,7 +4355,9 @@ void GatewayServer::ExecuteGatewayForwardGroupMessageRequest(
     rpc::GetGroupMessageDeliveryRpcRequest get;
     get.message_id = request.message_id;
     get.recipient_user_id = request.recipient_user_id;
+    const auto get_start = trace.Mark();
     const auto durable = message_rpc_client_->GetGroupMessageDelivery(get, options);
+    trace.GetDone(get_start);
     if (!durable.ok()) {
         response.status = durable.status.code == rpc::RpcErrorCode::kNotFound
             ? GatewayForwardGroupMessageStatus::kInvalidRequest
