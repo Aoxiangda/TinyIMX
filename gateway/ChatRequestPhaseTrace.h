@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gateway/business/BusinessRuntimeTypes.h"
+#include "common/cache/RedisAcquirePhaseTrace.h"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -20,6 +21,9 @@ public:
         std::uint64_t user_id{0}, message_id{0}, session_epoch{0};
         std::uint32_t request_seq{0};
         std::int64_t dispatch_age_us{0}, entry_budget_us{0}, work_us{0};
+        std::int64_t started_us{0}; std::uint64_t tid{0};
+        std::array<std::int64_t,kPhases> phase_started_us{{-1,-1,-1,-1,-1}};
+        std::array<std::int64_t,kPhases> phase_finished_us{{-1,-1,-1,-1,-1}};
         std::array<std::int64_t,kPhases> duration_us{{-1,-1,-1,-1,-1}};
         std::array<std::int64_t,kPhases> start_budget_us{{0,0,0,0,0}};
         bool has_deadline{false}, failed{false};
@@ -37,6 +41,11 @@ public:
         snapshot_.has_deadline = request.HasDeadline();
         snapshot_.dispatch_age_us = Micros(start-request.received_at);
         snapshot_.entry_budget_us = Budget(start);
+        absolute_trace_ = diagnostics::RedisAcquireTraceEnabled();
+        if (absolute_trace_) {
+            snapshot_.started_us = Micros(start.time_since_epoch());
+            snapshot_.tid = diagnostics::CurrentThreadId();
+        }
     }
     ChatRequestPhaseTrace(const ChatRequestPhaseTrace&) = delete;
     ChatRequestPhaseTrace& operator=(const ChatRequestPhaseTrace&) = delete;
@@ -75,7 +84,14 @@ private:
         return request_.HasDeadline() ? Micros(request_.deadline-now) : 0;
     }
     void Record(std::size_t i, BusinessTimePoint start) noexcept {
-        const auto elapsed = Micros(BusinessClock::now()-start);
+        const auto end = BusinessClock::now();
+        const auto elapsed = Micros(end-start);
+        if (absolute_trace_) {
+            // Union interval for repeated phases; no extra clock reads.
+            if (snapshot_.phase_started_us[i] < 0)
+                snapshot_.phase_started_us[i] = Micros(start.time_since_epoch());
+            snapshot_.phase_finished_us[i] = Micros(end.time_since_epoch());
+        }
         snapshot_.duration_us[i] = snapshot_.duration_us[i] < 0 ? elapsed
                                                              : snapshot_.duration_us[i]+elapsed;
     }
@@ -83,6 +99,7 @@ private:
     BusinessTimePoint started_;
     Sink sink_;
     Snapshot snapshot_;
+    bool absolute_trace_{false};
 };
 
 // Fixed one-second buckets; at most 8 diagnostic lines per bucket/process.

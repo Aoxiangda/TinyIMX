@@ -1,6 +1,7 @@
 #include "common/cache/RedisConnectionPool.h"
 
 #include "common/logging/LogMacros.h"
+#include "common/cache/RedisAcquirePhaseTrace.h"
 
 #include <utility>
 
@@ -157,9 +158,14 @@ void RedisConnectionPool::Shutdown() {
 RedisConnectionLease RedisConnectionPool::Acquire(
     std::chrono::milliseconds timeout
 ) {
+    // Construct before lock: numeric logging happens after lock destruction
+    // on all returns, including unavailable/timeout/reconnect failure.
+    diagnostics::RedisAcquirePhaseTrace trace;
     std::unique_lock<std::mutex> lock(mutex_);
+    trace.MutexLocked(size_, connections_.size());
 
     if (!initialized_ || shutting_down_) {
+        trace.Outcome(1);
         LOG_ERROR("redis connection pool acquire failed: pool not available");
         return {};
     }
@@ -168,7 +174,9 @@ RedisConnectionLease RedisConnectionPool::Acquire(
         return shutting_down_ || !connections_.empty();
     });
 
+    trace.SlotReady();
     if (!ready || shutting_down_) {
+        trace.Outcome(2);
         LOG_ERROR("redis connection pool acquire timeout");
         return {};
     }
@@ -178,11 +186,18 @@ RedisConnectionLease RedisConnectionPool::Acquire(
 
     lock.unlock();
 
-    if (!connection->Ping()) {
+    trace.PhaseStart();
+    const bool healthy = connection->Ping();
+    trace.PingDone();
+    if (!healthy) {
         LOG_WARN("redis connection ping failed, reconnecting"
                  << ", error=" << connection->LastError());
 
-        if (!connection->Connect(config_)) {
+        trace.PhaseStart();
+        const bool connected = connection->Connect(config_);
+        trace.ReconnectDone();
+        if (!connected) {
+            trace.Outcome(3);
             LOG_ERROR("redis connection reconnect failed"
                       << ", error=" << connection->LastError());
             // A failed request must not permanently shrink the pool.
@@ -192,6 +207,7 @@ RedisConnectionLease RedisConnectionPool::Acquire(
         }
     }
 
+    trace.Outcome(0);
     return RedisConnectionLease(this, std::move(connection));
 }
 

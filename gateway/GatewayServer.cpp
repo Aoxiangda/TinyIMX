@@ -63,6 +63,15 @@ void LogChatPhaseSnapshot(const tinyimx::ChatRequestPhaseTrace::Snapshot& x) noe
             << ", message_id=" << x.message_id
             << ", request_seq=" << x.request_seq
             << ", session_epoch=" << x.session_epoch
+            << ", started_us=" << x.started_us << ", tid=" << x.tid
+            << ", permission_started_us=" << x.phase_started_us[0]
+            << ", permission_finished_us=" << x.phase_finished_us[0]
+            << ", route_started_us=" << x.phase_started_us[1]
+            << ", route_finished_us=" << x.phase_finished_us[1]
+            << ", persist_started_us=" << x.phase_started_us[2]
+            << ", persist_finished_us=" << x.phase_finished_us[2]
+            << ", unread_started_us=" << x.phase_started_us[3]
+            << ", unread_finished_us=" << x.phase_finished_us[3]
             << ", dispatch_age_us=" << x.dispatch_age_us
             << ", entry_budget_us=" << x.entry_budget_us
             << ", has_deadline=" << x.has_deadline
