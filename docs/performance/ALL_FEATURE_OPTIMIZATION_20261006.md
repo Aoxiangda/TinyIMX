@@ -96,3 +96,9 @@ AI原profile桥接地址不可达且模型不存在；新私有测试配置连�
 
 相同5c2645 Gateway ELF、唤醒OFF/ON/ON/OFF，10000连接+private100/s+完整50页20/s+真实群收件2/s+54操作交互链均在原60秒窗口。24000私聊/4800完整页/280群消息逐条正确，216操作152断言（含窗口校验）正确。ON两轮private ACK P99上界57.5/50.9ms、列表P99 38.293/34.199ms、群实际收件样本P99 84.044/79.622ms，通过原100ms门槛；OFF群交付1036.301/1021.919ms性能FAIL完整保留。群只有每case60测量，两人群不能代表大群。
 此候选满足限定万人混合准入，准备选择继续运行；实际选用以accepted-group-fanout-wake-20261006/summary.json为准。20k–50k各类功能/热点群/高并发文件/AI原生产入口和推理/故障恢复仍OPEN，100ms仅门槛，继续实测减少必要往返与串行等待。完整数据与Git见GROUP_FANOUT_COMMIT_WAKE_20261006.md。
+
+## 当前已选用运行版本与下一规模分析
+
+accepted-group-fanout-wake-20261006实际receipt已PASS：当前两个Gateway image5c2645b1e8512bdd3fe68d4fea229a9418a5e115c9d96d636871639dba41a405，ELF e68731562d83b3b5c1923d80ed7ad4459d2f5cbc9b8a224e32014626fac04cfc，commitwake=1、conversation-unread=1、online-maintenance-batch=1；A CID cb5446335cfde72634157b564789b843d2335e90ec4d9577427c8ab7e9c80a80，B ad3626c181645b00210a43ee904e1276f02037c8b1e166bd6d3cfe3add73eec9。19健康/其他17实例不变/完整配置和原持久化保持。部署后的3资料、完整50页、1条跨Gateway群消息实际收件及SQL状态3/Pong drain正确。完整a2bb回滚override SHA e204cf1092a3421c70a36f9bbb4ddc5cff8de5d211625841215dcc6b91fea2c7继续保留。
+
+下一源助手只创建4个新自有2/16/65/100人群，固定100个自有连接分布两网关，分别13条消息/3warm10测量逐收件和SQL确认，原3秒ACK/交付期限保持，保留全部Group/成员/记录以便下一轮同夹具迭代。10个消息样本不估总体P99/容量。源码实际公开群上限500；内部recipient snapshot guard5000不能当5000人群支持。观察租约逐行UPDATE、逐收件完成RPC，以及peer receive/ACK按同MID串行的影响，准确分解后再改代码。此次仅准备规模分析，尚未标结果PASS，全部功能极致目标继续OPEN。

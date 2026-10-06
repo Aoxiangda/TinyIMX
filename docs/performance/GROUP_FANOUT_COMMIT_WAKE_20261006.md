@@ -52,3 +52,9 @@ Git f4fd1e7；stage group-fanout-wake-mixed10k-20261006。10000原自有环用�
 
 测试最终先严格恢复原a2bb/全Env及原健康/Cmd/HostConfig/挂载，其他17和私有配置保持。后续选择5c2645候选ON作为继续迭代版本，须以accepted-group-fanout-wake-20261006/summary.json实际运行receipt为准；本次提交只保存明确准入条件与部署助手，未将准备描述为已经运行。完整a2bb原配置/映像回滚继续留存。
 源码审查发现大群另一潜在开销：ClaimGroupMessageDeliveries在同事务内每收件人一次租约UPDATE，协调器又逐收件人完成同步RPC；当前两人群结果不证明大群已快。下一步用自有多成员群实测各阶段，再选择有界合并方案，保留FOR UPDATE/SKIP LOCKED、租约、受认证会话、实际ACK和持久化原语。20k之前private201ms/诊断149.4ms FAIL、AI秒级与文件并发容量仍OPEN，不停止全部功能迭代。
+
+## 当前已选用运行版本与下一规模分析
+
+accepted-group-fanout-wake-20261006实际receipt已PASS：当前两个Gateway image5c2645b1e8512bdd3fe68d4fea229a9418a5e115c9d96d636871639dba41a405，ELF e68731562d83b3b5c1923d80ed7ad4459d2f5cbc9b8a224e32014626fac04cfc，commitwake=1、conversation-unread=1、online-maintenance-batch=1；A CID cb5446335cfde72634157b564789b843d2335e90ec4d9577427c8ab7e9c80a80，B ad3626c181645b00210a43ee904e1276f02037c8b1e166bd6d3cfe3add73eec9。19健康/其他17实例不变/完整配置和原持久化保持。部署后的3资料、完整50页、1条跨Gateway群消息实际收件及SQL状态3/Pong drain正确。完整a2bb回滚override SHA e204cf1092a3421c70a36f9bbb4ddc5cff8de5d211625841215dcc6b91fea2c7继续保留。
+
+下一源助手只创建4个新自有2/16/65/100人群，固定100个自有连接分布两网关，分别13条消息/3warm10测量逐收件和SQL确认，原3秒ACK/交付期限保持，保留全部Group/成员/记录以便下一轮同夹具迭代。10个消息样本不估总体P99/容量。源码实际公开群上限500；内部recipient snapshot guard5000不能当5000人群支持。观察租约逐行UPDATE、逐收件完成RPC，以及peer receive/ACK按同MID串行的影响，准确分解后再改代码。此次仅准备规模分析，尚未标结果PASS，全部功能极致目标继续OPEN。
