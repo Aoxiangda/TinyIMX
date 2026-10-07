@@ -1,6 +1,7 @@
 #include "common/observability/TelemetryRuntime.h"
 
 #include "common/observability/Metrics.h"
+#include "common/observability/DurationHistogramViews.h"
 
 #include <chrono>
 #include <iostream>
@@ -106,7 +107,7 @@ bool TelemetryRuntime::Initialize(
         );
 
         auto provider = std::make_shared<metric_sdk::MeterProvider>(
-            std::make_unique<metric_sdk::ViewRegistry>(),
+            observability::MakeDurationHistogramViews(),
             resource
         );
         provider->AddMetricReader(
