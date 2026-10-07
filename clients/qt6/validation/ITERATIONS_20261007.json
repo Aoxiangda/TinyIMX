@@ -819,5 +819,15 @@
   "source_archive": "evidence/qt6-features-audit-20261007/iteration-code-snapshots.tar.gz",
   "source_archive_in_git": false,
   "source_retention": "Every original source snapshot remains in its evidence directory. This ledger is tracked with the tested final sources; raw local tests remain private.",
-  "source_archive_sha256": "d94daf052b7ae160eb116248cfd343349b75fcaf2013d225378354f9d3a032de"
+  "source_archive_sha256": "d94daf052b7ae160eb116248cfd343349b75fcaf2013d225378354f9d3a032de",
+  "post_feature_commit_iterations": [
+    {
+      "parent": "21d88c6a00572f6f59b6dd7ccb0d9f3612bf30da",
+      "issue": "accepted container inventory uses creation order and cannot drive cold startup",
+      "fix": "explicit 20-role dependency order; await dependencies including already-running containers",
+      "validation": "50 actual Compose dependency edges, inventory-order reversal, reject missing roles; no service stopped",
+      "helper_sha256": "ac4c216c949ea33e2e4a23c5b39cc3af8d3ea4cf074bde51eab0460fd5f6e90d",
+      "evidence": "evidence/qt6-features-audit-20261007/startup-order-checks.json"
+    }
+  ]
 }
