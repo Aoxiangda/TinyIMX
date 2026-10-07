@@ -23,6 +23,18 @@ bool PrivateBeginInsertReadBatchEnabled() noexcept {
     return enabled;
 }
 
+// Default-off candidate: the UNIQUE(from_user_id, client_message_id) index
+// arbitrates every insert. Duplicate attempts still roll back and release the
+// lease before the original full-record recovery read; no cached permission,
+// identity shortcut, outbox omission or early durable ACK is introduced.
+bool PrivateInsertFirstEnabled() noexcept {
+    static const bool enabled = [] {
+        const char* v = std::getenv("TINYIMX_PRIVATE_INSERT_FIRST_ENABLE");
+        return v && v[0] == '1' && v[1] == '\0';
+    }();
+    return enabled;
+}
+
 MessageApplicationStatus MapStatus(
     tinyimx::MessageQueryStatus status
 ) {
@@ -265,21 +277,23 @@ MessageRepositoryAdapter::PersistPrivateMessage(
         return output;
     }
 
-    // Fast-path only. The UNIQUE(from_user_id, client_message_id) constraint
-    // remains the final concurrent arbiter after a precheck miss.
-    const auto existing = trace.Measure(Phase::Precheck,[&]{
-        return repository_->FindPrivateMessageByClientMessageIdOnConnection(
-            connection.operator->(),from_user_id,client_message_id);
-    });
+    if (!PrivateInsertFirstEnabled()) {
+        // Fast-path only. The UNIQUE(from_user_id, client_message_id) constraint
+        // remains the final concurrent arbiter after a precheck miss.
+        const auto existing = trace.Measure(Phase::Precheck,[&]{
+            return repository_->FindPrivateMessageByClientMessageIdOnConnection(
+                connection.operator->(),from_user_id,client_message_id);
+        });
 
-    if (!existing.Succeeded()) {
-        map_query_failure(existing, "precheck");
-        return output;
-    }
+        if (!existing.Succeeded()) {
+            map_query_failure(existing, "precheck");
+            return output;
+        }
 
-    if (existing.Found()) {
-        set_existing_result(existing.record);
-        return output;
+        if (existing.Found()) {
+            set_existing_result(existing.record);
+            return output;
+        }
     }
 
     if (pre_insert_hook_for_test_) {
