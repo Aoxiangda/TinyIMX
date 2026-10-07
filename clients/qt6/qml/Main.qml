@@ -5,7 +5,7 @@ import QtQuick.Layouts
 ApplicationWindow {
     id: root
     width: 1480; height: 900; minimumWidth: 1080; minimumHeight: 720
-    visible: true; title: "TinyIMX · 桌面客户端"
+    visible: true; title: liveMode ? "TinyIMX · " + (liveSession.authenticated ? liveSession.accountName + " · ID " + liveSession.accountId : "登录") : "TinyIMX · 设计预览"
     color: "#f6f7fa"
     property string page: "messages"
     property bool darkMode: false
@@ -26,6 +26,12 @@ ApplicationWindow {
     }
     function showLogin() { loginDialog.open() }
     function closeLogin() { loginDialog.close() }
+    function submitLogin() { if(liveMode)liveSession.login(loginEndpoint.text,loginUser.text,loginPassword.text) }
+    function updateReadView() { if(liveMode)liveSession.setViewActive(root.active && root.page === "messages" && !loginDialog.opened) }
+    Component.onCompleted: { if(liveMode && !liveSession.authenticated)showLogin();updateReadView() }
+    onActiveChanged: updateReadView()
+    onPageChanged: updateReadView()
+    Connections { target: liveSession; function onSessionChanged() { if(!liveMode)return; if(liveSession.authenticated)loginDialog.close();else if(!liveSession.loginBusy)loginDialog.open();root.updateReadView() } }
     header: Rectangle {
         height: 66; color: "#ffffff"
         Rectangle { height: 1; color: "#e7eaf0"; anchors.bottom: parent.bottom; width: parent.width }
@@ -36,14 +42,14 @@ ApplicationWindow {
             Rectangle { width: 1; height: 18; color: "#e1e5ec"; Layout.leftMargin: 8; Layout.rightMargin: 4 }
             Text { text: "让沟通，有条不紊"; color: "#929cad"; font.pixelSize: 12 }
             Item { Layout.fillWidth: true }
-            Badge { label: "设计预览 · 本地数据"; fill: "#f2f4f8"; tint: "#7a8598" }
+            Badge { label: liveMode ? (liveSession.authenticated ? "真实服务器 · ID " + liveSession.accountId : "真实服务器 · 未登录") : "设计预览 · 本地数据"; fill: "#f2f4f8"; tint: "#7a8598" }
             Rectangle { color: demo.online ? "#f0f8f4" : "#fff3eb"; radius: 15; implicitWidth: 82; implicitHeight: 28
-                Row { anchors.centerIn: parent; spacing: 7; Rectangle { width: 6; height: 6; radius: 3; color: demo.online ? "#63a483" : "#d59656"; anchors.verticalCenter: parent.verticalCenter } Text { text: demo.online ? "演示在线" : "演示离线"; color: demo.online ? "#618975" : "#af7e4d"; font.pixelSize: 11 } }
-                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: demo.online = !demo.online }
-                ToolTip.visible: statusHover.hovered; ToolTip.text: "点击切换在线 / 离线，体验失败与重试"; HoverHandler { id: statusHover }
+                Row { anchors.centerIn: parent; spacing: 7; Rectangle { width: 6; height: 6; radius: 3; color: demo.online ? "#63a483" : "#d59656"; anchors.verticalCenter: parent.verticalCenter } Text { text: liveMode ? (demo.online ? "已连接" : "未连接") : (demo.online ? "演示在线" : "演示离线"); color: demo.online ? "#618975" : "#af7e4d"; font.pixelSize: 11 } }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { if(liveMode){if(liveSession.authenticated)liveSession.refresh();else root.showLogin()}else demo.online = !demo.online } }
+                ToolTip.visible: statusHover.hovered; ToolTip.text: liveMode ? "点击刷新真实数据，未登录时打开登录页" : "点击切换在线 / 离线，体验失败与重试"; HoverHandler { id: statusHover }
             }
             UiButton { iconName: "bell"; quiet: true; hint: "通知"; onClicked: demo.notify("当前没有新的系统通知") }
-            Avatar { width: 32; height: 32; radius: 10; label: "翔"; tint: "#384b69"; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.showLogin() } }
+            Avatar { width: 32; height: 32; radius: 10; label: liveMode ? liveSession.accountName.substring(0,1) : "翔"; tint: "#384b69"; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { if(liveMode && liveSession.authenticated)root.page="settings";else root.showLogin() } } }
         }
     }
     RowLayout {
@@ -72,9 +78,10 @@ ApplicationWindow {
         }
         Loader {
             Layout.fillWidth: true; Layout.fillHeight: true
-            sourceComponent: root.page === "messages" ? chatComponent : root.page === "contacts" ? contactsComponent : root.page === "groups" ? groupsComponent : root.page === "files" ? filesComponent : root.page === "ai" ? aiComponent : settingsComponent
+            sourceComponent: root.page === "messages" ? chatComponent : root.page === "contacts" ? contactsComponent : root.page === "groups" ? (liveMode ? integrationComponent : groupsComponent) : root.page === "files" ? (liveMode ? integrationComponent : filesComponent) : root.page === "ai" ? (liveMode ? integrationComponent : aiComponent) : settingsComponent
         }
     }
+    Component { id: integrationComponent; Item { ColumnLayout { anchors.centerIn: parent; width: 620; spacing: 22; Text { text: root.page === "groups" ? "群组客户端接入中" : root.page === "files" ? "文件传输客户端接入中" : "AI 助手客户端接入中"; color: "#29364e"; font.pixelSize: 26 } Text { Layout.fillWidth: true; text: "当前真实版本支持登录、好友申请、私聊、历史记录、离线补投与心跳。此页面的业务操作尚未接入；可使用 --demo 查看设计。"; wrapMode: Text.Wrap; font.pixelSize: 15; color: "#758197" } UiButton { text: "返回消息"; primary: true; onClicked: root.page="messages" } } } }
     Component { id: chatComponent; ChatPage { shell: root } }
     Component { id: contactsComponent; ContactsPage { shell: root } }
     Component { id: groupsComponent; GroupsPage { shell: root } }
@@ -113,15 +120,17 @@ ApplicationWindow {
             Rectangle { width: 50; height: 50; radius: 15; color: "#4c6aeb"; Layout.alignment: Qt.AlignHCenter; Text { text: "T"; color: "white"; font.pixelSize: 30; font.weight: Font.Bold; anchors.centerIn: parent } }
             Text { text: "欢迎回到 TinyIMX"; font.pixelSize: 24; font.weight: Font.DemiBold; color: "#26334c"; Layout.alignment: Qt.AlignHCenter }
             Text { text: "连接你的伙伴，继续上一次的讨论"; color: "#8a95a7"; font.pixelSize: 12; Layout.alignment: Qt.AlignHCenter }
-            TextField { id: loginUser; Layout.fillWidth: true; placeholderText: "用户名"; selectByMouse: true }
-            TextField { id: loginPassword; Layout.fillWidth: true; placeholderText: "密码"; echoMode: TextInput.Password; onAccepted: if(loginUser.text.trim() && loginPassword.text)demo.notify("当前为设计原型，不会发送或保存账号密码") }
+            TextField { id: loginUser; Layout.fillWidth: true; placeholderText: "用户名"; text: launchUsername; selectByMouse: true }
+            TextField { id: loginPassword; Layout.fillWidth: true; placeholderText: "密码"; echoMode: TextInput.Password; onAccepted: root.submitLogin() }
             Text { text: "服务地址"; color: "#6e7b8f"; font.pixelSize: 12 }
-            TextField { Layout.fillWidth: true; text: "192.168.220.128:9000"; selectByMouse: true }
-            UiButton { Layout.fillWidth: true; text: "登录（待接入）"; enabled: false; hint: "账号认证尚未接入；密码不会保存或发送" }
-            UiButton { Layout.fillWidth: true; text: "进入设计预览"; primary: true; onClicked: { loginPassword.text="";loginDialog.close() } }
-            Text { text: "此版本使用本地示例数据，不会向服务器发起登录。"; color: "#a0a9b8"; font.pixelSize: 11; Layout.alignment: Qt.AlignHCenter }
+            TextField { id: loginEndpoint; Layout.fillWidth: true; text: launchEndpoint; selectByMouse: true }
+            UiButton { visible: liveMode; Layout.fillWidth: true; text: liveSession.loginBusy ? "正在登录…" : "登录"; primary: true; enabled: !liveSession.loginBusy && loginUser.text.trim().length>0 && loginPassword.text.length>0; onClicked: root.submitLogin() }
+            Text { visible: liveMode && liveSession.loginError.length>0; Layout.fillWidth: true; text: liveSession.loginError; wrapMode: Text.Wrap; color: "#c57469"; font.pixelSize: 12 }
+            UiButton { visible: !liveMode; Layout.fillWidth: true; text: "进入设计预览"; primary: true; onClicked: { loginPassword.text="";loginDialog.close() } }
+            Text { text: liveMode ? "请在每个窗口登录不同账号。密码仅用于本次认证。" : "此版本使用本地示例数据，不会向服务器发起登录。"; color: "#a0a9b8"; font.pixelSize: 11; Layout.alignment: Qt.AlignHCenter }
         }
-        onClosed: loginPassword.text = ""
+        onClosed: { loginPassword.text = "";root.updateReadView() }
+        onOpened: root.updateReadView()
     }
     Shortcut { sequence: "Ctrl+1"; onActivated: root.page="messages" }
     Shortcut { sequence: "Ctrl+2"; onActivated: root.page="contacts" }

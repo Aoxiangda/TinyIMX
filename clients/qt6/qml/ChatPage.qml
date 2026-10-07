@@ -38,7 +38,7 @@ Item {
                     }
                     Text { anchors.centerIn: parent; visible: search.text!=="" && conversationList.contentHeight===0; text: "没有找到相关会话"; color: "#99a3b4"; font.pixelSize: 12 }
                 }
-                RowLayout { spacing: 6; Rectangle { width: 5; height: 5; radius: 3; color: "#b7bfcd" } Text { text: "消息记录 · 本地设计样例"; color: "#a0a9b8"; font.pixelSize: 10 } }
+                RowLayout { spacing: 6; Rectangle { width: 5; height: 5; radius: 3; color: "#b7bfcd" } Text { text: liveMode ? "消息记录 · 服务器真实数据" : "消息记录 · 本地设计样例"; color: "#a0a9b8"; font.pixelSize: 10 } }
             }
         }
         ColumnLayout {
@@ -69,7 +69,7 @@ Item {
                     property bool matches: historySearch.text === "" || item.text.indexOf(historySearch.text)>=0
                     width: messageList.width; height: !matches ? 0 : separator ? 28 : bubbleColumn.implicitHeight + 6; visible: matches
                     Text { visible: row.separator; text: row.item.text; anchors.horizontalCenter: parent.horizontalCenter; color: "#a1abbc"; font.pixelSize: 10; y: 4 }
-                    Avatar { visible: !row.separator; width: 34; height: 34; radius: 10; label: row.item.own ? "翔" : row.item.author.substring(0,1); tint: row.item.own ? "#384b69" : row.item.author === "陈序" ? "#86a49b" : "#cda881"; x: row.item.own ? parent.width-width-24 : 24; y: 3 }
+                    Avatar { visible: !row.separator; width: 34; height: 34; radius: 10; label: row.item.own ? (liveMode ? liveSession.accountName.substring(0,1) : "翔") : row.item.author.substring(0,1); tint: row.item.own ? "#384b69" : row.item.author === "陈序" ? "#86a49b" : "#cda881"; x: row.item.own ? parent.width-width-24 : 24; y: 3 }
                     ColumnLayout {
                         id: bubbleColumn; visible: !row.separator; spacing: 6
                         width: row.item.kind === "file" ? Math.min(300,messageList.width-150) : Math.min(messageText.implicitWidth + 32,messageList.width*0.76-55)
@@ -87,8 +87,8 @@ Item {
                         }
                         RowLayout { Layout.alignment: row.item.own ? Qt.AlignRight : Qt.AlignLeft; spacing: 8
                             Text { text: row.item.time; font.pixelSize: 9; color: "#a0aaba" }
-                            Text { visible: row.item.own; text: row.item.status === "failed" ? "发送失败" : "已保存 · 演示"; color: row.item.status === "failed" ? "#c57469" : "#8b99b1"; font.pixelSize: 9 }
-                            UiButton { visible: row.item.status === "failed"; text: "重试"; implicitHeight: 24; quiet: true; onClicked: demo.retryMessage(row.index) }
+                            Text { visible: row.item.own; text: row.item.status === "failed" ? "发送失败" : row.item.status === "uncertain" ? "结果待确认" : row.item.status === "sending" ? "发送中…" : row.item.status === "read" ? "已读" : liveMode ? "已保存" : "已保存 · 演示"; color: row.item.status === "failed" ? "#c57469" : "#8b99b1"; font.pixelSize: 9 }
+                            UiButton { visible: row.item.status === "failed" || row.item.status === "uncertain"; text: "重试"; implicitHeight: 24; quiet: true; onClicked: demo.retryMessage(row.index) }
                         }
                     }
                 }
@@ -112,14 +112,14 @@ Item {
                             }
                         }
                     }
-                    RowLayout { Layout.fillWidth: true; Text { text: shell.enterToSend ? "Enter 发送 · Shift + Enter 换行" : "Ctrl + Enter 发送"; color: "#a7b0bf"; font.pixelSize: 10 } Item { Layout.fillWidth: true } UiButton { text: "发送"; primary: true; implicitWidth: 76; implicitHeight: 32; enabled: editor.enabled && editor.text.trim().length>0; onClicked: { if(demo.sendMessage(editor.text))editor.text="" } } }
+                    RowLayout { Layout.fillWidth: true; Text { text: shell.enterToSend ? "Enter 发送 · Shift + Enter 换行" : "Ctrl + Enter 发送"; color: "#a7b0bf"; font.pixelSize: 10 } Item { Layout.fillWidth: true } UiButton { text: "发送"; primary: true; implicitWidth: 76; implicitHeight: 32; enabled: editor.enabled && editor.text.trim().length>0 && (!liveMode || (demo.online && demo.selectedIndex>=0)); onClicked: { if(demo.sendMessage(editor.text))editor.text="" } } }
                 }
                 Menu { id: emojiMenu; y: -80; MenuItem { text: "🙂  微笑"; onTriggered: editor.insert(editor.cursorPosition,"🙂") } MenuItem { text: "👍  赞同"; onTriggered: editor.insert(editor.cursorPosition,"👍") } MenuItem { text: "🎉  庆祝"; onTriggered: editor.insert(editor.cursorPosition,"🎉") } }
                 Shortcut { sequence: "Ctrl+Return"; autoRepeat: false; onActivated: if(editor.preeditText.length===0 && demo.sendMessage(editor.text))editor.text="" }
             }
         }
         Rectangle {
-            visible: chat.showInspector && chat.width>=1200; Layout.preferredWidth: 270; Layout.fillHeight: true; color: "#ffffff"
+            visible: !liveMode && chat.showInspector && chat.width>=1200; Layout.preferredWidth: 270; Layout.fillHeight: true; color: "#ffffff"
             Rectangle { width: 1; height: parent.height; color: "#e8ecf2" }
             ColumnLayout { anchors.fill: parent; anchors.margins: 24; spacing: 20
                 RowLayout { Text { text: "会话资料"; font.pixelSize: 13; color: "#6c7990" } Item { Layout.fillWidth: true } UiButton { iconName: "close"; quiet: true; hint: "收起资料"; onClicked: chat.showInspector=false } }

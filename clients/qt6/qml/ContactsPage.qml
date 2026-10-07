@@ -5,11 +5,12 @@ Item {
     id: contacts
     required property var shell
     property int selected: 0
-    property var person: demo.contacts.get(selected)
+    property var person: demo.contacts.count > selected ? demo.contacts.get(selected) : ({})
+    Connections { target: demo.contacts; function onDataChanged() { contacts.person=demo.contacts.get(contacts.selected) } function onModelReset() { contacts.selected=0;contacts.person=demo.contacts.get(0) } }
     ColumnLayout { anchors.fill: parent; anchors.margins: 32; spacing: 22
         RowLayout { Layout.fillWidth: true
             ColumnLayout { spacing: 8; Text { text: "联系人"; font.pixelSize: 25; font.weight: Font.DemiBold; color: "#29364e" } Text { text: "找到伙伴，让下一次沟通更简单"; font.pixelSize: 12; color: "#909cae" } }
-            Item { Layout.fillWidth: true } UiButton { text: "添加联系人"; iconName: "plus"; primary: true; onClicked: shell.openForm("friend","添加联系人","使用用户 ID 发送好友申请，对方接受后即可开始私聊。") }
+            Item { Layout.fillWidth: true } UiButton { visible: liveMode; text: "刷新"; onClicked: liveSession.refresh() } UiButton { text: "添加联系人"; iconName: "plus"; primary: true; onClicked: shell.openForm("friend","添加联系人","使用用户 ID 发送好友申请，对方接受后即可开始私聊。") }
         }
         Rectangle { Layout.fillWidth: true; implicitHeight: requestsContent.implicitHeight+36; color: "white"; radius: 14; border.color: "#e5e9f1"
             ColumnLayout { id: requestsContent; anchors.fill: parent; anchors.margins: 18; spacing: 12
@@ -32,7 +33,7 @@ Item {
                     Text { text: "我的联系人 · "+demo.contacts.count; color: "#919eb0"; font.pixelSize: 11 }
                     ListView { id: people; Layout.fillWidth: true; Layout.fillHeight: true; clip: true; model: demo.contacts; spacing: 5; ScrollBar.vertical: ScrollBar {}
                         delegate: Rectangle { required property var item; required property int index; property bool match: filter.text === "" || item.name.indexOf(filter.text)>=0; width: people.width; height: match?72:0; visible: match; radius: 10; color: contacts.selected===index?"#edf2ff":"transparent"
-                            RowLayout { anchors.fill: parent; anchors.margins: 12; spacing: 12; Avatar { width: 40; height: 40; label: item.initial; tint: item.color; showStatus: true; online: item.online } ColumnLayout { spacing: 6; Text { text: item.name; color: "#4e5b72"; font.pixelSize: 13 } Text { text: item.subtitle; color: "#9ca6b6"; font.pixelSize: 11 } } }
+                            RowLayout { anchors.fill: parent; anchors.margins: 12; spacing: 12; Avatar { width: 40; height: 40; label: item.initial; tint: item.color; showStatus: !liveMode; online: item.online } ColumnLayout { spacing: 6; Text { text: item.name; color: "#4e5b72"; font.pixelSize: 13 } Text { text: item.subtitle; color: "#9ca6b6"; font.pixelSize: 11 } } }
                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: contacts.selected=index }
                         }
                     }
@@ -42,11 +43,11 @@ Item {
                 ColumnLayout { anchors.horizontalCenter: parent.horizontalCenter; y: 52; width: Math.min(parent.width-80,420); spacing: 20
                     Avatar { Layout.preferredWidth: 86; Layout.preferredHeight: 86; radius: 26; Layout.alignment: Qt.AlignHCenter; label: contacts.person.initial || ""; tint: contacts.person.color || "#9999bb"; showStatus: true; online: contacts.person.online || false }
                     Text { text: contacts.person.name || ""; font.pixelSize: 25; color: "#38455e"; font.weight: Font.DemiBold; Layout.alignment: Qt.AlignHCenter }
-                    Badge { label: contacts.person.online ? "在线 · 设计样例" : "离线 · 设计样例"; fill: "#f2f6f5"; tint: "#8a9b94"; Layout.alignment: Qt.AlignHCenter }
+                    Badge { label: liveMode ? "已添加好友 · 在线状态未订阅" : contacts.person.online ? "在线 · 设计样例" : "离线 · 设计样例"; fill: "#f2f6f5"; tint: "#8a9b94"; Layout.alignment: Qt.AlignHCenter }
                     Rectangle { Layout.fillWidth: true; height: 1; color: "#edf0f5"; Layout.topMargin: 10 }
                     RowLayout { Layout.fillWidth: true; Text { text: "用户 ID"; color: "#9ba5b5"; font.pixelSize: 12 } Item { Layout.fillWidth: true } Text { text: contacts.person.id || ""; color: "#7a879c"; font.pixelSize: 12 } }
                     RowLayout { Layout.fillWidth: true; Text { text: "备注"; color: "#9ba5b5"; font.pixelSize: 12 } Item { Layout.fillWidth: true } Text { text: contacts.person.subtitle || ""; color: "#7a879c"; font.pixelSize: 12 } }
-                    UiButton { text: "发送消息"; primary: true; Layout.alignment: Qt.AlignHCenter; Layout.topMargin: 20; onClicked: { var found=false; for(var i=0;i<demo.conversations.count;i++){if(demo.conversations.get(i).id===contacts.person.id){demo.selectConversation(i);found=true;break}} if(found)shell.page="messages";else demo.notify("该新联系人尚无演示会话；真实接入将创建或读取私聊会话") } }
+                    UiButton { text: "发送消息"; primary: true; Layout.alignment: Qt.AlignHCenter; Layout.topMargin: 20; onClicked: { var found=false; for(var i=0;i<demo.conversations.count;i++){if(demo.conversations.get(i).id===contacts.person.id){demo.selectConversation(i);found=true;break}} if(found)shell.page="messages";else if(liveMode){liveSession.openConversation(contacts.person.id);shell.page="messages"}else demo.notify("该新联系人尚无演示会话；真实接入将创建或读取私聊会话") } }
                     Text { text: "好友关系由双方申请与确认建立。"; color: "#aeb6c3"; font.pixelSize: 11; Layout.alignment: Qt.AlignHCenter }
                 }
             }

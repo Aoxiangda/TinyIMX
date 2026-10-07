@@ -19,13 +19,14 @@ foreach ($taskPath in @($taskCompiler, $taskCmake, $taskNinja, (Join-Path $taskK
     if (!(Test-Path -LiteralPath $taskPath)) { throw "Installed tool missing: $taskPath" }
 }
 New-Item -ItemType Directory -Path $taskEvidence | Out-Null
+Copy-Item -LiteralPath $taskSource -Destination (Join-Path $taskEvidence 'source-snapshot') -Recurse
 $taskBuild = Join-Path $taskEvidence 'build'
 $taskOriginalPath = $env:PATH
 $taskSourceHashes = [ordered]@{}
 Get-ChildItem -LiteralPath $taskSource -Recurse -File | ForEach-Object {
     $taskSourceHashes[$_.FullName.Substring($taskSource.Length+1)] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
 }
-[ordered]@{ utc=[DateTimeOffset]::UtcNow.ToString('o'); operation='Build new standalone client with existing Qt6; local synthetic state tests and optional own-window captures'; source=$taskSource; build=$taskBuild; tools=@($taskKit,$taskCompiler,$taskCmake,$taskNinja); source_sha256=$taskSourceHashes; pressure=$false; network=$false; deletion=$false; global_environment_changes=$false } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $taskEvidence 'audit-before.json') -Encoding utf8
+[ordered]@{ utc=[DateTimeOffset]::UtcNow.ToString('o'); operation='Build standalone client with existing Qt6; real network integration compiled, local state/protocol checks and optional demo own-window captures'; source=$taskSource; build=$taskBuild; tools=@($taskKit,$taskCompiler,$taskCmake,$taskNinja); source_sha256=$taskSourceHashes; pressure=$false; network=$false; deletion=$false; global_environment_changes=$false } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $taskEvidence 'audit-before.json') -Encoding utf8
 try {
     $env:PATH = (Join-Path $taskKit 'bin') + ';' + (Split-Path $taskCompiler) + ';' + $taskOriginalPath
     & $taskCmake -S $taskSource -B $taskBuild -G Ninja "-DCMAKE_PREFIX_PATH=$taskKit" "-DCMAKE_CXX_COMPILER=$taskCompiler" "-DCMAKE_MAKE_PROGRAM=$taskNinja" -DCMAKE_BUILD_TYPE=Release 2>&1 | Tee-Object -FilePath (Join-Path $taskEvidence 'configure.log')
@@ -45,7 +46,7 @@ try {
         if ($taskCaptureSummary.qt_warnings -ne 0 -or $taskCaptureSummary.status -ne 'QT6_NATIVE_PAGES_CAPTURED') { throw 'Native Qt runtime warnings found; see capture logs' }
         Write-Output ('Native captures: ' + $taskCaptureSummary.pages + '; Qt warnings: ' + $taskCaptureSummary.qt_warnings)
     }
-    [ordered]@{status='QT6_CLIENT_BUILD_STATE_TESTS_AND_DEPLOY_PASS'; exe=$taskExe; exe_sha256=(Get-FileHash -LiteralPath $taskExe -Algorithm SHA256).Hash; qt='6.10.2 MinGW 64'; captured=[bool]$Capture; data='local demo; no backend integration claim'; pressure='paused'; source_sha256=$taskSourceHashes} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $taskEvidence 'summary.json') -Encoding utf8
+    [ordered]@{status='QT6_CLIENT_BUILD_STATE_TESTS_AND_DEPLOY_PASS'; exe=$taskExe; exe_sha256=(Get-FileHash -LiteralPath $taskExe -Algorithm SHA256).Hash; qt='6.10.2 MinGW 64'; captured=[bool]$Capture; data='real server client by default; --demo and --capture use isolated demo; real E2E receipt saved separately'; pressure='paused'; source_sha256=$taskSourceHashes} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $taskEvidence 'summary.json') -Encoding utf8
 } catch {
     [ordered]@{status='FAIL'; error=$_.Exception.Message; evidence_preserved=$true; pressure=$false} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskEvidence 'failed.json') -Encoding utf8
     throw

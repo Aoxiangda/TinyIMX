@@ -1,0 +1,440 @@
+{
+  "status": "PASS_FOR_NORMAL_DISTINCT_ACCOUNT_PRIVATE_CHAT",
+  "utc": "2026-10-07T08:44:58.535451+00:00",
+  "build": "qt6-ui-live-20261007-attempt9",
+  "exe_sha256": "7b2bbd64ce9ec500441a6a77b9f22ca31a2d0cfe2f511aa33b779d395bf43498",
+  "qt": "6.10.2 MinGW 64",
+  "endpoint": "192.168.220.128:9000",
+  "pressure": "paused",
+  "capacity_acceptance": false,
+  "protocol_checks": {
+    "checks": [
+      {
+        "name": "byte_by_byte_fragmentation",
+        "pass": true
+      },
+      {
+        "name": "network_header_and_sequence",
+        "pass": true
+      },
+      {
+        "name": "64_bit_ID_above_JS_precision",
+        "pass": true
+      },
+      {
+        "name": "reject_fractional_ID",
+        "pass": true
+      },
+      {
+        "name": "reject_string_ID",
+        "pass": true
+      },
+      {
+        "name": "reject_negative_ID",
+        "pass": true
+      },
+      {
+        "name": "coalesced_frames",
+        "pass": true
+      },
+      {
+        "name": "reject_bad_header_0",
+        "pass": true
+      },
+      {
+        "name": "reject_bad_header_4",
+        "pass": true
+      },
+      {
+        "name": "reject_bad_header_8",
+        "pass": true
+      },
+      {
+        "name": "reject_bad_header_10",
+        "pass": true
+      },
+      {
+        "name": "reject_oversized_body_before_allocation",
+        "pass": true
+      },
+      {
+        "name": "reject_non_object_json",
+        "pass": true
+      },
+      {
+        "name": "reject_corrupt_json",
+        "pass": true
+      },
+      {
+        "name": "reject_internal_gateway_type",
+        "pass": true
+      }
+    ],
+    "failures": 0,
+    "status": "PASS"
+  },
+  "demo_state_checks": {
+    "backend_requests": 0,
+    "checks": 19,
+    "failures": 0,
+    "results": [
+      {
+        "name": "initial conversations",
+        "pass": true
+      },
+      {
+        "name": "empty message rejected",
+        "pass": true
+      },
+      {
+        "name": "offline message retained",
+        "pass": true
+      },
+      {
+        "name": "offline not sent",
+        "pass": true
+      },
+      {
+        "name": "retry while offline remains failed",
+        "pass": true
+      },
+      {
+        "name": "retry does not duplicate or change cid",
+        "pass": true
+      },
+      {
+        "name": "retry status stored not read",
+        "pass": true
+      },
+      {
+        "name": "muted group denied",
+        "pass": true
+      },
+      {
+        "name": "accept request idempotent",
+        "pass": true
+      },
+      {
+        "name": "reject no new friend",
+        "pass": true
+      },
+      {
+        "name": "empty group rejected",
+        "pass": true
+      },
+      {
+        "name": "created group appears",
+        "pass": true
+      },
+      {
+        "name": "canceled transfer cannot resume",
+        "pass": true
+      },
+      {
+        "name": "ai thinking",
+        "pass": true
+      },
+      {
+        "name": "ai canceled",
+        "pass": true
+      },
+      {
+        "name": "conversation switch retains history",
+        "pass": true
+      },
+      {
+        "name": "draft scoped to conversation",
+        "pass": true
+      },
+      {
+        "name": "draft survives conversation switch",
+        "pass": true
+      },
+      {
+        "name": "disbanded group denies send",
+        "pass": true
+      }
+    ],
+    "status": "PASS"
+  },
+  "live_E2E": {
+    "accounts": [
+      {
+        "nickname": "Alice",
+        "user_id": "750001",
+        "username": "desktop_alice_20261007"
+      },
+      {
+        "nickname": "Bob",
+        "user_id": "750002",
+        "username": "desktop_bob_20261007"
+      },
+      {
+        "nickname": "Carol",
+        "user_id": "750003",
+        "username": "desktop_carol_20261007"
+      }
+    ],
+    "checks": [
+      {
+        "name": "profile_readable",
+        "pass": true,
+        "step": 1
+      },
+      {
+        "name": "exactly_three_owned_accounts",
+        "pass": true,
+        "step": 2
+      },
+      {
+        "name": "invalid_password_rejected",
+        "pass": true,
+        "step": 3
+      },
+      {
+        "name": "three_simultaneous_authenticated_TCP_sessions",
+        "pass": true,
+        "step": 4
+      },
+      {
+        "name": "identity_0",
+        "pass": true,
+        "step": 5
+      },
+      {
+        "name": "identity_1",
+        "pass": true,
+        "step": 6
+      },
+      {
+        "name": "identity_2",
+        "pass": true,
+        "step": 7
+      },
+      {
+        "name": "existing_owned_friendship_0_1",
+        "pass": true,
+        "step": 8
+      },
+      {
+        "name": "existing_owned_friendship_0_2",
+        "pass": true,
+        "step": 9
+      },
+      {
+        "name": "existing_owned_friendship_1_2",
+        "pass": true,
+        "step": 10
+      },
+      {
+        "name": "A_to_B_submit",
+        "pass": true,
+        "step": 11
+      },
+      {
+        "name": "A_to_B_stored_and_received_once",
+        "pass": true,
+        "step": 12
+      },
+      {
+        "name": "B_to_A_submit",
+        "pass": true,
+        "step": 13
+      },
+      {
+        "name": "B_to_A_stored_and_received_once",
+        "pass": true,
+        "step": 14
+      },
+      {
+        "name": "A_to_C_submit",
+        "pass": true,
+        "step": 15
+      },
+      {
+        "name": "A_to_C_stored_and_received_once",
+        "pass": true,
+        "step": 16
+      },
+      {
+        "name": "C_to_B_submit",
+        "pass": true,
+        "step": 17
+      },
+      {
+        "name": "C_to_B_stored_and_received_once",
+        "pass": true,
+        "step": 18
+      },
+      {
+        "name": "offline_send_submitted",
+        "pass": true,
+        "step": 19
+      },
+      {
+        "name": "offline_send_persisted",
+        "pass": true,
+        "step": 20
+      },
+      {
+        "name": "recipient_relogin",
+        "pass": true,
+        "step": 21
+      },
+      {
+        "name": "offline_delivery_and_history_deduplicated",
+        "pass": true,
+        "step": 22
+      },
+      {
+        "name": "sender_history_reconciled",
+        "pass": true,
+        "step": 23
+      },
+      {
+        "name": "heartbeat_response_received",
+        "pass": true,
+        "step": 24
+      },
+      {
+        "name": "native_live_QML_0",
+        "pass": true,
+        "step": 25
+      },
+      {
+        "name": "native_live_capture_0",
+        "pass": true,
+        "step": 26
+      },
+      {
+        "name": "native_live_QML_1",
+        "pass": true,
+        "step": 27
+      },
+      {
+        "name": "native_live_capture_1",
+        "pass": true,
+        "step": 28
+      },
+      {
+        "name": "native_live_QML_2",
+        "pass": true,
+        "step": 29
+      },
+      {
+        "name": "native_live_capture_2",
+        "pass": true,
+        "step": 30
+      },
+      {
+        "name": "same_host_duplicate_account_blocked_before_network_login",
+        "pass": true,
+        "step": 31
+      }
+    ],
+    "failure": "",
+    "pressure": false,
+    "server": "192.168.220.128:9000",
+    "status": "PASS",
+    "test_topology": "3 independent LiveStore TCP sessions in native Windows Qt process; subsequent manual launch uses 3 independent GUI processes"
+  },
+  "live_E2E_exit_code": 0,
+  "independent_native_processes": [
+    {
+      "pid": 59204,
+      "exit_code": 0,
+      "summary": {
+        "account": {
+          "nickname": "Alice",
+          "user_id": "750001",
+          "username": "desktop_alice_20261007"
+        },
+        "capture": true,
+        "pid": 59204,
+        "pressure": false,
+        "received_messages": 2,
+        "status": "PASS",
+        "stored_messages": 2,
+        "topology": "independent native GUI process"
+      }
+    },
+    {
+      "pid": 63384,
+      "exit_code": 0,
+      "summary": {
+        "account": {
+          "nickname": "Bob",
+          "user_id": "750002",
+          "username": "desktop_bob_20261007"
+        },
+        "capture": true,
+        "pid": 63384,
+        "pressure": false,
+        "received_messages": 2,
+        "status": "PASS",
+        "stored_messages": 2,
+        "topology": "independent native GUI process"
+      }
+    },
+    {
+      "pid": 54648,
+      "exit_code": 0,
+      "summary": {
+        "account": {
+          "nickname": "Carol",
+          "user_id": "750003",
+          "username": "desktop_carol_20261007"
+        },
+        "capture": true,
+        "pid": 54648,
+        "pressure": false,
+        "received_messages": 2,
+        "status": "PASS",
+        "stored_messages": 2,
+        "topology": "independent native GUI process"
+      }
+    }
+  ],
+  "Qt_runtime_warnings": 0,
+  "database": {
+    "status": "PASS",
+    "out": "/home/jackson7/projects/TinyIMX_publish/.local/codex/desktop-reconciliation-20261007T084329Z-020d2093",
+    "accounts": [
+      {
+        "user_id": "750001",
+        "username": "desktop_alice_20261007"
+      },
+      {
+        "user_id": "750002",
+        "username": "desktop_bob_20261007"
+      },
+      {
+        "user_id": "750003",
+        "username": "desktop_carol_20261007"
+      }
+    ],
+    "mutual_relation_rows": 6,
+    "accepted_friend_requests": 3,
+    "persisted_private_messages_including_retained_test_iterations": 37,
+    "duplicate_sender_CID_groups": false,
+    "delivery_status_counts": [
+      {
+        "status": 2,
+        "count": 29
+      },
+      {
+        "status": 1,
+        "count": 8
+      }
+    ],
+    "SQL_writes": false,
+    "pressure": false
+  },
+  "known_unresolved": [
+    "cross-gateway same-account immediate replacement: real server experiment failed; local duplicate account guard is client-only",
+    "groups/files/AI real Qt controls not connected",
+    "contact presence subscription/full list pagination/local durable drafts/TLS client integration pending"
+  ],
+  "runtime_identity_baseline": "server/accepted-runtime-20261007.json",
+  "failures_retained": "Windows evidence/qt6-*; original failure statuses not rewritten"
+}
