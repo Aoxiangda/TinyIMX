@@ -46,7 +46,7 @@ python3 /home/jackson7/projects/TinyIMX_publish/clients/qt6/server/start_existin
 ## 操作顺序
 
 1. 私聊：Alice 选 Bob 并发送，Bob 回复。Bob 退出登录后 Alice 再发；Bob 登录后检查离线补投和历史。服务器“已保存”、投递 ACK、已读表示不同阶段。
-2. 好友：联系人页输入数值用户 ID 申请，对方刷新或等待 15 秒，在申请列表接受/拒绝；删除好友由服务器校验。
+2. 好友：联系人页输入数值用户 ID 申请，对方刷新或等待 15 秒，在申请列表接受/拒绝。删除好友当前没有客户端按钮或对外RPC，尚未实现。
 3. 群聊：Alice 在群组页创建群，邀请 Bob/Carol；选择群进入聊天。开放群可按群 ID 加入。群主/管理员可管理成员，服务器核验权限。
 4. 群管理：角色、禁言/解除、资料更新、群主转让、退出、解散均走真实 RPC。群主不能直接退出，先转让或解散。资料更新使用已读取版本，冲突时刷新再提交。
 5. 文件：先选目标会话，再点击附件/选择文件。256 KiB 分块上传，终验后出现分享卡片。接收者点击下载；任务页可暂停、继续、重试、取消和打开所在目录。下载的 UUID 文件名不会覆盖已有文件。
@@ -59,8 +59,8 @@ python3 /home/jackson7/projects/TinyIMX_publish/clients/qt6/server/start_existin
 | TIMX 聊天连接 | `192.168.220.128:9000` |
 | 文件/群历史入口 | `http://192.168.220.128:18082/desktop`，健康检查 `/health` |
 | Windows 本地模型 | `http://127.0.0.1:11434`，`qwen3:0.6b` |
-| 正常下载 | Windows 下载目录的 `TinyIMX/UUID-文件名` |
-| 任务记录 | Qt AppLocalDataLocation 下 `transfers/SHA256(入口与账号)/tasks.json` |
+| 正常下载 | Windows 下载目录的 `TinyIMX/UUID-文件名`；本机为 `D:\Downloads\TinyIMX` |
+| 任务记录 | `C:\Users\Administrator\AppData\Local\TinyIMX\TinyIMX Desktop\transfers\SHA256(文件入口与账号)\tasks.json` |
 | 原始验收/源码快照 | Windows `evidence/qt6-*` |
 | 服务启动和部署审计 | Ubuntu 项目 `.local/codex/` |
 
