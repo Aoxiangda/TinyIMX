@@ -1,3 +1,4 @@
+#include "common/db/PermissionBoundaryTrace.h"
 #include "services/social/service/SocialServiceImpl.h"
 
 #include "common/observability/GrpcTracing.h"
@@ -218,11 +219,17 @@ grpc::Status SocialServiceImpl::CheckPrivateChatPermission(
         return {grpc::StatusCode::INVALID_ARGUMENT,
                 "invalid CheckPrivateChatPermission RPC arguments"};
     }
+    diagnostics::PermissionBoundaryTrace trace(2,request->from_user_id(),request->to_user_id(),request->meta().request_id(),request->meta().caller_instance());
+    diagnostics::PermissionBoundaryTrace::Scope trace_scope(trace);
     auto rpc_span = observability::StartGrpcServerSpan(
         "tinyimx.social.v1.SocialService", "CheckPrivateChatPermission", context);
+    trace.Mark(1);
     const auto finish = [&](grpc::Status status) {
+        trace.Mark(3);
+        trace.Result(static_cast<int>(status.error_code()));
         observability::FinishGrpcServerSpan(&rpc_span, status,
             "tinyimx.social.v1.SocialService", "CheckPrivateChatPermission");
+        trace.Mark(4);
         return status;
     };
     if (friend_application_service_ == nullptr) {
@@ -231,6 +238,7 @@ grpc::Status SocialServiceImpl::CheckPrivateChatPermission(
     }
     const auto result = friend_application_service_->CheckPrivateChatPermission(
         request->from_user_id(), request->to_user_id());
+    trace.Mark(2);
     response->set_result(ToProto(result.status));
     response->set_message(result.message);
     return finish(grpc::Status::OK);

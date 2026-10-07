@@ -1,3 +1,4 @@
+#include "common/db/PermissionBoundaryTrace.h"
 #include "services/rpc/SocialRpcClient.h"
 
 #include "common/observability/GrpcTracing.h"
@@ -307,6 +308,7 @@ SocialRpcClient::CheckPrivateChatPermission(
     const CheckPrivateChatPermissionRpcRequest& request,
     const RpcCallOptions& options
 ) const {
+    diagnostics::PermissionBoundaryTrace trace(1,request.from_user_id,request.to_user_id,options.request_id,options.caller_instance);
     if (request.from_user_id == 0 || request.to_user_id == 0 ||
         request.from_user_id == request.to_user_id) {
         return QueryFailure<CheckPrivateChatPermissionRpcResponse>(
@@ -326,7 +328,9 @@ SocialRpcClient::CheckPrivateChatPermission(
         return QueryFailure<CheckPrivateChatPermissionRpcResponse>(
             RpcErrorCode::kUnavailable, "SocialService endpoint is unavailable");
     }
+    trace.Mark(1);
     auto stub = GetOrCreateStub(*endpoint);
+    trace.Mark(2);
     if (!stub) {
         return QueryFailure<CheckPrivateChatPermissionRpcResponse>(
             RpcErrorCode::kUnavailable, "SocialService gRPC stub could not be created");
@@ -341,9 +345,13 @@ SocialRpcClient::CheckPrivateChatPermission(
     context.set_deadline(std::chrono::system_clock::now() + options.remaining_timeout);
     auto rpc_span = observability::StartGrpcClientSpan(
         "tinyimx.social.v1.SocialService", "CheckPrivateChatPermission", &context);
+    trace.Mark(3);
     const auto grpc_status = stub->CheckPrivateChatPermission(&context, proto_request, &proto_response);
+    trace.Mark(4);
+    trace.Result(static_cast<int>(grpc_status.error_code()));
     observability::FinishGrpcClientSpan(
         &rpc_span, grpc_status, "tinyimx.social.v1.SocialService", "CheckPrivateChatPermission");
+    trace.Mark(5);
     if (!grpc_status.ok()) {
         const auto mapped = MapGrpcStatus(grpc_status);
         return QueryFailure<CheckPrivateChatPermissionRpcResponse>(mapped.code, mapped.message);

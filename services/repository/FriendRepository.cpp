@@ -1,3 +1,4 @@
+#include "common/db/PermissionBoundaryTrace.h"
 #include "services/repository/FriendRepository.h"
 
 #include <optional>
@@ -71,6 +72,7 @@ ChatPermissionResult FriendRepository::CheckPrivateChatPermission(
     std::uint64_t to_user_id
 ) {
     ChatPermissionResult result;
+    diagnostics::PermissionBoundaryTrace trace(3,from_user_id,to_user_id);
 
     if (from_user_id == 0 ||
         to_user_id == 0) {
@@ -81,6 +83,7 @@ ChatPermissionResult FriendRepository::CheckPrivateChatPermission(
         result.message =
             "invalid user id";
 
+        trace.Result(static_cast<int>(result.status));
         return result;
     }
 
@@ -93,6 +96,7 @@ ChatPermissionResult FriendRepository::CheckPrivateChatPermission(
         result.message =
             "from user equals to user";
 
+        trace.Result(static_cast<int>(result.status));
         return result;
     }
 
@@ -105,11 +109,14 @@ ChatPermissionResult FriendRepository::CheckPrivateChatPermission(
             "friend repository check "
             "permission failed: pool is null";
 
+        trace.Result(static_cast<int>(result.status));
         return result;
     }
 
+    trace.Mark(1);
     auto connection =
         pool_->Acquire();
+    trace.Mark(2);
 
     if (!connection) {
         result.status =
@@ -121,6 +128,7 @@ ChatPermissionResult FriendRepository::CheckPrivateChatPermission(
             "permission failed: acquire "
             "connection failed";
 
+        trace.Result(static_cast<int>(result.status));
         return result;
     }
 
@@ -153,10 +161,10 @@ ChatPermissionResult FriendRepository::CheckPrivateChatPermission(
 
     MySqlQueryResult query_result;
 
-    if (!connection->Query(
-            sql,
-            &query_result
-        )) {
+    trace.Mark(3);
+    const bool query_ok=connection->Query(sql,&query_result);
+    trace.Mark(4);
+    if (!query_ok) {
         result.status =
             ChatPermissionStatus::
                 kStorageError;
@@ -170,6 +178,7 @@ ChatPermissionResult FriendRepository::CheckPrivateChatPermission(
                 "permission failed: query failed";
         }
 
+        trace.Result(static_cast<int>(result.status));
         return result;
     }
 
@@ -192,6 +201,7 @@ ChatPermissionResult FriendRepository::CheckPrivateChatPermission(
                     "permission failed: "
                     "invalid row size";
 
+                trace.Result(static_cast<int>(result.status));
                 return result;
             }
 
@@ -230,6 +240,7 @@ ChatPermissionResult FriendRepository::CheckPrivateChatPermission(
                     "permission failed: "
                     "invalid relation status";
 
+                trace.Result(static_cast<int>(result.status));
                 return result;
             }
 
@@ -257,6 +268,7 @@ ChatPermissionResult FriendRepository::CheckPrivateChatPermission(
                     "permission failed: "
                     "unexpected relation pair";
 
+                trace.Result(static_cast<int>(result.status));
                 return result;
             }
         }
@@ -272,6 +284,7 @@ ChatPermissionResult FriendRepository::CheckPrivateChatPermission(
             ) +
             e.what();
 
+        trace.Result(static_cast<int>(result.status));
         return result;
     }
 
@@ -295,6 +308,7 @@ ChatPermissionResult FriendRepository::CheckPrivateChatPermission(
         result.message =
             "blocked by self";
 
+        trace.Result(static_cast<int>(result.status));
         return result;
     }
 
@@ -308,6 +322,7 @@ ChatPermissionResult FriendRepository::CheckPrivateChatPermission(
         result.message =
             "blocked by peer";
 
+        trace.Result(static_cast<int>(result.status));
         return result;
     }
 
@@ -324,6 +339,7 @@ ChatPermissionResult FriendRepository::CheckPrivateChatPermission(
         result.message =
             "private chat allowed";
 
+        trace.Result(static_cast<int>(result.status));
         return result;
     }
 
@@ -333,6 +349,7 @@ ChatPermissionResult FriendRepository::CheckPrivateChatPermission(
     result.message =
         "not friend";
 
+    trace.Result(static_cast<int>(result.status));
     return result;
 }
 ListFriendsResult
