@@ -1,44 +1,54 @@
-# TinyIMX Desktop · Qt6 客户端
+# TinyIMX Desktop · Qt6 0.3
 
-可运行的 C++ / Qt Quick 桌面 UI 设计原型。使用本机既有 Qt 6.10.2 MinGW 64 编译，未安装新工具链。
+C++ / Qt Quick 原生 Windows 客户端，默认连接 Ubuntu VM 的真实 TinyIMX 后端。本轮接入群组、群消息、文件传输与本机 Ollama，保留已有认证、好友与私聊功能。`--demo` 和 `--capture` 使用隔离的设计样例；功能验收使用 `LiveStore`、真实 RPC、数据库、文件字节及模型生成。
 
-本版具有聊天、联系人/好友申请、群管理、文件传输任务、AI 助手、设置、登录预览，以及窄窗口布局。
-所有数据均为内存中的本地样例。账号登录、TIMX 网络协议、真实文件流和 Ollama / Agent 服务尚未接入。
-状态“已保存 · 演示”不会被标为真实服务器保存；文件进度和 AI 回复均明确标注为模拟。
+## 当前工作区直接启动
 
-## 在当前 Windows 工作区运行
+1. 开启 Ubuntu VM，双击工作区根目录 `Start-Server.cmd`；它核对并启动已验收的 20 个现有容器。
+2. 双击 `Start-AI.cmd` 检查本机 Ollama。已有服务继续使用；端口空闲时才启动已安装的 `ollama serve`。不会再次下载模型。
+3. 双击 `Start-Client.cmd` 打开一个窗口，或 `Start-3-Clients.cmd` 打开三个独立账号窗口。
+4. 演示用户名为 `desktop_alice_20261007`、`desktop_bob_20261007`、`desktop_carol_20261007`，演示密码都是 `123456`。已有好友关系，可直接互相发消息。
 
-从工作区根目录运行：
+当前通过验收的完整程序目录为 `evidence/qt6-ui-features-20261007-attempt9/build`，程序名 `tinyimx_desktop.exe`。复制程序时保留整个目录中的 DLL、`platforms` 和 `qml`。旧程序保持在各自证据目录中；已经打开的旧窗口需要自行关闭并重新打开新版。
+
+连接地址：聊天 `192.168.220.128:9000`；文件与群历史 `http://192.168.220.128:18082`；默认 AI `http://127.0.0.1:11434` / `qwen3:0.6b`。文件服务地址由聊天地址的主机名和固定端口 18082 派生。
+
+## 已实现功能
+
+| 页面 | 真实功能 |
+|---|---|
+| 消息 | 私聊与群聊、服务器入库确认、实时投递 ACK、MID/CID 去重、原 CID 失败重试、私聊历史与未读/已读、离线消息；群历史当前成员及原投递快照校验 |
+| 联系人 | 好友列表、申请发送与接受/拒绝、删除好友、数值 ID 添加、打开私聊；15 秒刷新申请列表 |
+| 群组 | 创建、开放加入、邀请、移出、角色变更、禁言/解除、版本化资料修改、群主转让、退出、解散；群组与成员自动分页 |
+| 文件 | 原生文件选择器、256 KiB 上传块、64 KiB 下载范围、逐块和整文件 SHA-256、暂停/续传、失败重试、服务器确认取消、账号任务持久化、私聊/群聊授权附件卡片 |
+| AI | 真实 Ollama 流式生成、模型列表检测、停止生成、错误提示；可选附加当前已加载会话最近 20 条消息；生成期间聊天保持可用 |
+
+从消息页选择私聊或群聊后上传，服务器完成文件终验才发送附件卡片。接收者点击卡片下载，整文件 SHA-256 通过后才标记完成。文件页保留失败任务和未完成文件用于复盘；下载默认保存到 Windows“下载/TinyIMX”。
+
+文件操作的身份由独立 HTTP 入口在登录后派生，禁止客户端指定任意 actor；分享能力绑定收件用户或群组。没有把旧 MCP 的静态服务令牌写入客户端。当前 AI 为直接模型问答与只读会话片段，不提供自动修改好友、群组和文件的工具调用。
+
+## 构建与复现
+
+使用本机已有 **Qt 6.10.2 MinGW 64-bit**，未安装新工具链。Qt Creator 打开本目录 `CMakeLists.txt` 并选择该 Kit。Windows 工作区根目录执行：
 
 ```powershell
-./tools/Build-TinyIMX-Desktop.ps1 -EvidenceName qt6-ui-my-build -Capture
-./tools/Start-TinyIMX-Desktop.ps1 -EvidenceName qt6-ui-my-build -Editor
+.\tools\Build-TinyIMX-Desktop.ps1 -EvidenceName qt6-ui-my-build -Capture
+.\tools\Start-TinyIMX-Desktop.ps1 -EvidenceName qt6-ui-my-build -Count 3 -Editor
 ```
 
-每次构建使用新的证据目录，保留之前的构建、日志、状态测试和截图。
-构建脚本仅修改当前进程 PATH，并在结束时恢复；不会改变系统环境或 Qt 安装。
-`-Editor` 同时在本机 Qt Creator 中打开本工程的 `CMakeLists.txt`。
+构建助手为每次构建保留新的源码快照、SHA-256、日志、状态/协议自检与原生窗口截图。只修改当前进程 PATH 并恢复，不改系统环境。编译为 Release，构建并行度 2。
 
-可直接打开对应 `evidence/qt6-ui-*/build/tinyimx_desktop.exe`，旁边已有 Qt 运行库。
-Qt Creator 应选择 **Desktop Qt 6.10.2 MinGW 64-bit** Kit；独立工程不依赖 Linux 后端 CMake。
+功能自检需要属于测试的三账号 JSON（endpoint、password、accounts），证据目录必须不存在。不要对真实用户执行测试中的群管理和文件取消操作。
 
-## 页面与交互
+```powershell
+.\evidence\qt6-ui-features-20261007-attempt9\build\tinyimx_desktop.exe --features-test <owned-profile.json> --evidence <new-evidence-directory>
+.\evidence\qt6-ui-features-20261007-attempt9\build\tinyimx_desktop.exe --live-test <owned-profile.json> --evidence <another-new-directory>
+```
 
-- 消息：会话搜索、私聊/群聊切换、示例消息和附件、输入草稿、Enter/Shift+Enter/Ctrl+Enter、失败重试、禁言反馈、会话资料。
-- 联系人：本地联系人搜索与资料、好友申请接受/拒绝、添加申请表单、跳转已有会话。
-- 群组：群列表、成员/角色、版本信息、创建表单、邀请/加入入口、禁言预览、转让/退出/解散确认。
-- 文件：全部/进行中/完成筛选，进度、暂停/继续/重试、取消确认，保留任务记录。
-- AI：预设提问、生成中、停止、示例答复、离线失败、输入保留，以及待接入的上下文与工具区。
-- 设置与登录：发送快捷键、通知偏好、连接状态预览、地址输入、密码遮罩，正式登录按钮保持禁用。
+## 验收与边界
 
-点击窗口右上角“演示在线”可切换离线。离线发送后恢复在线，再点击该消息的“重试”，可检查不新增重复消息的交互。
-主导航快捷键为 Ctrl+1 到 Ctrl+5。窄窗口自动隐藏右侧资料区。
+本轮事实、问题复盘和已知限制见 [功能完善记录](../../docs/client/FEATURE_COMPLETION_20261007.md)，正常使用见 [启动与操作指南](../../docs/client/NORMAL_SERVER_WINDOWS_CLIENT_20261007.md)，公开检查结果见 [FEATURES_20261007.json](validation/FEATURES_20261007.json)。完整原始记录保留在 Windows `evidence/qt6-*` 和 Ubuntu 项目 `.local/codex/`；包含临时授权的原始事件及私有配置不进入 Git。
 
-详细的信息架构、协议映射、异常流程、性能与安全要求见 [客户端设计规范](../../docs/client/QT6_CLIENT_DESIGN_20261007.md)。
+当前单文件上限 64 MiB，每账号本地最多 100 个传输任务；新建群默认成员上限 100。群已读/未读仅为当前客户端状态，尚无持久化群已读回执。联系人在线订阅、大规模好友/会话完整分页、持久化草稿、跨设备任务同步和客户端 TLS 仍待实现。默认入口用于可信本机/VM 私网；上线公网需要完成 TLS、授权会话容量和入口限流的专门评估。
 
-## 代码结构
-
-`qml/` 负责界面与交互；`src/DemoStore.*` 使用 `QAbstractListModel` 提供内存状态与合成数据；`assets/icons/` 是本任务绘制的 SVG 图标。
-`src/main.cpp` 启动客户端，并提供状态契约自检和当前应用窗口截图入口。
-
-此设计原型不表示后端 10k–50k 全功能性能验收完成。后端压测已按用户要求暂停。
+本轮是功能联调。压测按用户要求暂停，检查通过不代表 10k–50k 用户性能验收。

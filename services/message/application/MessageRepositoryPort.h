@@ -17,6 +17,9 @@ public:
         out.message = "pending recipient discovery is unavailable";
         return out;
     }
+    virtual GroupHistoryApplicationResult ListGroupHistory(std::uint64_t, std::uint64_t, std::uint64_t, std::size_t) {
+        GroupHistoryApplicationResult out;out.message="group history unavailable";return out;
+    }
     virtual ~MessageRepositoryPort() = default;
 
     // Compatibility implementations fail explicitly; an unsupported lookup

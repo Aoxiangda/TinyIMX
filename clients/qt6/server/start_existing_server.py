@@ -28,6 +28,6 @@ def main():
         rows=json.loads(docker('inspect',*names))
     assert [identity(r) for r in rows]==expected
     healthy=all(r['State']['Running'] and r['State'].get('Health',{}).get('Status','healthy')=='healthy' for r in rows)
-    summary={'status':'READY' if healthy else 'NOT_READY','running':sum(r['State']['Running'] for r in rows),'expected':19,'started':plan if start else [],'audit':str(out),'endpoint':'192.168.220.128:9000','mode':'normal server; pressure paused'}
+    summary={'status':'READY' if healthy else 'NOT_READY','running':sum(r['State']['Running'] for r in rows),'expected':len(expected),'started':plan if start else [],'audit':str(out),'endpoint':'192.168.220.128:9000','file_endpoint':'http://192.168.220.128:18082','mode':'normal server; pressure paused'}
     (out/'summary.json').write_text(json.dumps(summary,indent=2)+'\n');print(json.dumps(summary));return 0 if healthy else 1
 if __name__=='__main__':sys.exit(main())

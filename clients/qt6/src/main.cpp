@@ -39,6 +39,7 @@ int main(int argc,char **argv) {
     LiveStore live;
     const auto argument=[&](const QString &name,const QString &fallback=QString{}){const int i=app.arguments().indexOf(name);return i>=0&&i+1<app.arguments().size()?app.arguments().at(i+1):fallback;};
     if(app.arguments().contains(QStringLiteral("--protocol-test")))return runProtocolChecks(argument(QStringLiteral("--self-test-report")));
+    if(app.arguments().contains(QStringLiteral("--features-test")))return runFeatureChecks(argument(QStringLiteral("--features-test")),argument(QStringLiteral("--evidence")));
     if(app.arguments().contains(QStringLiteral("--live-test")))return runLiveChecks(argument(QStringLiteral("--live-test")),argument(QStringLiteral("--evidence")));
     if(app.arguments().contains(QStringLiteral("--self-test"))){const int report=app.arguments().indexOf(QStringLiteral("--self-test-report"));return store.runSelfTest(report>=0&&report+1<app.arguments().size()?app.arguments().at(report+1):QString{});}
     const int capture=app.arguments().indexOf(QStringLiteral("--capture"));

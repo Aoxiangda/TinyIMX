@@ -297,6 +297,12 @@ struct GroupMessageRecord {
     std::string created_at;
 };
 
+struct ListGroupHistoryResult {
+    MessageQueryStatus status{MessageQueryStatus::kStorageError};
+    std::vector<GroupMessageRecord> records;
+    std::string message;
+    bool Succeeded() const noexcept { return status==MessageQueryStatus::kSucceeded; }
+};
 struct FindGroupMessageResult {
     MessageQueryStatus status{MessageQueryStatus::kStorageError};
     bool found{false};
@@ -597,6 +603,7 @@ public:
         std::uint64_t peer_user_id
     );
 
+    ListGroupHistoryResult ListGroupHistory(std::uint64_t actor, std::uint64_t group, std::uint64_t before, std::size_t limit);
     // M17-B1 group-message durable identity/read primitives.
     FindGroupMessageResult FindGroupMessageById(
         std::uint64_t message_id

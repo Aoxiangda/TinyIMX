@@ -1,103 +1,25 @@
 [
   {
-    "name": "tinyimx-m21-mysql-1",
-    "id": "cc86cf7be0401c4a3727a8da2f9f95392f6824995617b06001bf04bb66d100d3",
-    "image": "sha256:d58ac93387f644e4e040c636b8f50494e78e5afc27ca0a87348b2f577da2b7ff",
+    "name": "tinyimx-desktop-file-20261007",
+    "id": "9f7f16962b7f5c34cf5a21be6711f9b5c8a900671fedde2ce5a928042833a555",
+    "image": "sha256:7e601d0dbc96bfa9ca71b592a3bbb1a0130608b952614bc9b45cf166b597db27",
     "mounts": [
       {
-        "destination": "/docker-entrypoint-initdb.d/001-schema.sql",
-        "source": "/home/jackson7/projects/TinyIMX_publish/common/db/schema.sql",
-        "rw": false
-      },
-      {
-        "destination": "/docker-entrypoint-initdb.d/009-create-file-domain.sql",
-        "source": "/home/jackson7/projects/TinyIMX_publish/db/migrations/009_create_file_domain.sql",
-        "rw": false
-      },
-      {
-        "destination": "/docker-entrypoint-initdb.d/010-create-file-upload-chunks.sql",
-        "source": "/home/jackson7/projects/TinyIMX_publish/db/migrations/010_create_file_upload_chunks.sql",
-        "rw": false
-      },
-      {
-        "destination": "/var/lib/mysql",
-        "source": "/var/lib/docker/volumes/tinyimx-m21_mysql-data/_data",
+        "destination": "/state",
+        "source": "/home/jackson7/.local/share/tinyimx/desktop-file-20261007",
         "rw": true
+      },
+      {
+        "destination": "/run/tinyimx/config",
+        "source": "/home/jackson7/.local/share/tinyimx/m21/config",
+        "rw": false
       }
     ]
   },
   {
-    "name": "tinyimx-m21-redis-1",
-    "id": "c30aaf304e659447037a458d90d600b4669320bdb2ca624c1b2ac417551d922e",
-    "image": "sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
-    "mounts": [
-      {
-        "destination": "/data",
-        "source": "/var/lib/docker/volumes/tinyimx-m21_redis-data/_data",
-        "rw": true
-      }
-    ]
-  },
-  {
-    "name": "tinyimx-m21-zookeeper-1",
-    "id": "f2489e48b3fbce694c8729bce90304c8072396b95cf78f62ea6cf15827a85fcd",
-    "image": "sha256:0b05ed30a85906d56a1954a288bf0b3bb80cf4d2e1e7b0b16aae4712cd4a954a",
-    "mounts": [
-      {
-        "destination": "/data",
-        "source": "/var/lib/docker/volumes/tinyimx-m21_zookeeper-data/_data",
-        "rw": true
-      },
-      {
-        "destination": "/datalog",
-        "source": "/var/lib/docker/volumes/tinyimx-m21_zookeeper-datalog/_data",
-        "rw": true
-      },
-      {
-        "destination": "/logs",
-        "source": "/var/lib/docker/volumes/d75a1ff782669a140c4010ad6f3c9af115fdb322221086ea61045d04c40705a4/_data",
-        "rw": true
-      }
-    ]
-  },
-  {
-    "name": "tinyimx-m21-rocketmq-namesrv-1",
-    "id": "93d257f8b1f1f80c29cfcdfa2f8f9ac2f11246f753125016ba64a2ce8e1c59af",
-    "image": "sha256:7e8f6c9dbd9df742ed26ba69c00d4ad69e2f86a56f3ca7782ff8144dd0798132",
-    "mounts": []
-  },
-  {
-    "name": "tinyimx-m21-rocketmq-broker-1",
-    "id": "7ce61fdb75f5e604529490a498723fbb8365123507d9ac6fe930467971581155",
-    "image": "sha256:7e8f6c9dbd9df742ed26ba69c00d4ad69e2f86a56f3ca7782ff8144dd0798132",
-    "mounts": [
-      {
-        "destination": "/home/rocketmq/broker.conf",
-        "source": "/home/jackson7/projects/TinyIMX_publish/deploy/production/rocketmq/broker.conf",
-        "rw": false
-      },
-      {
-        "destination": "/home/rocketmq/logs",
-        "source": "/var/lib/docker/volumes/tinyimx-m21_rocketmq-logs/_data",
-        "rw": true
-      },
-      {
-        "destination": "/home/rocketmq/store",
-        "source": "/var/lib/docker/volumes/tinyimx-m21_rocketmq-store/_data",
-        "rw": true
-      }
-    ]
-  },
-  {
-    "name": "tinyimx-m21-rocketmq-proxy-1",
-    "id": "ff5976f4280711d15068de51d3d57b545fcb26a0615598bd0c4201733352f4d6",
-    "image": "sha256:7e8f6c9dbd9df742ed26ba69c00d4ad69e2f86a56f3ca7782ff8144dd0798132",
-    "mounts": []
-  },
-  {
-    "name": "tinyimx-m21-user-service-1",
-    "id": "860ad3d84412082d3dcad59aadde8d1acb13ceedff1178eed53b62412e9dce92",
-    "image": "sha256:38dca459e0a88141c1385503b28cbd6e29a1eed18d253f808dc1dfa89e0a0316",
+    "name": "tinyimx-m21-message-service-1",
+    "id": "6f8596c15780bb7e8b7e52b8ebd94852b4ab35480da5d46cba5d591c4e5c8b95",
+    "image": "sha256:f9bb2ab34a76ecbcc546a36e1ebc313f961e13564a67c6712924eb291297380e",
     "mounts": [
       {
         "destination": "/run/tinyimx/config",
@@ -107,8 +29,32 @@
     ]
   },
   {
-    "name": "tinyimx-m21-group-service-1",
-    "id": "e4edc88327382785974fa3b1c40f1f3156a8f28c4406f709600fb0bdac434dd0",
+    "name": "tinyimx-m21-gateway-b-1",
+    "id": "864bc9f9e41a3fce213cc07efa90a2f5a059db3dd5abd7c057d95f933c7679bd",
+    "image": "sha256:7fcfb4f1e395839def624af1ba4a8667304f4858a350ad8e5a80f461d44ae36b",
+    "mounts": [
+      {
+        "destination": "/run/tinyimx/config",
+        "source": "/home/jackson7/.local/share/tinyimx/m21/config",
+        "rw": false
+      }
+    ]
+  },
+  {
+    "name": "tinyimx-m21-gateway-a-1",
+    "id": "ef06806fc2e66e0ddded0e058f6bea66acba30371dcf6673ac10874578bd8c97",
+    "image": "sha256:7fcfb4f1e395839def624af1ba4a8667304f4858a350ad8e5a80f461d44ae36b",
+    "mounts": [
+      {
+        "destination": "/run/tinyimx/config",
+        "source": "/home/jackson7/.local/share/tinyimx/m21/config",
+        "rw": false
+      }
+    ]
+  },
+  {
+    "name": "tinyimx-m21-social-service-1",
+    "id": "2c341da54c106b8884fb4a52e43a1b77e379f2bc700401cc6393643aefab677f",
     "image": "sha256:38dca459e0a88141c1385503b28cbd6e29a1eed18d253f808dc1dfa89e0a0316",
     "mounts": [
       {
@@ -136,20 +82,8 @@
     ]
   },
   {
-    "name": "tinyimx-m21-message-service-1",
-    "id": "1c20934f811775599ad11bac81416ad65a0a0d62496da898a31141e733913fc7",
-    "image": "sha256:be8b5ddea1a874ce017b0e8dfda1c3ac4e5c0f5b8fa938041aae1a4aaba0a060",
-    "mounts": [
-      {
-        "destination": "/run/tinyimx/config",
-        "source": "/home/jackson7/.local/share/tinyimx/m21/config",
-        "rw": false
-      }
-    ]
-  },
-  {
-    "name": "tinyimx-m21-social-service-1",
-    "id": "2c341da54c106b8884fb4a52e43a1b77e379f2bc700401cc6393643aefab677f",
+    "name": "tinyimx-m21-group-service-1",
+    "id": "e4edc88327382785974fa3b1c40f1f3156a8f28c4406f709600fb0bdac434dd0",
     "image": "sha256:38dca459e0a88141c1385503b28cbd6e29a1eed18d253f808dc1dfa89e0a0316",
     "mounts": [
       {
@@ -160,33 +94,21 @@
     ]
   },
   {
-    "name": "tinyimx-m21-gateway-a-1",
-    "id": "61fc890d311846e5122b85358d9ce8fc7247ffa663ea6d272750935cd938413f",
-    "image": "sha256:5c2645b1e8512bdd3fe68d4fea229a9418a5e115c9d96d636871639dba41a405",
-    "mounts": [
-      {
-        "destination": "/run/tinyimx/config",
-        "source": "/home/jackson7/.local/share/tinyimx/m21/config",
-        "rw": false
-      }
-    ]
-  },
-  {
-    "name": "tinyimx-m21-gateway-b-1",
-    "id": "f87ca5268c2852f0d10eabf80ebf70d93f9d302ce8e618868c43ccfad9612573",
-    "image": "sha256:5c2645b1e8512bdd3fe68d4fea229a9418a5e115c9d96d636871639dba41a405",
-    "mounts": [
-      {
-        "destination": "/run/tinyimx/config",
-        "source": "/home/jackson7/.local/share/tinyimx/m21/config",
-        "rw": false
-      }
-    ]
-  },
-  {
-    "name": "tinyimx-m21-outbox-relay-1",
-    "id": "7a9b360a3153f796f5e2630339d5fbc88ea07bdcd862a3de330202de855251cb",
+    "name": "tinyimx-m21-user-service-1",
+    "id": "860ad3d84412082d3dcad59aadde8d1acb13ceedff1178eed53b62412e9dce92",
     "image": "sha256:38dca459e0a88141c1385503b28cbd6e29a1eed18d253f808dc1dfa89e0a0316",
+    "mounts": [
+      {
+        "destination": "/run/tinyimx/config",
+        "source": "/home/jackson7/.local/share/tinyimx/m21/config",
+        "rw": false
+      }
+    ]
+  },
+  {
+    "name": "tinyimx-m21-mcp-server-1",
+    "id": "bd8182dcd4be5ee219b58b4711fd5e4512a38b19c712ce5b7d0358b2bd36cef7",
+    "image": "sha256:bc85c186271873610ff759c008d5f36d49d1a9c331e064eb7fa1121d822485a3",
     "mounts": [
       {
         "destination": "/run/tinyimx/config",
@@ -208,9 +130,31 @@
     ]
   },
   {
-    "name": "tinyimx-m21-mcp-server-1",
-    "id": "bd8182dcd4be5ee219b58b4711fd5e4512a38b19c712ce5b7d0358b2bd36cef7",
-    "image": "sha256:bc85c186271873610ff759c008d5f36d49d1a9c331e064eb7fa1121d822485a3",
+    "name": "tinyimx-m21-zookeeper-1",
+    "id": "f2489e48b3fbce694c8729bce90304c8072396b95cf78f62ea6cf15827a85fcd",
+    "image": "sha256:0b05ed30a85906d56a1954a288bf0b3bb80cf4d2e1e7b0b16aae4712cd4a954a",
+    "mounts": [
+      {
+        "destination": "/data",
+        "source": "/var/lib/docker/volumes/tinyimx-m21_zookeeper-data/_data",
+        "rw": true
+      },
+      {
+        "destination": "/datalog",
+        "source": "/var/lib/docker/volumes/tinyimx-m21_zookeeper-datalog/_data",
+        "rw": true
+      },
+      {
+        "destination": "/logs",
+        "source": "/var/lib/docker/volumes/d75a1ff782669a140c4010ad6f3c9af115fdb322221086ea61045d04c40705a4/_data",
+        "rw": true
+      }
+    ]
+  },
+  {
+    "name": "tinyimx-m21-outbox-relay-1",
+    "id": "7a9b360a3153f796f5e2630339d5fbc88ea07bdcd862a3de330202de855251cb",
+    "image": "sha256:38dca459e0a88141c1385503b28cbd6e29a1eed18d253f808dc1dfa89e0a0316",
     "mounts": [
       {
         "destination": "/run/tinyimx/config",
@@ -237,6 +181,61 @@
     ]
   },
   {
+    "name": "tinyimx-m21-mysql-1",
+    "id": "cc86cf7be0401c4a3727a8da2f9f95392f6824995617b06001bf04bb66d100d3",
+    "image": "sha256:d58ac93387f644e4e040c636b8f50494e78e5afc27ca0a87348b2f577da2b7ff",
+    "mounts": [
+      {
+        "destination": "/docker-entrypoint-initdb.d/001-schema.sql",
+        "source": "/home/jackson7/projects/TinyIMX_publish/common/db/schema.sql",
+        "rw": false
+      },
+      {
+        "destination": "/docker-entrypoint-initdb.d/009-create-file-domain.sql",
+        "source": "/home/jackson7/projects/TinyIMX_publish/db/migrations/009_create_file_domain.sql",
+        "rw": false
+      },
+      {
+        "destination": "/docker-entrypoint-initdb.d/010-create-file-upload-chunks.sql",
+        "source": "/home/jackson7/projects/TinyIMX_publish/db/migrations/010_create_file_upload_chunks.sql",
+        "rw": false
+      },
+      {
+        "destination": "/var/lib/mysql",
+        "source": "/var/lib/docker/volumes/tinyimx-m21_mysql-data/_data",
+        "rw": true
+      }
+    ]
+  },
+  {
+    "name": "tinyimx-m21-rocketmq-proxy-1",
+    "id": "ff5976f4280711d15068de51d3d57b545fcb26a0615598bd0c4201733352f4d6",
+    "image": "sha256:7e8f6c9dbd9df742ed26ba69c00d4ad69e2f86a56f3ca7782ff8144dd0798132",
+    "mounts": []
+  },
+  {
+    "name": "tinyimx-m21-rocketmq-broker-1",
+    "id": "7ce61fdb75f5e604529490a498723fbb8365123507d9ac6fe930467971581155",
+    "image": "sha256:7e8f6c9dbd9df742ed26ba69c00d4ad69e2f86a56f3ca7782ff8144dd0798132",
+    "mounts": [
+      {
+        "destination": "/home/rocketmq/broker.conf",
+        "source": "/home/jackson7/projects/TinyIMX_publish/deploy/production/rocketmq/broker.conf",
+        "rw": false
+      },
+      {
+        "destination": "/home/rocketmq/logs",
+        "source": "/var/lib/docker/volumes/tinyimx-m21_rocketmq-logs/_data",
+        "rw": true
+      },
+      {
+        "destination": "/home/rocketmq/store",
+        "source": "/var/lib/docker/volumes/tinyimx-m21_rocketmq-store/_data",
+        "rw": true
+      }
+    ]
+  },
+  {
     "name": "tinyimx-m21-prometheus-1",
     "id": "e166a28791001208f8e20134f52027e74ce89ad1f86ffcec2921916f4114bab1",
     "image": "sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0",
@@ -257,6 +256,24 @@
         "rw": false
       }
     ]
+  },
+  {
+    "name": "tinyimx-m21-redis-1",
+    "id": "c30aaf304e659447037a458d90d600b4669320bdb2ca624c1b2ac417551d922e",
+    "image": "sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
+    "mounts": [
+      {
+        "destination": "/data",
+        "source": "/var/lib/docker/volumes/tinyimx-m21_redis-data/_data",
+        "rw": true
+      }
+    ]
+  },
+  {
+    "name": "tinyimx-m21-rocketmq-namesrv-1",
+    "id": "93d257f8b1f1f80c29cfcdfa2f8f9ac2f11246f753125016ba64a2ce8e1c59af",
+    "image": "sha256:7e8f6c9dbd9df742ed26ba69c00d4ad69e2f86a56f3ca7782ff8144dd0798132",
+    "mounts": []
   },
   {
     "name": "tinyimx-m21-otel-collector-1",

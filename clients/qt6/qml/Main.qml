@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs as NativeDialogs
 
 ApplicationWindow {
     id: root
@@ -73,17 +74,21 @@ ApplicationWindow {
             }
             Column { anchors.bottom: parent.bottom; anchors.horizontalCenter: parent.horizontalCenter; anchors.bottomMargin: 24; spacing: 17
                 UiButton { iconName: "settings-light"; quiet: true; hint: "设置"; onClicked: root.page = "settings" }
-                Text { text: "v0.1"; color: "#7f8ba2"; font.pixelSize: 10; anchors.horizontalCenter: parent.horizontalCenter }
+                Text { text: "v0.3"; color: "#7f8ba2"; font.pixelSize: 10; anchors.horizontalCenter: parent.horizontalCenter }
             }
         }
         Loader {
             Layout.fillWidth: true; Layout.fillHeight: true
-            sourceComponent: root.page === "messages" ? chatComponent : root.page === "contacts" ? contactsComponent : root.page === "groups" ? (liveMode ? integrationComponent : groupsComponent) : root.page === "files" ? (liveMode ? integrationComponent : filesComponent) : root.page === "ai" ? (liveMode ? integrationComponent : aiComponent) : settingsComponent
+            sourceComponent: root.page === "messages" ? chatComponent : root.page === "contacts" ? contactsComponent : root.page === "groups" ? (liveMode ? liveGroupsComponent : groupsComponent) : root.page === "files" ? (liveMode ? liveFilesComponent : filesComponent) : root.page === "ai" ? (liveMode ? liveAIComponent : aiComponent) : settingsComponent
         }
     }
-    Component { id: integrationComponent; Item { ColumnLayout { anchors.centerIn: parent; width: 620; spacing: 22; Text { text: root.page === "groups" ? "群组客户端接入中" : root.page === "files" ? "文件传输客户端接入中" : "AI 助手客户端接入中"; color: "#29364e"; font.pixelSize: 26 } Text { Layout.fillWidth: true; text: "当前真实版本支持登录、好友申请、私聊、历史记录、离线补投与心跳。此页面的业务操作尚未接入；可使用 --demo 查看设计。"; wrapMode: Text.Wrap; font.pixelSize: 15; color: "#758197" } UiButton { text: "返回消息"; primary: true; onClicked: root.page="messages" } } } }
     Component { id: chatComponent; ChatPage { shell: root } }
     Component { id: contactsComponent; ContactsPage { shell: root } }
+    NativeDialogs.FileDialog { id: livePicker; title: "选择要发送的文件"; onAccepted: liveSession.uploadFile(selectedFile) }
+    Connections { target: liveSession; function onFilePickerRequested() { if(liveMode)livePicker.open() } }
+    Component { id: liveFilesComponent; LiveFilesPage { shell: root } }
+    Component { id: liveGroupsComponent; LiveGroupsPage { shell: root } }
+    Component { id: liveAIComponent; LiveAIPage { shell: root } }
     Component { id: groupsComponent; GroupsPage { shell: root } }
     Component { id: filesComponent; FilesPage { shell: root } }
     Component { id: aiComponent; AIPage { shell: root } }
@@ -102,7 +107,7 @@ ApplicationWindow {
             Text { Layout.fillWidth: true; text: root.dialogDescription; wrapMode: Text.Wrap; color: "#7b879a"; font.pixelSize: 13 }
             TextField { id: formName; Layout.fillWidth: true; placeholderText: root.dialogKind === "group" ? "群名称" : root.dialogKind === "join" ? "群 ID" : "目标用户 ID"; maximumLength: 60; selectByMouse: true }
             TextArea { id: formNote; Layout.fillWidth: true; Layout.preferredHeight: 90; placeholderText: root.dialogKind === "friend" ? "添加申请说明" : "群介绍（可选）"; wrapMode: TextEdit.Wrap; selectByMouse: true; background: Rectangle { radius: 8; color: "#f6f7fa"; border.color: "#e1e5ed" } }
-            RowLayout { Item { Layout.fillWidth: true } UiButton { text: "取消"; onClicked: formDialog.close() } UiButton { text: root.dialogKind === "group" ? "创建群组" : root.dialogKind === "join" ? "申请加入" : "发送申请"; primary: true; enabled: formName.text.trim().length > 0; onClicked: { if(root.dialogKind === "friend")demo.addFriend(formName.text,formNote.text);else if(root.dialogKind === "group")demo.createGroup(formName.text,formNote.text);else if(root.dialogKind === "invite")demo.groupAction("invite");else demo.notify("已预览加入群组请求；真实加入结果需服务端确认");formDialog.close() } } }
+            RowLayout { Item { Layout.fillWidth: true } UiButton { text: "取消"; onClicked: formDialog.close() } UiButton { text: root.dialogKind === "group" ? "创建群组" : root.dialogKind === "join" ? "申请加入" : "发送申请"; primary: true; enabled: formName.text.trim().length > 0; onClicked: { if(root.dialogKind === "friend")demo.addFriend(formName.text,formNote.text);else if(root.dialogKind === "group")demo.createGroup(formName.text,formNote.text);else if(root.dialogKind === "invite"){if(liveMode)liveSession.mutateGroup("invite",liveSession.groupInfo.id,formName.text);else demo.groupAction("invite");}else if(liveMode)liveSession.mutateGroup("join",formName.text);else demo.notify("已预览加入群组请求；真实加入结果需服务端确认");formDialog.close() } } }
         }
     }
     Dialog {

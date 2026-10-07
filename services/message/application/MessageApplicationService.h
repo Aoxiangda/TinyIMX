@@ -13,6 +13,7 @@ class MessageApplicationService final {
 public:
     [[nodiscard]] PendingRecipientsResult ListPendingRecipientsAfter(
         std::uint64_t after_user_id, std::uint32_t limit);
+    GroupHistoryApplicationResult ListGroupHistory(std::uint64_t actor, std::uint64_t group, std::uint64_t before, std::size_t limit);
     explicit MessageApplicationService(
         MessageRepositoryPort* repository
     );

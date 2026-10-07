@@ -3841,4 +3841,18 @@ MessageRepository::BuildMessagesFromResult(
     return build_result;
 }
 
+ListGroupHistoryResult MessageRepository::ListGroupHistory(std::uint64_t actor, std::uint64_t group, std::uint64_t before, std::size_t limit) {
+    ListGroupHistoryResult out;
+    if(!pool_ || actor==0 || group==0 || limit==0 || limit>101) { out.status=MessageQueryStatus::kInvalidArgument;out.message="invalid group history query";return out; }
+    auto connection=pool_->Acquire();if(!connection){out.message="group history database unavailable";return out;}
+    // Sender or an original durable recipient only. Joining/rejoining cannot expose
+    // messages for which this actor was never in the committed fanout snapshot.
+    std::string sql="SELECT m.message_id,m.client_message_id,m.group_id,m.from_user_id,m.message_type,m.content,m.membership_epoch,m.member_version,m.authorized_role,m.created_at FROM im_group_messages m WHERE m.group_id="+std::to_string(group);
+    if(before)sql+=" AND m.message_id<"+std::to_string(before);
+    sql+=" AND (m.from_user_id="+std::to_string(actor)+" OR EXISTS (SELECT 1 FROM im_group_message_deliveries d WHERE d.message_id=m.message_id AND d.recipient_user_id="+std::to_string(actor)+")) ORDER BY m.message_id DESC LIMIT "+std::to_string(limit);
+    MySqlQueryResult result;if(!connection->Query(sql,&result)){out.message="group history query failed";return out;}
+    for(const auto &row:result.rows){GroupMessageRecord record;if(!BuildGroupMessageRecord(row,&record)){out.message="invalid group history record";return out;}out.records.push_back(std::move(record));}
+    out.status=MessageQueryStatus::kSucceeded;return out;
+}
+
 }  // namespace tinyimx

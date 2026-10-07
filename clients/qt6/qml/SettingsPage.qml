@@ -27,7 +27,7 @@ Item {
                 ColumnLayout { anchors.fill: parent; anchors.margins: 26; spacing: 24
                     Text { text: "关于 TinyIMX"; color: "#68768f"; font.pixelSize: 14; font.weight: Font.DemiBold }
                     Text { text: "C++ 即时通信桌面客户端"; color: "#7e8ba2"; font.pixelSize: 12 }
-                    Text { text: liveMode ? "Qt 6.10.2 / Qt Quick / C++\n\n当前版本：0.2.0 · 真实服务器接入\n\n已接入登录、好友与私聊，支持多个独立客户端。群、文件和 AI 页面接入中。" : "Qt 6.10.2 / Qt Quick / C++\n\n设计预览：本地示例数据"; Layout.fillWidth: true; wrapMode: Text.Wrap; lineHeight: 1.7; color: "#a1abbd"; font.pixelSize: 11 }
+                    Text { text: liveMode ? "Qt 6.10.2 / Qt Quick / C++\n\n当前版本：0.3.0 · 真实服务器接入\n\n已接入登录、好友、私聊、群管理与群聊、文件分块续传、授权分享下载及 Ollama 助手。支持多个独立客户端。" : "Qt 6.10.2 / Qt Quick / C++\n\n设计预览：本地示例数据"; Layout.fillWidth: true; wrapMode: Text.Wrap; lineHeight: 1.7; color: "#a1abbd"; font.pixelSize: 11 }
                     Rectangle { height: 1; Layout.fillWidth: true; color: "#edf0f5" }
                     Text { text: "快捷键"; color: "#7e8ba2"; font.pixelSize: 12 }
                     Repeater { model: ["Ctrl + 1    消息","Ctrl + 2    联系人","Ctrl + 3    群组","Ctrl + 4    文件","Ctrl + 5    AI 助手"]; delegate: Text { required property string modelData; text: modelData; color: "#a1abbd"; font.pixelSize: 11 } }

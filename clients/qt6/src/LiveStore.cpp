@@ -13,17 +13,28 @@ QString key(const QJsonValue &v){const auto n=Timx::positiveId(v);return n?QStri
 QString stamp(){return QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss"));}
 QString textContent(const QJsonValue &v){
     const auto text=v.toString();const auto d=QJsonDocument::fromJson(text.toUtf8());
-    return d.isObject()?d.object().value(QStringLiteral("text")).toString():text;
+    return d.isObject()&&d.object().value(QStringLiteral("text")).isString()?d.object().value(QStringLiteral("text")).toString():text;
 }
 QString reason(const QJsonObject &b){return b.value(QStringLiteral("reason")).toString(b.value(QStringLiteral("message")).toString(QStringLiteral("请求未成功")));}
 }
-LiveStore::LiveStore(QObject *parent):QObject(parent),conversations_(this),messages_(this),contacts_(this),requests_(this),groups_(this),transfers_(this){
+LiveStore::LiveStore(QObject *parent):QObject(parent),conversations_(this),messages_(this),contacts_(this),requests_(this),groups_(this),transfers_(this),groupMembers_(this){
+    http_.setProxy(QNetworkProxy::NoProxy);
+    files_=std::make_unique<FileTransfers>(&transfers_,this);
+    connect(files_.get(),&FileTransfers::notice,this,&LiveStore::notify);
+    connect(files_.get(),&FileTransfers::changed,this,&LiveStore::sessionChanged);
+    connect(files_.get(),&FileTransfers::event,this,&LiveStore::event);
+    connect(files_.get(),&FileTransfers::attachmentReady,this,[this](const QString &conversation,const QString &text){
+        if(!authenticated_)return;
+        const auto previous=currentKey();if(conversation.startsWith(QStringLiteral("g:")))openGroup(conversation.mid(2));else openConversation(conversation);
+        if(!sendMessage(text))notify(QStringLiteral("文件已上传，但分享消息尚未确认；可在会话中重试原消息"));
+        for(int i=0;i<conversations_.rowCount();++i)if(conversations_.get(i).value(QStringLiteral("id")).toString()==previous)selectConversation(i);
+    });
     clock_.start();socket_.setReadBufferSize(2*1024*1024);
     // This is a raw TCP protocol to a LAN gateway. A system HTTP proxy cannot carry it.
     socket_.setProxy(QNetworkProxy::NoProxy);
     connect(&socket_,&QTcpSocket::connected,this,[this]{
         socket_.setSocketOption(QAbstractSocket::LowDelayOption,1);state_=QStringLiteral("authenticating");emit sessionChanged();
-        rpc(1001,{{QStringLiteral("username"),name_},{QStringLiteral("password"),password_}});password_.fill(QChar(0));password_.clear();
+        rpc(1001,{{QStringLiteral("username"),name_},{QStringLiteral("password"),password_}});
     });
     connect(&socket_,&QTcpSocket::readyRead,this,[this]{input_+=socket_.readAll();if(input_.size()>2*1024*1024){fail(QStringLiteral("响应缓冲超过限制"));return;}drain();});
     connect(&socket_,&QTcpSocket::disconnected,this,[this]{if(!suppressDisconnect_&&(authenticated_||loginBusy_))fail(QStringLiteral("服务器连接已断开；重新登录后可重试待确认消息"));});
@@ -36,6 +47,7 @@ LiveStore::~LiveStore(){
     disconnect(&socket_,nullptr,this,nullptr);
     disconnect(&timer_,nullptr,this,nullptr);
     disconnect(&accountLock_,nullptr,this,nullptr);
+    cancelAI();disconnect(files_.get(),nullptr,this,nullptr);files_.reset();
     timer_.stop();socket_.abort();if(accountLock_.isAttached())accountLock_.detach();
 }
 QVariantMap LiveStore::current()const{return conversations_.get(selected_);}
@@ -44,6 +56,7 @@ void LiveStore::setDraft(const QString &text){if(currentKey().isEmpty()||draft()
 void LiveStore::notify(const QString &text){notice_=text;emit noticeChanged();}
 void LiveStore::resetModels(){
     conversations_.replace({});messages_.replace({});contacts_.replace({});requests_.replace({});groups_.replace({});transfers_.replace({});
+    cancelAI();aiAnswer_.clear();aiState_=QStringLiteral("idle");emit aiChanged();groupInfo_.clear();groupMembers_.replace({});emit groupChanged();
     history_.clear();drafts_.clear();names_.clear();delivered_.clear();deliveredOrder_.clear();selected_=-1;emit selectionChanged();emit draftChanged();
 }
 void LiveStore::logout(){fail(QStringLiteral("已退出登录"));self_=0;name_.clear();resetModels();emit sessionChanged();}
@@ -66,11 +79,13 @@ void LiveStore::login(const QString &address,const QString &username,const QStri
     socket_.connectToHost(match.captured(1),quint16(port));
 }
 void LiveStore::fail(const QString &message,const QString &state){
+    ++connectionGeneration_;
     suppressDisconnect_=true;socket_.abort();suppressDisconnect_=false;
     if(accountLock_.isAttached())accountLock_.detach();
     password_.fill(QChar(0));password_.clear();input_.clear();
     const auto requests=pending_;pending_.clear();
-    for(const auto &p:requests)if(p.type==2001)setMessageState(p.key,p.cid,QStringLiteral("uncertain"));
+    for(const auto &p:requests)if(p.type==2001||p.type==2049)setMessageState(p.key,p.cid,QStringLiteral("uncertain"));
+    cancelAI();files_->disconnectSession();groupHistoryPending_.clear();
     authenticated_=false;loginBusy_=false;state_=state;error_=message;emit sessionChanged();
     if(!message.isEmpty())notify(message);
 }
@@ -90,7 +105,7 @@ void LiveStore::tick(){
         if(now-it->start<15000){++it;continue;}
         const auto p=it.value();it=pending_.erase(it);
         if(p.type==1001||p.type==9001){fail(QStringLiteral("登录或心跳响应超时"));return;}
-        if(p.type==2001)setMessageState(p.key,p.cid,QStringLiteral("uncertain"));
+        if(p.type==2001||p.type==2049)setMessageState(p.key,p.cid,QStringLiteral("uncertain"));
         notify(QStringLiteral("请求超时；发送结果可能已入库，请使用原消息重试"));
     }
     if(!authenticated_)return;
@@ -104,7 +119,7 @@ void LiveStore::refresh(){
     if(!authenticated_)return;
     lastRefresh_=clock_.elapsed();
     // Do not pile up refreshes if a previous page is still in flight.
-    for(const auto type:{2009,2013,2007}){
+    for(const auto type:{2009,2013,2007,2047}){
         bool pending=false;for(const auto &p:pending_)if(p.type==type)pending=true;
         if(!pending)rpc(quint16(type),{{QStringLiteral("limit"),type==2007?50:100}});
     }
@@ -122,12 +137,13 @@ int LiveStore::ensureConversation(const QString &peer){
 void LiveStore::syncCurrent(){messages_.replace(history_.value(currentKey()));emit selectionChanged();}
 void LiveStore::selectConversation(int index){
     if(index<0||index>=conversations_.rowCount())return;
-    selected_=index;syncCurrent();emit draftChanged();fetchHistory(currentKey());if(viewActive_)markRead();
+    selected_=index;syncCurrent();emit draftChanged();if(currentKey().startsWith(QStringLiteral("g:")))selectGroup(currentKey().mid(2));fetchHistory(currentKey());if(viewActive_)markRead();
 }
 void LiveStore::openConversation(const QString &peer){bool ok=false;const auto id=peer.toLongLong(&ok);if(!ok||id<=0)return;const auto i=ensureConversation(peer);if(i>=0)selectConversation(i);}
 void LiveStore::setViewActive(bool value){viewActive_=value;if(value)markRead();}
 void LiveStore::fetchHistory(const QString &peer,qint64 before){
     if(!authenticated_||peer.isEmpty())return;
+    if(peer.startsWith(QStringLiteral("g:"))){fetchGroupHistory(peer.mid(2),before);return;}
     for(const auto &p:pending_)if(p.type==2005&&p.key==peer)return;
     QJsonObject b{{QStringLiteral("peer_user_id"),peer.toLongLong()},{QStringLiteral("limit"),50}};
     if(before>0)b.insert(QStringLiteral("before_message_id"),before);
@@ -136,17 +152,19 @@ void LiveStore::fetchHistory(const QString &peer,qint64 before){
 void LiveStore::loadEarlier(){qint64 before=0;for(const auto &r:history_.value(currentKey())){const auto n=r.value(QStringLiteral("mid")).toString().toLongLong();if(n>0&&(before==0||n<before))before=n;}fetchHistory(currentKey(),before);}
 bool LiveStore::sendMessage(const QString &text){
     const auto peer=currentKey();if(!authenticated_||peer.isEmpty()){notify(QStringLiteral("请先登录并选择一个好友会话"));return false;}
+    if(peer.startsWith(QStringLiteral("g:"))&&groupMuted()){notify(QStringLiteral("你已被禁言，请等待管理员解除"));return false;}
     if(text.trimmed().isEmpty()||text.toUtf8().size()>16000){notify(QStringLiteral("消息为空或超过 16000 字节"));return false;}
     QVariantMap row{{QStringLiteral("author"),name_},{QStringLiteral("text"),text},{QStringLiteral("own"),true},
         {QStringLiteral("time"),stamp()},{QStringLiteral("kind"),QStringLiteral("text")},{QStringLiteral("status"),QStringLiteral("sending")},
         {QStringLiteral("cid"),QUuid::createUuid().toString(QUuid::WithoutBraces)},{QStringLiteral("mid"),QString{}}};
-    history_[peer].append(row);syncCurrent();
+    row=formatMessage(row);history_[peer].append(row);syncCurrent();
     if(!sendRow(peer,row)){setMessageState(peer,row.value(QStringLiteral("cid")).toString(),QStringLiteral("uncertain"));return false;}return true;
 }
 bool LiveStore::sendRow(const QString &peer,const QVariantMap &row){
     const auto cid=row.value(QStringLiteral("cid")).toString();
-    for(const auto &p:pending_)if(p.type==2001&&p.cid==cid)return false;
-    return rpc(2001,{{QStringLiteral("to"),peer.toLongLong()},{QStringLiteral("text"),row.value(QStringLiteral("text")).toString()},
+    for(const auto &p:pending_)if((p.type==2001||p.type==2049)&&p.cid==cid)return false;
+    if(peer.startsWith(QStringLiteral("g:")))return rpc(2049,{{QStringLiteral("group_id"),peer.mid(2).toLongLong()},{QStringLiteral("client_message_id"),cid},{QStringLiteral("message_type"),1},{QStringLiteral("content"),row.value(QStringLiteral("raw"),row.value(QStringLiteral("text"))).toString()}},peer,cid)>0;
+    return rpc(2001,{{QStringLiteral("to"),peer.toLongLong()},{QStringLiteral("text"),row.value(QStringLiteral("raw"),row.value(QStringLiteral("text"))).toString()},
         {QStringLiteral("client_message_id"),cid}},peer,cid)>0;
 }
 void LiveStore::retryMessage(int index){
@@ -171,6 +189,7 @@ void LiveStore::setMessageState(const QString &peer,const QString &cid,const QSt
 }
 void LiveStore::markRead(){
     const auto peer=currentKey();if(!authenticated_||!viewActive_||peer.isEmpty())return;
+    if(peer.startsWith(QStringLiteral("g:"))){const auto ci=ensureGroupConversation(peer.mid(2));if(ci>=0)conversations_.update(ci,{{QStringLiteral("unread"),0}});return;}
     for(const auto &p:pending_)if(p.type==2003&&p.key==peer)return;
     rpc(2003,{{QStringLiteral("peer_user_id"),peer.toLongLong()}},peer);
 }
@@ -194,6 +213,7 @@ void LiveStore::drain(){
 void LiveStore::handle(const Timx::Frame &f){
     const auto &b=f.body;
     if(f.type==9999&&f.seq==0){const auto r=reason(b);fail(r==QStringLiteral("login_replaced")?QStringLiteral("账号已在其他客户端登录"):r,r);emit event(QStringLiteral("session_error"),b);return;}
+    if(f.type==2051){handleGroupDelivery(f);return;}
     if(f.type==2019){
         const auto mid=key(b.value(QStringLiteral("message_id"))),peer=key(b.value(QStringLiteral("from")));
         if(!authenticated_||mid.isEmpty()||peer.isEmpty()||Timx::positiveId(b.value(QStringLiteral("to")))!=self_||!b.value(QStringLiteral("text")).isString()){
@@ -203,12 +223,12 @@ void LiveStore::handle(const Timx::Frame &f){
         bool known=delivered_.contains(mid);for(const auto &r:history_.value(peer))if(r.value(QStringLiteral("mid")).toString()==mid)known=true;
         if(!known){
             const auto text=b.value(QStringLiteral("text")).toString();
-            history_[peer].append({{QStringLiteral("author"),names_.value(peer,QStringLiteral("用户 ")+peer)},
+            history_[peer].append(formatMessage({{QStringLiteral("author"),names_.value(peer,QStringLiteral("用户 ")+peer)},
                 {QStringLiteral("text"),text},{QStringLiteral("own"),false},{QStringLiteral("time"),stamp()},
                 {QStringLiteral("kind"),QStringLiteral("text")},{QStringLiteral("status"),QStringLiteral("received")},
-                {QStringLiteral("mid"),mid},{QStringLiteral("cid"),QString{}}});
+                {QStringLiteral("mid"),mid},{QStringLiteral("cid"),QString{}}}));
             const auto unread=conversations_.get(ci).value(QStringLiteral("unread")).toInt()+1;
-            conversations_.update(ci,{{QStringLiteral("preview"),text},{QStringLiteral("time"),stamp()},{QStringLiteral("unread"),unread}});
+            conversations_.update(ci,{{QStringLiteral("preview"),previewText(text)},{QStringLiteral("time"),stamp()},{QStringLiteral("unread"),unread}});
             if(peer==currentKey())syncCurrent();
         }
         if(!delivered_.contains(mid)){delivered_.insert(mid);deliveredOrder_.append(mid);if(deliveredOrder_.size()>5000)delivered_.remove(deliveredOrder_.takeFirst());}
@@ -224,16 +244,17 @@ void LiveStore::handle(const Timx::Frame &f){
     const bool success=f.type!=9999&&b.value(QStringLiteral("success")).toBool();
     if(!success){
         if(p.type==1001){fail(reason(b));}
-        else{if(p.type==2001)setMessageState(p.key,p.cid,QStringLiteral("failed"));notify(reason(b));}
+        else{if(p.type==2001||p.type==2049)setMessageState(p.key,p.cid,QStringLiteral("failed"));notify(reason(b));}
         emit event(QStringLiteral("rpc_failure"),{{QStringLiteral("request_type"),p.type},{QStringLiteral("reason"),reason(b)}});return;
     }
     if(p.type==1001){
         const auto id=Timx::positiveId(b.value(QStringLiteral("user_id")));if(id<=0||(self_>0&&id!=self_)){fail(QStringLiteral("登录响应用户 ID 无效"));return;}
         self_=id;authenticated_=true;loginBusy_=false;state_=QStringLiteral("online");error_.clear();lastHeartbeat_=clock_.elapsed();
-        emit sessionChanged();rpc(2021,{});refresh();if(!currentKey().isEmpty())fetchHistory(currentKey());emit event(QStringLiteral("login"),b);return;
+        emit sessionChanged();startFileSession();rpc(2021,{});refresh();if(!currentKey().isEmpty())fetchHistory(currentKey());emit event(QStringLiteral("login"),b);return;
     }
     if(b.contains(QStringLiteral("user_id"))&&Timx::positiveId(b.value(QStringLiteral("user_id")))!=self_){fail(QStringLiteral("响应账号身份不匹配"));return;}
-    if(p.type==2021){
+    if(p.type>=2023&&p.type<=2051){handleGroupResponse(p,b);}
+    else if(p.type==2021){
         const auto profile=b.value(QStringLiteral("profile")).toObject();
         if(profile.contains(QStringLiteral("user_id"))&&Timx::positiveId(profile.value(QStringLiteral("user_id")))!=self_){fail(QStringLiteral("资料身份不匹配"));return;}
         // Keep the login username stable for reconnect; nickname is stored separately in names_.
@@ -253,7 +274,7 @@ void LiveStore::handle(const Timx::Frame &f){
     }else if(p.type==2007){
         for(const auto &v:b.value(QStringLiteral("conversations")).toArray()){
             const auto o=v.toObject();const auto peer=key(o.value(QStringLiteral("peer_user_id")));const int ci=ensureConversation(peer);if(ci<0)continue;
-            conversations_.update(ci,{{QStringLiteral("preview"),textContent(o.value(QStringLiteral("last_content")))},
+            conversations_.update(ci,{{QStringLiteral("preview"),previewText(textContent(o.value(QStringLiteral("last_content"))))},
                 {QStringLiteral("unread"),o.value(QStringLiteral("unread_count")).toInt()},{QStringLiteral("time"),o.value(QStringLiteral("last_created_at")).toString()}});
         }if(selected_<0&&conversations_.rowCount()>0)selectConversation(0);
     }else if(p.type==2013){
@@ -273,7 +294,7 @@ void LiveStore::handle(const Timx::Frame &f){
         }
         setMessageState(p.key,p.cid,QStringLiteral("stored"),mid);
         const int ci=ensureConversation(p.key);const auto rows=history_.value(p.key);for(const auto &r:rows)if(r.value(QStringLiteral("cid")).toString()==p.cid)
-            conversations_.update(ci,{{QStringLiteral("preview"),r.value(QStringLiteral("text"))},{QStringLiteral("time"),stamp()}});
+            conversations_.update(ci,{{QStringLiteral("preview"),previewText(r.value(QStringLiteral("raw"),r.value(QStringLiteral("text"))).toString())},{QStringLiteral("time"),stamp()}});
     }else if(p.type==2003){
         if(key(b.value(QStringLiteral("peer_user_id")))!=p.key){fail(QStringLiteral("已读响应会话不匹配"));return;}
         const int ci=ensureConversation(p.key);if(ci>=0)conversations_.update(ci,{{QStringLiteral("unread"),0}});
@@ -287,11 +308,11 @@ void LiveStore::handle(const Timx::Frame &f){
             for(auto &r:rows)if(r.value(QStringLiteral("mid")).toString()==mid||(!cid.isEmpty()&&r.value(QStringLiteral("cid")).toString()==cid)){
                 r[QStringLiteral("mid")]=mid;if(r.value(QStringLiteral("own")).toBool())r[QStringLiteral("status")]=o.value(QStringLiteral("delivery_status")).toInt()==2?QStringLiteral("read"):QStringLiteral("stored");found=true;break;
             }
-            if(!found)rows.append({{QStringLiteral("author"),from==accountId()?name_:names_.value(p.key,QStringLiteral("用户 ")+p.key)},
+            if(!found)rows.append(formatMessage({{QStringLiteral("author"),from==accountId()?name_:names_.value(p.key,QStringLiteral("用户 ")+p.key)},
                 {QStringLiteral("text"),textContent(o.value(QStringLiteral("content")))},{QStringLiteral("own"),from==accountId()},
                 {QStringLiteral("time"),o.value(QStringLiteral("created_at")).toString()},{QStringLiteral("kind"),QStringLiteral("text")},
                 {QStringLiteral("status"),from==accountId()?(o.value(QStringLiteral("delivery_status")).toInt()==2?QStringLiteral("read"):QStringLiteral("stored")):QStringLiteral("received")},
-                {QStringLiteral("mid"),mid},{QStringLiteral("cid"),cid}});
+                {QStringLiteral("mid"),mid},{QStringLiteral("cid"),cid}}));
         }
         std::stable_sort(rows.begin(),rows.end(),[](const QVariantMap &a,const QVariantMap &b){const auto x=a.value(QStringLiteral("mid")).toString().toLongLong(),y=b.value(QStringLiteral("mid")).toString().toLongLong();if(!x)return false;if(!y)return true;return x<y;});
         if(currentKey()==p.key)syncCurrent();

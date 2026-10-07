@@ -24,6 +24,7 @@ class MessageRepositoryAdapter final
 public:
     [[nodiscard]] PendingRecipientsResult ListPendingRecipientsAfter(
         std::uint64_t after_user_id, std::size_t limit) override;
+    GroupHistoryApplicationResult ListGroupHistory(std::uint64_t actor, std::uint64_t group, std::uint64_t before, std::size_t limit) override;
     MessageRepositoryAdapter(
         tinyimx::MessageRepository* repository,
         tinyimx::MySqlConnectionPool* pool,

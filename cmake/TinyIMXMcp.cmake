@@ -82,6 +82,12 @@ add_test(NAME tinyimx.m19.mcp_domain_tools COMMAND m19_mcp_domain_tools_tests)
 set_tests_properties(tinyimx.m19.mcp_domain_tools PROPERTIES LABELS "m19;mcp;unit;domain")
 
 add_executable(tinyimx_mcp_server examples/mcp_server_demo.cpp)
+
+add_executable(tinyimx_desktop_file_server examples/desktop_file_server.cpp)
+target_compile_features(tinyimx_desktop_file_server PRIVATE cxx_std_20)
+target_link_libraries(tinyimx_desktop_file_server PRIVATE tinyimx_mcp_core
+  tinyimx_rpc_client tinyimx_concurrency tinyimx_logging tinyimx_config
+  OpenSSL::Crypto)
 target_compile_features(tinyimx_mcp_server PRIVATE cxx_std_20)
 target_link_libraries(tinyimx_mcp_server PRIVATE
   tinyimx_mcp_runtime

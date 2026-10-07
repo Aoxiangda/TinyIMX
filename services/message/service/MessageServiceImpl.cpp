@@ -910,4 +910,16 @@ grpc::Status MessageServiceImpl::MarkDialogRead(
     return grpc::Status::OK;
 }
 
+grpc::Status MessageServiceImpl::ListGroupHistory(grpc::ServerContext* context, const v1::ListGroupHistoryRequest* request, v1::ListGroupHistoryResponse* response) {
+    if(!ValidateRpcArguments(context,request,response) || request->actor_user_id()==0 || request->group_id()==0 || request->limit()==0 || request->limit()>100)
+        return {grpc::StatusCode::INVALID_ARGUMENT,"invalid group history arguments"};
+    if(!application_service_ || !group_rpc_client_)return {grpc::StatusCode::UNAVAILABLE,"group history dependencies unavailable"};
+    rpc::RpcCallOptions options;options.caller_service="message-service";options.remaining_timeout=std::chrono::duration_cast<std::chrono::milliseconds>(context->deadline()-std::chrono::system_clock::now());
+    if(options.remaining_timeout<=std::chrono::milliseconds::zero())return {grpc::StatusCode::DEADLINE_EXCEEDED,"group history deadline"};
+    const auto membership=group_rpc_client_->GetGroup({request->actor_user_id(),request->group_id()},options);
+    if(!membership.ok())return {membership.status.code==rpc::RpcErrorCode::kPermissionDenied?grpc::StatusCode::PERMISSION_DENIED:grpc::StatusCode::UNAVAILABLE,"group history membership denied or unavailable"};
+    auto result=application_service_->ListGroupHistory(request->actor_user_id(),request->group_id(),request->before_message_id(),request->limit());
+    if(!result.Succeeded())return MapApplicationFailure(result.status,result.message);
+    response->set_has_more(result.has_more);for(const auto &record:result.messages)FillGroupMessage(record,response->add_messages());return grpc::Status::OK;
+}
 }  // namespace tinyimx::message

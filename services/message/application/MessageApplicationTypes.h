@@ -111,6 +111,12 @@ struct MessageRepositoryGroupDeliveryListResult {
     [[nodiscard]] bool Succeeded() const noexcept { return status == MessageApplicationStatus::kSucceeded; }
 };
 
+struct GroupHistoryApplicationResult {
+    MessageApplicationStatus status{MessageApplicationStatus::kStorageError};
+    std::vector<GroupMessageView> messages;
+    bool has_more{false};std::string message;
+    bool Succeeded() const noexcept { return status==MessageApplicationStatus::kSucceeded; }
+};
 struct MessageRepositoryGroupGetResult {
     MessageApplicationStatus status{MessageApplicationStatus::kStorageError};
     bool found{false};

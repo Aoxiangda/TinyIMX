@@ -1,14 +1,14 @@
 cmake_minimum_required(VERSION 3.24)
-project(TinyIMXDesktop VERSION 0.2.0 LANGUAGES CXX)
+project(TinyIMXDesktop VERSION 0.3.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Svg Network)
 qt_standard_project_setup(REQUIRES 6.8)
-qt_add_executable(tinyimx_desktop src/main.cpp src/DemoStore.cpp src/DemoStore.h src/TimxCodec.cpp src/TimxCodec.h src/LiveStore.cpp src/LiveStore.h src/ClientChecks.cpp src/ClientChecks.h)
+qt_add_executable(tinyimx_desktop src/main.cpp src/DemoStore.cpp src/DemoStore.h src/TimxCodec.cpp src/TimxCodec.h src/LiveStore.cpp src/LiveStore.h src/LiveGroups.cpp src/LiveAI.cpp src/ClientChecks.cpp src/ClientChecks.h src/FeatureChecks.cpp src/FileTransfers.cpp src/FileTransfers.h src/LiveFiles.cpp)
 qt_add_qml_module(tinyimx_desktop URI TinyIMX.Client VERSION 1.0
     QML_FILES qml/Main.qml qml/UiButton.qml qml/Avatar.qml qml/Badge.qml
               qml/ChatPage.qml qml/ContactsPage.qml qml/GroupsPage.qml
-              qml/FilesPage.qml qml/AIPage.qml qml/SettingsPage.qml)
+              qml/LiveFilesPage.qml qml/LiveGroupsPage.qml qml/LiveAIPage.qml qml/FilesPage.qml qml/AIPage.qml qml/SettingsPage.qml)
 file(GLOB UI_ICONS CONFIGURE_DEPENDS assets/icons/*.svg)
 qt_add_resources(tinyimx_desktop icons PREFIX "/" BASE assets FILES ${UI_ICONS})
 target_link_libraries(tinyimx_desktop PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Svg Qt6::Network)

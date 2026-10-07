@@ -51,7 +51,7 @@ Item {
                         Text { text: chat.current.name || ""; Layout.fillWidth: true; font.pixelSize: 17; font.weight: Font.DemiBold; color: "#2d3a52" }
                         Text { text: chat.current.subtitle || ""; Layout.fillWidth: true; font.pixelSize: 11; color: "#94a0b2" }
                     }
-                    UiButton { iconName: "search"; quiet: true; hint: "搜索当前会话（本地样例）"; onClicked: historySearch.visible = !historySearch.visible }
+                    UiButton { iconName: "search"; quiet: true; hint: "搜索当前已加载会话"; onClicked: historySearch.visible = !historySearch.visible }
                     UiButton { iconName: "panel"; quiet: true; hint: "展开 / 收起会话资料"; onClicked: chat.showInspector = !chat.showInspector }
                 }
             }
@@ -80,10 +80,10 @@ Item {
                             color: row.item.own ? "#4c6aeb" : "#ffffff"; border.width: row.item.own ? 0 : 1; border.color: "#e7ebf2"
                             Text { id: messageText; visible: row.item.kind !== "file"; text: row.item.text; textFormat: Text.PlainText; color: row.item.own ? "#ffffff" : "#4e5b70"; font.pixelSize: 13; lineHeight: 1.4; width: parent.width-30; anchors.centerIn: parent; wrapMode: Text.Wrap }
                             RowLayout { visible: row.item.kind === "file"; anchors.fill: parent; anchors.margins: 16; spacing: 12
-                                Rectangle { width: 42; height: 48; radius: 7; color: "#fff0ed"; Text { text: "PDF"; anchors.centerIn: parent; color: "#c9897c"; font.pixelSize: 10; font.weight: Font.Bold } }
-                                ColumnLayout { Layout.fillWidth: true; spacing: 7; Text { text: row.item.text; Layout.fillWidth: true; elide: Text.ElideRight; color: "#4c596f"; font.pixelSize: 12 } Text { text: "2.4 MB · 示例附件"; color: "#9ba4b3"; font.pixelSize: 10 } Text { text: "在文件中心查看  ↗"; color: "#6b80d9"; font.pixelSize: 10 } }
+                                Rectangle { width: 42; height: 48; radius: 7; color: "#fff0ed"; Text { text: liveMode?"文件":"PDF"; anchors.centerIn: parent; color: "#c9897c"; font.pixelSize: 10; font.weight: Font.Bold } }
+                                ColumnLayout { Layout.fillWidth: true; spacing: 7; Text { text: row.item.text; Layout.fillWidth: true; elide: Text.ElideRight; color: "#4c596f"; font.pixelSize: 12 } Text { text: liveMode ? (row.item.attachment ? row.item.attachment.size+" 字节 · SHA-256 校验" : "文件附件") : "2.4 MB · 示例附件"; color: "#9ba4b3"; font.pixelSize: 10 } Text { text: "在文件中心查看  ↗"; color: "#6b80d9"; font.pixelSize: 10 } }
                             }
-                            MouseArea { visible: row.item.kind === "file"; anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: shell.page="files" }
+                            MouseArea { visible: row.item.kind === "file"; anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { if(liveMode)liveSession.downloadMessage(row.index);shell.page="files" } }
                         }
                         RowLayout { Layout.alignment: row.item.own ? Qt.AlignRight : Qt.AlignLeft; spacing: 8
                             Text { text: row.item.time; font.pixelSize: 9; color: "#a0aaba" }

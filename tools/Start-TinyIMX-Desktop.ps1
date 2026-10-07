@@ -1,5 +1,5 @@
 param(
-    [string]$EvidenceName = 'qt6-ui-live-20261007-attempt9',
+    [string]$EvidenceName = 'qt6-ui-features-20261007-attempt9',
     [ValidateRange(1,3)][int]$Count = 1,
     [string]$Endpoint = '192.168.220.128:9000',
     [switch]$Demo, [switch]$Editor

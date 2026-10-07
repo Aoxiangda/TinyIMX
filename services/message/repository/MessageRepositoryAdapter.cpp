@@ -1138,4 +1138,10 @@ MessageRepositoryAdapter::MarkDialogRead(
     return output;
 }
 
+GroupHistoryApplicationResult MessageRepositoryAdapter::ListGroupHistory(std::uint64_t actor, std::uint64_t group, std::uint64_t before, std::size_t limit) {
+    GroupHistoryApplicationResult out;if(!repository_){out.message="group history repository unavailable";return out;}
+    auto result=repository_->ListGroupHistory(actor,group,before,limit);out.status=MapStatus(result.status);out.message=std::move(result.message);
+    if(result.Succeeded())for(auto &record:result.records)out.messages.push_back(ToView(std::move(record)));
+    return out;
+}
 }  // namespace tinyimx::message

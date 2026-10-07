@@ -22,6 +22,11 @@ void Expect(bool condition, const char* label) {
 
 class FakeRepository final : public tinyimx::message::MessageRepositoryPort {
 public:
+    tinyimx::message::GroupHistoryApplicationResult group_history;
+    std::size_t group_history_calls{0},group_history_limit{0};
+    tinyimx::message::GroupHistoryApplicationResult ListGroupHistory(std::uint64_t, std::uint64_t, std::uint64_t, std::size_t limit) override {
+        ++group_history_calls;group_history_limit=limit;return group_history;
+    }
     tinyimx::message::PendingRecipientsResult ListPendingRecipientsAfter(
         std::uint64_t, std::size_t) override {
         ++recipient_discovery_calls;
@@ -619,6 +624,19 @@ void TestPendingRecipientDiscovery() {
            "Discovery.NeverMutatesDurableState");
 }
 
+void TestGroupHistory() {
+    using namespace tinyimx::message;FakeRepository repository;MessageApplicationService app(&repository);
+    Expect(!app.ListGroupHistory(0,8,0,50).Succeeded() && !app.ListGroupHistory(7,0,0,50).Succeeded() && !app.ListGroupHistory(7,8,0,101).Succeeded() && !app.ListGroupHistory(7,8,0,0).Succeeded() && repository.group_history_calls==0,"GroupHistory.InvalidBoundsDoNotQuery");
+    repository.group_history.status=MessageApplicationStatus::kSucceeded;
+    for(std::uint64_t id: {10ULL,9ULL,8ULL}){GroupMessageView row;row.message_id=id;row.group_id=8;row.from_user_id=7;row.content="history";repository.group_history.messages.push_back(row);}
+    auto result=app.ListGroupHistory(7,8,0,2);Expect(result.Succeeded() && result.has_more && result.messages.size()==2 && repository.group_history_limit==3,"GroupHistory.SentinelPagination");
+    repository.group_history.messages[1].group_id=99;result=app.ListGroupHistory(7,8,0,2);Expect(!result.Succeeded() && result.messages.empty(),"GroupHistory.WrongGroupRejected");repository.group_history.messages[1].group_id=8;
+    repository.group_history.messages[1].message_id=10;Expect(!app.ListGroupHistory(7,8,0,2).Succeeded(),"GroupHistory.DuplicateOrderRejected");repository.group_history.messages[1].message_id=9;
+    Expect(!app.ListGroupHistory(7,8,10,2).Succeeded(),"GroupHistory.ExclusiveBeforeCursor");
+    repository.group_history.status=MessageApplicationStatus::kStorageError;Expect(!app.ListGroupHistory(7,8,0,2).Succeeded(),"GroupHistory.StorageFailureNotEmptySuccess");
+    MessageApplicationService missing(nullptr);Expect(!missing.ListGroupHistory(7,8,0,2).Succeeded(),"GroupHistory.MissingRepositoryError");
+}
+
 }  // namespace
 
 int main() {
@@ -626,6 +644,7 @@ int main() {
     TestValidationFastFail();
     TestPersistCreatedReusedConflict();
     TestGroupMessageApplicationFoundation();
+    TestGroupHistory();
     TestHistorySentinelPagination();
     TestConversationSentinelPagination();
     TestGetPrivateMessage();

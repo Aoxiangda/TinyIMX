@@ -11928,6 +11928,16 @@ void GatewayServer::HandleHeartbeat(
         };
         job.finished = [this, connection, snapshot = *session_snapshot,
                         seq = packet.seq, received](const RefreshOnlineIfMatchResult& result) {
+            if (result.status == RefreshOnlineIfMatchStatus::kMismatch) {
+                // Positive cross-Gateway ownership evidence. Fence only this exact
+                // epoch on its I/O loop; unavailable Redis never evicts a session.
+                connection->GetLoop()->QueueInLoop([this, connection, snapshot] {
+                    if (connection->IsConnected() && session_manager_.IsCurrent(
+                            snapshot.user_id, snapshot.epoch, connection))
+                        NotifyLoginReplaced(snapshot.user_id, connection);
+                });
+                return;
+            }
             if (result.status == RefreshOnlineIfMatchStatus::kNotFound) {
                 // Never restore on independent batch workers. Preserve the
                 // original deadline and user ordering with must-run cleanup.
@@ -12143,7 +12153,7 @@ void GatewayServer::RefreshUserOnlineIfMatch(
         RefreshOnlineIfMatchStatus::
             kMismatch) {
         LOG_INFO(
-            "gateway ignored stale online "
+            "gateway fencing stale online "
             "status refresh"
             << ", user_id="
             << user_id
@@ -12153,6 +12163,14 @@ void GatewayServer::RefreshUserOnlineIfMatch(
             << connection->Name()
         );
 
+        const auto snapshot = session_manager_.FindSessionByConnection(connection);
+        if (snapshot && snapshot->user_id == user_id) {
+            connection->GetLoop()->QueueInLoop([this, connection, snapshot = *snapshot] {
+                if (connection->IsConnected() && session_manager_.IsCurrent(
+                        snapshot.user_id, snapshot.epoch, connection))
+                    NotifyLoginReplaced(snapshot.user_id, connection);
+            });
+        }
         return;
     }
 

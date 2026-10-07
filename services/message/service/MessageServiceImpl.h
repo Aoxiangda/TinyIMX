@@ -15,6 +15,7 @@ public:
         grpc::ServerContext*,
         const tinyimx::message::v1::ListPendingRecipientsAfterRequest*,
         tinyimx::message::v1::ListPendingRecipientsAfterResponse*) override;
+    grpc::Status ListGroupHistory(grpc::ServerContext*, const tinyimx::message::v1::ListGroupHistoryRequest*, tinyimx::message::v1::ListGroupHistoryResponse*) override;
     explicit MessageServiceImpl(
         MessageApplicationService* application_service,
         tinyimx::rpc::GroupRpcClient* group_rpc_client = nullptr

@@ -804,4 +804,16 @@ MessageApplicationService::MarkDialogRead(
     return output;
 }
 
+GroupHistoryApplicationResult MessageApplicationService::ListGroupHistory(std::uint64_t actor, std::uint64_t group, std::uint64_t before, std::size_t limit) {
+    GroupHistoryApplicationResult out;
+    if(actor==0 || group==0 || limit==0 || limit>100){out.status=MessageApplicationStatus::kInvalidArgument;out.message="invalid group history arguments";return out;}
+    if(!repository_){out.message="group history unavailable";return out;}
+    out=repository_->ListGroupHistory(actor,group,before,limit+1);if(!out.Succeeded())return out;
+    std::uint64_t previous=before;
+    for(const auto &record:out.messages){if(record.group_id!=group || record.message_id==0 || (previous && record.message_id>=previous) || record.from_user_id==0 || record.content.empty()){
+        out.status=MessageApplicationStatus::kInvalidRecord;out.messages.clear();out.message="group history identity/order mismatch";return out;}
+        previous=record.message_id;
+    }
+    out.has_more=out.messages.size()>limit;if(out.has_more)out.messages.resize(limit);return out;
+}
 }  // namespace tinyimx::message

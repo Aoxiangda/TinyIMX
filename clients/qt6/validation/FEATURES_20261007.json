@@ -1,0 +1,898 @@
+{
+  "status": "PASS_FOR_NORMAL_FEATURE_INTERACTIONS",
+  "utc": "2026-10-07T10:29:30.472385+00:00",
+  "git_parent": "fcb55487aecb6b1a56eb2ff34489ac6694cfe684",
+  "build": "qt6-ui-features-20261007-attempt9",
+  "exe_sha256": "fb800576abb02095bb90db401f50ef85151ade87934b5030877a4654dc50af28",
+  "qt": "6.10.2 MinGW 64",
+  "pressure": "paused",
+  "capacity_acceptance": false,
+  "tests": {
+    "native_features": {
+      "status": "PASS",
+      "checks": [
+        {
+          "name": "owned_profile_readable",
+          "pass": true
+        },
+        {
+          "name": "three_fresh_owned_accounts",
+          "pass": true
+        },
+        {
+          "name": "three_accounts_authenticated",
+          "pass": true
+        },
+        {
+          "name": "three_file_sessions_authenticated",
+          "pass": true
+        },
+        {
+          "name": "create_group_durable_and_listed",
+          "pass": true
+        },
+        {
+          "name": "owner_and_member_identity",
+          "pass": true
+        },
+        {
+          "name": "invite_member",
+          "pass": true
+        },
+        {
+          "name": "prejoin_snapshot_message_stored",
+          "pass": true
+        },
+        {
+          "name": "nonmember_send_rejected",
+          "pass": true
+        },
+        {
+          "name": "open_join_group",
+          "pass": true
+        },
+        {
+          "name": "group_persist_and_two_recipient_deliveries",
+          "pass": true
+        },
+        {
+          "name": "group_private_ids_do_not_collide",
+          "pass": true
+        },
+        {
+          "name": "administrator_role_confirmed",
+          "pass": true
+        },
+        {
+          "name": "muted_member_state",
+          "pass": true
+        },
+        {
+          "name": "muted_composer_refuses_send",
+          "pass": true
+        },
+        {
+          "name": "unmute_member",
+          "pass": true
+        },
+        {
+          "name": "send_after_unmute",
+          "pass": true
+        },
+        {
+          "name": "versioned_group_update",
+          "pass": true
+        },
+        {
+          "name": "group_recipient_relogin",
+          "pass": true
+        },
+        {
+          "name": "durable_group_history_after_relogin",
+          "pass": true
+        },
+        {
+          "name": "late_join_cannot_read_original_nonrecipient_history",
+          "pass": true
+        },
+        {
+          "name": "private_messaging_during_ai",
+          "pass": true
+        },
+        {
+          "name": "real_ollama_stream_completion",
+          "pass": true
+        },
+        {
+          "name": "ai_generation_canceled",
+          "pass": true
+        },
+        {
+          "name": "missing_model_reports_error",
+          "pass": true
+        },
+        {
+          "name": "ownership_transfer",
+          "pass": true
+        },
+        {
+          "name": "kick_member",
+          "pass": true
+        },
+        {
+          "name": "removed_member_send_rejected",
+          "pass": true
+        },
+        {
+          "name": "file_fixture_created_new_only",
+          "pass": true
+        },
+        {
+          "name": "upload_makes_progress",
+          "pass": true
+        },
+        {
+          "name": "upload_paused",
+          "pass": true
+        },
+        {
+          "name": "upload_resume_finalize_and_share",
+          "pass": true
+        },
+        {
+          "name": "private_attachment_received",
+          "pass": true
+        },
+        {
+          "name": "download_makes_progress",
+          "pass": true
+        },
+        {
+          "name": "download_paused",
+          "pass": true
+        },
+        {
+          "name": "download_resume_complete",
+          "pass": true
+        },
+        {
+          "name": "native_download_exact_bytes_and_sha256",
+          "pass": true
+        },
+        {
+          "name": "cancel_upload_started",
+          "pass": true
+        },
+        {
+          "name": "native_upload_canceled",
+          "pass": true
+        },
+        {
+          "name": "file_task_journal_restored",
+          "pass": true
+        },
+        {
+          "name": "private_file_card_restored_from_durable_history",
+          "pass": true
+        },
+        {
+          "name": "group_file_upload_and_share",
+          "pass": true
+        },
+        {
+          "name": "group_file_card_received",
+          "pass": true
+        },
+        {
+          "name": "group_authorized_file_download",
+          "pass": true
+        },
+        {
+          "name": "cancel_during_begin_waits_for_server_ack",
+          "pass": true
+        },
+        {
+          "name": "owned_download_for_corruption_check",
+          "pass": true
+        },
+        {
+          "name": "owned_download_paused_before_tamper",
+          "pass": true
+        },
+        {
+          "name": "tamper_only_owned_test_partial",
+          "pass": true
+        },
+        {
+          "name": "corrupted_partial_fails_full_sha256",
+          "pass": true
+        },
+        {
+          "name": "corrupted_download_retry_new_task_preserves_evidence",
+          "pass": true
+        },
+        {
+          "name": "retried_download_exact_original_bytes",
+          "pass": true
+        },
+        {
+          "name": "conversation_file_previews_hide_authorization_payload",
+          "pass": true
+        },
+        {
+          "name": "real_ai_with_loaded_context_for_native_capture",
+          "pass": true
+        },
+        {
+          "name": "native_live_window_created",
+          "pass": true
+        },
+        {
+          "name": "native_quick_window",
+          "pass": true
+        },
+        {
+          "name": "native_capture_groups",
+          "pass": true
+        },
+        {
+          "name": "native_capture_ai",
+          "pass": true
+        },
+        {
+          "name": "native_capture_files",
+          "pass": true
+        },
+        {
+          "name": "native_capture_messages",
+          "pass": true
+        },
+        {
+          "name": "leave_group",
+          "pass": true
+        },
+        {
+          "name": "remaining_owner_member",
+          "pass": true
+        },
+        {
+          "name": "versioned_disband_group",
+          "pass": true
+        },
+        {
+          "name": "logout_clears_private_ai_context",
+          "pass": true
+        }
+      ],
+      "evidence": "evidence/qt6-features-e2e-attempt8",
+      "check_count": 63,
+      "process": {
+        "exit_code": 0,
+        "exe_sha256": "FB800576ABB02095BB90DB401F50EF85151ADE87934B5030877A4654DC50AF28",
+        "qt_log_bytes": 0,
+        "utc": "2026-10-07T10:24:11.8352235+00:00"
+      }
+    },
+    "private_regression": {
+      "status": "PASS",
+      "checks": [
+        {
+          "name": "profile_readable",
+          "pass": true,
+          "step": 1
+        },
+        {
+          "name": "exactly_three_owned_accounts",
+          "pass": true,
+          "step": 2
+        },
+        {
+          "name": "invalid_password_rejected",
+          "pass": true,
+          "step": 3
+        },
+        {
+          "name": "three_simultaneous_authenticated_TCP_sessions",
+          "pass": true,
+          "step": 4
+        },
+        {
+          "name": "identity_0",
+          "pass": true,
+          "step": 5
+        },
+        {
+          "name": "identity_1",
+          "pass": true,
+          "step": 6
+        },
+        {
+          "name": "identity_2",
+          "pass": true,
+          "step": 7
+        },
+        {
+          "name": "existing_owned_friendship_0_1",
+          "pass": true,
+          "step": 8
+        },
+        {
+          "name": "existing_owned_friendship_0_2",
+          "pass": true,
+          "step": 9
+        },
+        {
+          "name": "existing_owned_friendship_1_2",
+          "pass": true,
+          "step": 10
+        },
+        {
+          "name": "A_to_B_submit",
+          "pass": true,
+          "step": 11
+        },
+        {
+          "name": "A_to_B_stored_and_received_once",
+          "pass": true,
+          "step": 12
+        },
+        {
+          "name": "B_to_A_submit",
+          "pass": true,
+          "step": 13
+        },
+        {
+          "name": "B_to_A_stored_and_received_once",
+          "pass": true,
+          "step": 14
+        },
+        {
+          "name": "A_to_C_submit",
+          "pass": true,
+          "step": 15
+        },
+        {
+          "name": "A_to_C_stored_and_received_once",
+          "pass": true,
+          "step": 16
+        },
+        {
+          "name": "C_to_B_submit",
+          "pass": true,
+          "step": 17
+        },
+        {
+          "name": "C_to_B_stored_and_received_once",
+          "pass": true,
+          "step": 18
+        },
+        {
+          "name": "offline_send_submitted",
+          "pass": true,
+          "step": 19
+        },
+        {
+          "name": "offline_send_persisted",
+          "pass": true,
+          "step": 20
+        },
+        {
+          "name": "recipient_relogin",
+          "pass": true,
+          "step": 21
+        },
+        {
+          "name": "offline_delivery_and_history_deduplicated",
+          "pass": true,
+          "step": 22
+        },
+        {
+          "name": "sender_history_reconciled",
+          "pass": true,
+          "step": 23
+        },
+        {
+          "name": "heartbeat_response_received",
+          "pass": true,
+          "step": 24
+        },
+        {
+          "name": "native_live_QML_0",
+          "pass": true,
+          "step": 25
+        },
+        {
+          "name": "native_live_capture_0",
+          "pass": true,
+          "step": 26
+        },
+        {
+          "name": "native_live_QML_1",
+          "pass": true,
+          "step": 27
+        },
+        {
+          "name": "native_live_capture_1",
+          "pass": true,
+          "step": 28
+        },
+        {
+          "name": "native_live_QML_2",
+          "pass": true,
+          "step": 29
+        },
+        {
+          "name": "native_live_capture_2",
+          "pass": true,
+          "step": 30
+        },
+        {
+          "name": "same_host_duplicate_account_blocked_before_network_login",
+          "pass": true,
+          "step": 31
+        }
+      ],
+      "evidence": "evidence/qt6-features-private-regression-attempt4",
+      "check_count": 31,
+      "process": {
+        "exit_code": 0,
+        "exe_sha256": "FB800576ABB02095BB90DB401F50EF85151ADE87934B5030877A4654DC50AF28",
+        "qt_log_bytes": 0,
+        "utc": "2026-10-07T10:26:01.0363602+00:00"
+      }
+    },
+    "file_ingress": {
+      "status": "PASS",
+      "checks": [
+        {
+          "name": "unauthenticated_denied",
+          "pass": true
+        },
+        {
+          "name": "authenticated_identity_750004",
+          "pass": true
+        },
+        {
+          "name": "authenticated_identity_750005",
+          "pass": true
+        },
+        {
+          "name": "authenticated_identity_750006",
+          "pass": true
+        },
+        {
+          "name": "begin_available_session_0",
+          "pass": true
+        },
+        {
+          "name": "actor_injection_rejected",
+          "pass": true
+        },
+        {
+          "name": "other_user_upload_session_denied",
+          "pass": true
+        },
+        {
+          "name": "out_of_order_chunk_2",
+          "pass": true
+        },
+        {
+          "name": "out_of_order_chunk_0",
+          "pass": true
+        },
+        {
+          "name": "out_of_order_chunk_1",
+          "pass": true
+        },
+        {
+          "name": "out_of_order_chunk_3",
+          "pass": true
+        },
+        {
+          "name": "duplicate_chunk_reused",
+          "pass": true
+        },
+        {
+          "name": "durable_resume_progress",
+          "pass": true
+        },
+        {
+          "name": "finalize_sha256_available",
+          "pass": true
+        },
+        {
+          "name": "unshared_recipient_cannot_download",
+          "pass": true
+        },
+        {
+          "name": "owner_issued_recipient_capability",
+          "pass": true
+        },
+        {
+          "name": "wrong_recipient_denied",
+          "pass": true
+        },
+        {
+          "name": "tampered_capability_denied",
+          "pass": true
+        },
+        {
+          "name": "oversized_read_range_denied",
+          "pass": true
+        },
+        {
+          "name": "authorized_range_sha256_0",
+          "pass": true
+        },
+        {
+          "name": "authorized_range_sha256_65536",
+          "pass": true
+        },
+        {
+          "name": "authorized_range_sha256_131072",
+          "pass": true
+        },
+        {
+          "name": "authorized_range_sha256_196608",
+          "pass": true
+        },
+        {
+          "name": "authorized_range_sha256_262144",
+          "pass": true
+        },
+        {
+          "name": "authorized_range_sha256_327680",
+          "pass": true
+        },
+        {
+          "name": "authorized_range_sha256_393216",
+          "pass": true
+        },
+        {
+          "name": "authorized_range_sha256_458752",
+          "pass": true
+        },
+        {
+          "name": "authorized_range_sha256_524288",
+          "pass": true
+        },
+        {
+          "name": "authorized_range_sha256_589824",
+          "pass": true
+        },
+        {
+          "name": "authorized_range_sha256_655360",
+          "pass": true
+        },
+        {
+          "name": "authorized_range_sha256_720896",
+          "pass": true
+        },
+        {
+          "name": "authorized_range_sha256_786432",
+          "pass": true
+        },
+        {
+          "name": "download_whole_file_exact",
+          "pass": true
+        },
+        {
+          "name": "begin_available_session_1",
+          "pass": true
+        },
+        {
+          "name": "cancel_durable_session",
+          "pass": true
+        },
+        {
+          "name": "canceled_file_not_downloadable",
+          "pass": true
+        },
+        {
+          "name": "logout_revokes_authentication",
+          "pass": true
+        }
+      ],
+      "evidence": "evidence/qt6-file-ingress-e2e-attempt3",
+      "check_count": 37
+    },
+    "cross_gateway_session": {
+      "status": "PASS",
+      "checks": [
+        {
+          "name": "gateway_a_authenticates_owned_account",
+          "pass": true
+        },
+        {
+          "name": "gateway_b_reauthenticates_same_account",
+          "pass": true
+        },
+        {
+          "name": "old_cross_gateway_session_notified_and_fenced",
+          "pass": true
+        },
+        {
+          "name": "old_socket_shutdown_after_notice",
+          "pass": true
+        },
+        {
+          "name": "new_owner_friend_rpc_survives_old_cleanup",
+          "pass": true
+        },
+        {
+          "name": "new_owner_heartbeat_survives_old_cleanup",
+          "pass": true
+        }
+      ],
+      "evidence": "evidence/qt6-features-audit-20261007",
+      "check_count": 6
+    },
+    "qt_state": {
+      "backend_requests": 0,
+      "checks": 19,
+      "failures": 0,
+      "results": [
+        {
+          "name": "initial conversations",
+          "pass": true
+        },
+        {
+          "name": "empty message rejected",
+          "pass": true
+        },
+        {
+          "name": "offline message retained",
+          "pass": true
+        },
+        {
+          "name": "offline not sent",
+          "pass": true
+        },
+        {
+          "name": "retry while offline remains failed",
+          "pass": true
+        },
+        {
+          "name": "retry does not duplicate or change cid",
+          "pass": true
+        },
+        {
+          "name": "retry status stored not read",
+          "pass": true
+        },
+        {
+          "name": "muted group denied",
+          "pass": true
+        },
+        {
+          "name": "accept request idempotent",
+          "pass": true
+        },
+        {
+          "name": "reject no new friend",
+          "pass": true
+        },
+        {
+          "name": "empty group rejected",
+          "pass": true
+        },
+        {
+          "name": "created group appears",
+          "pass": true
+        },
+        {
+          "name": "canceled transfer cannot resume",
+          "pass": true
+        },
+        {
+          "name": "ai thinking",
+          "pass": true
+        },
+        {
+          "name": "ai canceled",
+          "pass": true
+        },
+        {
+          "name": "conversation switch retains history",
+          "pass": true
+        },
+        {
+          "name": "draft scoped to conversation",
+          "pass": true
+        },
+        {
+          "name": "draft survives conversation switch",
+          "pass": true
+        },
+        {
+          "name": "disbanded group denies send",
+          "pass": true
+        }
+      ],
+      "status": "PASS"
+    },
+    "qt_protocol": {
+      "checks": [
+        {
+          "name": "byte_by_byte_fragmentation",
+          "pass": true
+        },
+        {
+          "name": "network_header_and_sequence",
+          "pass": true
+        },
+        {
+          "name": "64_bit_ID_above_JS_precision",
+          "pass": true
+        },
+        {
+          "name": "reject_fractional_ID",
+          "pass": true
+        },
+        {
+          "name": "reject_string_ID",
+          "pass": true
+        },
+        {
+          "name": "reject_negative_ID",
+          "pass": true
+        },
+        {
+          "name": "coalesced_frames",
+          "pass": true
+        },
+        {
+          "name": "reject_bad_header_0",
+          "pass": true
+        },
+        {
+          "name": "reject_bad_header_4",
+          "pass": true
+        },
+        {
+          "name": "reject_bad_header_8",
+          "pass": true
+        },
+        {
+          "name": "reject_bad_header_10",
+          "pass": true
+        },
+        {
+          "name": "reject_oversized_body_before_allocation",
+          "pass": true
+        },
+        {
+          "name": "reject_non_object_json",
+          "pass": true
+        },
+        {
+          "name": "reject_corrupt_json",
+          "pass": true
+        },
+        {
+          "name": "reject_internal_gateway_type",
+          "pass": true
+        }
+      ],
+      "failures": 0,
+      "status": "PASS"
+    },
+    "backend_ctest": {
+      "status": "PASS",
+      "targets": [
+        "message_application_service_tests",
+        "message_service_integration_tests"
+      ],
+      "added_group_history_cases": 7,
+      "log_sha256": "a6092495590ccc6653cd600a1b8b33c90ad56e86bec6b1ffa0baf11918c7ccca"
+    }
+  },
+  "runtime": {
+    "status": "READY",
+    "running": 20,
+    "expected": 20,
+    "started": [],
+    "audit": "/home/jackson7/projects/TinyIMX_publish/.local/codex/desktop-server-start-20261007T102741Z-231ea550",
+    "endpoint": "192.168.220.128:9000",
+    "file_endpoint": "http://192.168.220.128:18082",
+    "mode": "normal server; pressure paused"
+  },
+  "endpoints": {
+    "utc": "2026-10-07T10:27:50.1522821+00:00",
+    "file_health": {
+      "service": "desktop-file",
+      "success": true
+    },
+    "ollama_models": [
+      {
+        "name": "qwen3:0.6b",
+        "size": 522653767,
+        "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435"
+      }
+    ],
+    "pressure": "paused"
+  },
+  "compiled_source_sha256": {
+    "clients/qt6/CMakeLists.txt": "9af8271fbad036fc13c69e5de2c42ee50546b64f13414fbf8703f362effd564c",
+    "clients/qt6/qml/AIPage.qml": "0d33d40727ffcf2ab5c5bc8b32d4f5f4d92efce09d36de6762efc750fc1cee36",
+    "clients/qt6/qml/Avatar.qml": "13dea1d0a4d8219a960112516270a0bcd9afee66ab4c048e692c997ca48399bd",
+    "clients/qt6/qml/Badge.qml": "3ca149c7e6fa5b89705234287f3647c62823e5205716d14f72afc4a4ea5b0961",
+    "clients/qt6/qml/ChatPage.qml": "cafa97826778fbdb3dd7c15d80ec61a3708edf7c536b7e34ef9f140d37f0111d",
+    "clients/qt6/qml/ContactsPage.qml": "3260e4fc04816a06341e0032c9d887f41ad403b6eafab4bfe5b08417afd47fde",
+    "clients/qt6/qml/FilesPage.qml": "569d5e19aba231687c40539ecd81101c4a0f78c0a46ae8dfc9e07a2ccb6cadbb",
+    "clients/qt6/qml/GroupsPage.qml": "d3dd8d055195859da571334a5d83002f2b4171dac6a640ab99ceaaf68ddf83bd",
+    "clients/qt6/qml/LiveAIPage.qml": "458ae828cdb752288b062d154021b952d08b6787f0c823d12d49b317a41f29c0",
+    "clients/qt6/qml/LiveFilesPage.qml": "cc6081bc74614ef81bb1b9d9f31e11feb50b3988cb6644b4895782324eb84ff6",
+    "clients/qt6/qml/LiveGroupsPage.qml": "15b7cbdb52add73887f95a40acd4c911d89b1884faa9651cb47c63acf7e4be53",
+    "clients/qt6/qml/Main.qml": "2563a00b772462ac2e33472f649edfbeddeec04e9c945429be80f49d44bc9eaf",
+    "clients/qt6/qml/SettingsPage.qml": "2e6b9adef2026aa4c25504d10ed97af12e1d7fb8e327d2d3afc24b119a129e35",
+    "clients/qt6/qml/UiButton.qml": "bbc60608c5a46c4972e885cc95a8194d79b9a75be3aeb6065ca83d67faf96115",
+    "clients/qt6/src/ClientChecks.cpp": "e42fc817d8ee6824170e2f9315057b37a091746ba7e1cd8b1bf889c770e36496",
+    "clients/qt6/src/ClientChecks.h": "58a076a502b3a1f1b0df3ead4ff809cc27f422fdc4c64146075e81d58b54f734",
+    "clients/qt6/src/DemoStore.cpp": "b2ea8c4635491e827fac86fa20189d3cb5cbd08e335c713a292e3767235d62e9",
+    "clients/qt6/src/DemoStore.h": "e81b16083f2a3aa0aa69e0c601b1e6e57fa7152f07ef249f319f671489721bb4",
+    "clients/qt6/src/FeatureChecks.cpp": "f86d8243c8c047b442b053ec7ad7586ce03440fd5e46622c069f1639d25e3f90",
+    "clients/qt6/src/FileTransfers.cpp": "54be0735a4938673c5e44a6f365257b1f9c97170af8c5e4c7ea542ed0d3378c2",
+    "clients/qt6/src/FileTransfers.h": "c353041d666f8ed03e5f06d40dc249a86e1396f9a4aa81347fdfa2d7092fce9f",
+    "clients/qt6/src/LiveAI.cpp": "ac34f734d607bf50e46af1d8abcfde46181759596bfe82ecb26306e51a5b718e",
+    "clients/qt6/src/LiveFiles.cpp": "1c9efc342516381f788a55e47886d4fe028424adf4477d424baaa12982a29251",
+    "clients/qt6/src/LiveGroups.cpp": "3fc685f514d01ee5647f7aaabb0f667c06d3f35dfd8df0c95c9414d78736af7d",
+    "clients/qt6/src/LiveStore.cpp": "99a614db007247bc92930defdd10e3935e3b9d98bcca95a026349401b7e1236c",
+    "clients/qt6/src/LiveStore.h": "596c1f046be4139ad6317716d11bceb74d666700ae398d7eb4c0af7cc9afc543",
+    "clients/qt6/src/main.cpp": "b3143ac8c92dac44398e417564a14057203dd41e707d55304afc667057c683d2",
+    "clients/qt6/src/TimxCodec.cpp": "0306e31e46b60172cc197594dccda17d6364ddb9ccd9c0242c5cdb0c55b73218",
+    "clients/qt6/src/TimxCodec.h": "5052706c3d1b7bc1aa0a66b202e9b2bd309a3e77f84a0f58e7cce96899505220",
+    "clients/qt6/assets/icons/arrow-light.svg": "ecc4e5146491237201caeaaab52d099e830e25f7e07a28898403b6e07f5d8687",
+    "clients/qt6/assets/icons/arrow.svg": "7465b477c6e560dee98e106696e7dc64b5410e785888cfc49e6da7cd311bc1ef",
+    "clients/qt6/assets/icons/attach-light.svg": "83cc9c23755ba2a129d0dffd8f575af5383774ae7ed2b9bd2f208a77bf437b1f",
+    "clients/qt6/assets/icons/attach.svg": "b0d8a2566d971787a7a39c6faa4f53cfda1b76d069a0dcb6e7f5054bd08c9280",
+    "clients/qt6/assets/icons/bell-light.svg": "f3f98b1b0de8d29c462eee5d2589833d5b2aa69becfd130f8707e0b01088a630",
+    "clients/qt6/assets/icons/bell.svg": "7d52190705c199058083bcd2709f467e9761481a92c1b02b1bfc38eeec3a47d7",
+    "clients/qt6/assets/icons/chat-light.svg": "3d1eabe756f31cfbb120009d06ff25ae7e92e71e8f339260ae566bf06cc6d1b7",
+    "clients/qt6/assets/icons/chat.svg": "b37737b9ec7cf69586704bf7a24788fc884e46db7f34db20750e60d4d0852f45",
+    "clients/qt6/assets/icons/check-light.svg": "b9ae661d477a0a6020369eaf754e1b23cc2c29dea49ceb8ed733c5631a3e3d18",
+    "clients/qt6/assets/icons/check.svg": "0bca3605940a65f02adb28e0cb70138310ab7c943f21cc9a0128152ec2777b10",
+    "clients/qt6/assets/icons/close-light.svg": "e31a07f5006771b155779b0f7c17d1a5d038f130ab00843b9de250e5076877c0",
+    "clients/qt6/assets/icons/close.svg": "caa1fd6dfb31a7635a32bd7338e0bc745b98af9da8d80d7ea127031b90bdaa37",
+    "clients/qt6/assets/icons/edit-light.svg": "7653d4ace897586e7bda491cbbc7e84828da1627bf26ca4474377e33c132e91d",
+    "clients/qt6/assets/icons/edit.svg": "dd7b4a79b7fb184090e3ce17e32dd8cb963ff040b83318972086f16a098f69bd",
+    "clients/qt6/assets/icons/folder-light.svg": "5b064f152cc1c4b4949217560d1578c257fd5dd65a4ed7bc687bfc2cc79d68e2",
+    "clients/qt6/assets/icons/folder.svg": "7664dbce02d5ee05aacff46804650865dffc6834edd671e49d4c61849509beb5",
+    "clients/qt6/assets/icons/group-light.svg": "8e8cb1404e554a92187b9386bfcc7011774c3a5aad27dc1b9d959f1f3d82916a",
+    "clients/qt6/assets/icons/group.svg": "aaf587346854cbfaad4a5f6103700e8320b99dea9a7ea6cf40366665952f848f",
+    "clients/qt6/assets/icons/history-light.svg": "5104a78d882d9b700a62b2621390719bdfee49fe18bf4ceb3482d6f75397a0d2",
+    "clients/qt6/assets/icons/history.svg": "2d976c4015093a025acc9a3500a416d77dea9890b275d6f2911cee3ab9693b45",
+    "clients/qt6/assets/icons/info-light.svg": "bfabf5111d41fb82515094b395583ae1755fba7539cb6fd980e437b39a95390b",
+    "clients/qt6/assets/icons/info.svg": "70623c052eef43609b93a6406a84ad56e031c5a023eac3ed1bbd5821b78b856a",
+    "clients/qt6/assets/icons/panel-light.svg": "89bedc56cf04b43eaef35f5ed2b1d36b6970dfe222c6597f75250fa402cdab29",
+    "clients/qt6/assets/icons/panel.svg": "f313054500b48183f203a7ad66dd2835a4ff97ea658302089ba24f0909829db7",
+    "clients/qt6/assets/icons/plus-light.svg": "3851d65d579e7dbdf571bad94d7005e01dbfb2165af77073e5b92fe311d06c0e",
+    "clients/qt6/assets/icons/plus.svg": "6adad84a88eeb9c09deb8a2c5d401ff34946cd5a031a0f4d93ec4f39c74e7d72",
+    "clients/qt6/assets/icons/search-light.svg": "c72f38276d35a208cd42e688d024fd3db5b4f4b90a1bd4a62ddde2b441a87c61",
+    "clients/qt6/assets/icons/search.svg": "2ec0ce1500c6b3d75899077c045cb938c6183160660ffcf9215a41bc9d1b018e",
+    "clients/qt6/assets/icons/settings-light.svg": "05e925f4e068e9275cb6298f7d8b6f18bc128a72b45e99de4076de3451354ade",
+    "clients/qt6/assets/icons/settings.svg": "c8d4e128dc4b9d5f314cb96b1bac28679c9fd24d2cffa68405476213ffd92f2a",
+    "clients/qt6/assets/icons/smile-light.svg": "7018a23e295aaa851338354570e234529219854d88745aaebf6cdfc8fe3753d2",
+    "clients/qt6/assets/icons/smile.svg": "47342f5a66b4bc60ba4b1c2b57006e5ce56bd0aa9e9c450489707da114a6884c",
+    "clients/qt6/assets/icons/sparkles-light.svg": "cf0162a73ce960e5a0d1b8b123739f2ee1b8ae4c793f162c0835d49728638563",
+    "clients/qt6/assets/icons/sparkles.svg": "bc49a41d2d96f48f7449da31bf4f8bb31f778527fc788c0eeeb4f333c5589969",
+    "clients/qt6/assets/icons/users-light.svg": "32657b999ada6a3a29bdb1101b6227374e73ce9cdb8db8904653f4a1b8065971",
+    "clients/qt6/assets/icons/users.svg": "922aec14a53b8e63a6b25ee99b087cc22fe459fde1055050d75b3150800c8555"
+  },
+  "limits": {
+    "file_bytes": 67108864,
+    "task_records_per_account": 100,
+    "new_group_members": 100,
+    "file_service_sessions": 1024,
+    "file_service_session_hours": 8,
+    "share_capability_days": 7,
+    "same_ip_file_logins_per_minute": 30,
+    "client_heartbeat_seconds": 5,
+    "ai_model": "qwen3:0.6b",
+    "ai_loaded_context_messages": 20,
+    "public_tls_client": false,
+    "durable_group_read_receipts": false,
+    "full_agent_tools": false
+  },
+  "privacy": "raw events, login session tokens, share capabilities and private config are retained locally and omitted from this public result"
+}

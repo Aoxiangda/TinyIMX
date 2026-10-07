@@ -61,6 +61,8 @@ service MessageService {
     // Bounded completion appended after all 17 existing RPCs.
     rpc CompleteGroupMessageDeliveryAttempts(CompleteGroupMessageDeliveryAttemptsRequest)
         returns (MessageMutationResponse);
+    // Authenticated group history, appended without changing existing ordinals.
+    rpc ListGroupHistory(ListGroupHistoryRequest) returns (ListGroupHistoryResponse);
 }
 
 message ListPendingRecipientsAfterRequest {
@@ -366,4 +368,16 @@ message MessageMutationResponse {
 message CompleteGroupMessageDeliveryAttemptsRequest {
     tinyimx.common.v1.RequestMeta meta = 1;
     repeated CompleteGroupMessageDeliveryAttemptRequest attempts = 2;
+}
+
+message ListGroupHistoryRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    uint64 group_id = 3;
+    uint64 before_message_id = 4;
+    uint32 limit = 5;
+}
+message ListGroupHistoryResponse {
+    repeated GroupMessageRecord messages = 1;
+    bool has_more = 2;
 }
