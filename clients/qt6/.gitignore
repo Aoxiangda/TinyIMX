@@ -1,0 +1,4 @@
+/build*/
+/captures/
+/CMakeUserPresets.json
+*.user
