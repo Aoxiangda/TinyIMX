@@ -1,0 +1,306 @@
+TinyIMX 项目总手册：账号、数据、功能与运行
+生成时间：2026-10-07 20:47:59 +08:00
+产品代码基线：b9980d5342c53967ebb9319fb4ce156e72655eec
+本轮仅文档整理；提交见 evidence/project-handover-20261007/doc-git-receipt.json。
+
+========================================================================
+1. 项目在哪里：Windows 客户端与 Ubuntu 服务器
+========================================================================
+TinyIMX 是 C++ 即时通信后端，加原生 Qt6 Windows 客户端、Windows 本机 Ollama 问答。当前已接入多用户私聊、群聊、文件与 AI 的真实常见交互。
+exe 只是客户端程序，账号和聊天记录主要保存于 Ubuntu 数据库。源代码、业务数据、构建程序、测试证据分别存放；关闭客户端不会删除服务器历史。
+本次只读运行快照：20 个正常容器运行，130 个历史容器已退出、3 个已创建未运行；压测暂停。Windows 本次快照未发现 tinyimx_desktop/ollama 进程或 11434 监听，使用时按启动入口分别开启。
+
+资料 | 准确位置
+Windows 工作区 | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux
+Ubuntu 正式 Git 项目 | /home/jackson7/projects/TinyIMX_publish
+Windows 源码镜像（非Git checkout） | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\source
+客户端工程 | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\source\clients\qt6\CMakeLists.txt
+已验证 exe | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\evidence\qt6-ui-features-20261007-attempt9\build\tinyimx_desktop.exe
+业务版本基线 | b9980d5342c53967ebb9319fb4ce156e72655eec
+Git 分支 | work/local-capacity-10k-50k-20261004
+Qt Kit | D:\WorkStation\QT6\QT\6.10.2\mingw_64
+
+简明启动说明：C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\先看这里-项目位置与启动.txt
+
+========================================================================
+2. 你可以直接登录的六个账号与密码
+========================================================================
+登录输入完整用户名、密码和服务器 192.168.220.128:9000。750001 等是用户 ID，用于添加好友/邀请成员，不是登录用户名。优先用 desktop_* 三个日常演示账号。
+每个账号与同组另外两人已有双向好友关系。features_* 三个账号用于独立功能验收，保留历史测试消息与群；不必用它们作为日常账号。
+本次仅对这六个已知合成账号执行只读密码摘要比对：123456 全部匹配，账号 status=1；没有试登录、踢出已有用户、修改密码或创建账号。
+全库账号 78,945 个，包括 codex50k 前缀 50,000 个、m21b500000 前缀 20,000 个及其它多批历史测试账号。这个数量不是实际用户数，更不是已通过的并发容量。
+其它账号的原明文密码没有导出或重置。数据库保存 password_salt/password_hash，盐和 PBKDF2 摘要不能直接登录，也不能还原原密码。当前没有自助注册、改密/找回密码、资料/头像编辑功能。
+
+用户名 | 用户ID | 昵称 | 密码 | 用途 | 状态
+desktop_alice_20261007 | 750001 | Alice | 123456 | 日常演示 | 启用；密码已核对
+desktop_bob_20261007 | 750002 | Bob | 123456 | 日常演示 | 启用；密码已核对
+desktop_carol_20261007 | 750003 | Carol | 123456 | 日常演示 | 启用；密码已核对
+features_alice_20261007 | 750004 | Alice | 123456 | 功能验收专用 | 启用；密码已核对
+features_bob_20261007 | 750005 | Bob | 123456 | 功能验收专用 | 启用；密码已核对
+features_carol_20261007 | 750006 | Carol | 123456 | 功能验收专用 | 启用；密码已核对
+
+全量账号索引（78,945行，不含密码摘要）：C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\evidence\project-handover-20261007\accounts-index-utf8.csv
+
+========================================================================
+3. 系统、数据库与服务凭据，不要当成聊天密码
+========================================================================
+本手册、索引不会包含 SSH 私钥、数据库密码、MCP令牌、有效附件能力或真实用户密码摘要。需要查看某项私有配置时，到上述准确路径查看原文件；未为了整理而另外复制这些秘密。
+
+种类 | 账号/准确位置 | 用途
+TinyIMX 登录 | 上述 desktop_* / features_*，密码123456 | 客户端聊天认证
+Ubuntu 系统 | 用户名 jackson7；原系统口令沿用原设置，本次未验证/修改 | 终端/sudo；与聊天账号无关
+SSH 连接 | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\.connection\tinyimx_ed25519；known_hosts同目录 | 本任务自动连接使用私钥，不进入Git或普通分享包
+MySQL 应用账号 | user=tinyimx，database=tinyimx，Docker内 mysql:3306 | 真实密码在 /home/jackson7/.local/share/tinyimx/m21/config/user.json 的mysql字段；本手册不复制
+MySQL 管理账号 | 容器内root；已有 MYSQL_ROOT_PASSWORD 环境配置 | 在容器内用已有环境传入mysql；MySQL当前没有发布到Windows的端口
+文件分享签名密钥 | /home/jackson7/.local/share/tinyimx/desktop-file-20261007/share.key | 32字节、0600；验证附件能力，保留它才能验证旧签名
+其它服务配置/证书 | /home/jackson7/.local/share/tinyimx/m21/config 和同级 tls | 实际私有配置与 source/config 模板不同
+
+
+========================================================================
+4. 服务器上的业务数据和宿主机虚拟磁盘
+========================================================================
+账号、好友、好友申请、消息正文、群/成员、文件元数据在MySQL；上传文件字节在独立file-data目录。仅备份数据库不包含附件内容。
+本次精准导出群组记录131条、文件元数据246条，包含解散/取消/失败/未完成状态。file-data共有1,038个普通文件，字节合计 409.68 MiB，包含对象/分块/临时文件，不等于1,038个用户附件。
+Linux数据最终存放于Ubuntu虚拟磁盘。VMDK描述文件可能依赖同目录分片或快照链；仅复制一个描述文件不代表完整、一致的虚拟机备份。
+common/db/schema.sql 和 db/migrations 是建表代码，不是当前账号或消息。数据库有14张业务表与2张SQL往返诊断表；诊断数据保留用于复盘。
+
+数据 | 准确路径
+MySQL 容器/业务库 | tinyimx-m21-mysql-1 / tinyimx
+MySQL 数据卷 | tinyimx-m21_mysql-data
+MySQL 物理目录 | /var/lib/docker/volumes/tinyimx-m21_mysql-data/_data
+服务器上传根 | /home/jackson7/.local/share/tinyimx/m21/file-data
+正式文件对象 | 上传根 / files / 文件ID；精确相对键见文件索引storage_key
+上传分块与临时数据 | 上传根 / uploads
+FileService容器内路径 | /var/lib/tinyimx/files
+真实私有配置 | /home/jackson7/.local/share/tinyimx/m21/config
+文件签名状态目录 | /home/jackson7/.local/share/tinyimx/desktop-file-20261007
+VMware配置（Windows） | E:\VMware\UbuntuF\Ubuntu 64 位.vmx
+当前挂载VMDK（Windows） | E:\VMware\UbuntuF\Ubuntu_140G_base.vmdk
+
+全量群组索引：131行：C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\evidence\project-handover-20261007\groups-index-utf8.csv
+全量文件元数据索引：246行：C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\evidence\project-handover-20261007\files-index-utf8.csv
+脱敏挂载/端口/数据库结构清单：C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\evidence\project-handover-20261007\guest-inventory-utf8.json
+
+========================================================================
+5. 每一张数据表负责什么
+========================================================================
+账号总数来自精确COUNT；其它表行数来自InnoDB估计值。空间为表数据+索引分配量，不包含binlog/redo/系统表等，不是整个数据库卷使用量。没有为整理导出百万行消息正文。
+
+表名 | 用途 | 行数（账号精确，其余估计） | 表+索引空间
+codex_sql_rtt_messages_20261005 | 消息SQL往返诊断表 | 47,539 估计 | 19.06 MiB
+codex_sql_rtt_outbox_20261005 | Outbox SQL往返诊断表 | 47,316 估计 | 20.58 MiB
+im_event_outbox | 持久事件及异步投递状态 | 965,890 估计 | 802.66 MiB
+im_file_upload_chunks | 分块偏移/哈希/大小 | 924 估计 | 0.42 MiB
+im_file_upload_sessions | 上传会话与状态 | 246 估计 | 0.12 MiB
+im_files | 文件所有者/大小/哈希/存储键/状态 | 246 估计 | 0.14 MiB
+im_friend_requests | 好友申请与处理状态 | 272 估计 | 0.09 MiB
+im_group_members | 成员角色/禁言/成员代次 | 764 估计 | 0.17 MiB
+im_group_membership_history | 成员进出历史与权限边界 | 766 估计 | 0.17 MiB
+im_group_message_deliveries | 原投递收件人与确认/恢复状态 | 314,765 估计 | 84.77 MiB
+im_group_messages | 群消息正文与发送身份 | 7,197 估计 | 2.44 MiB
+im_group_operation_dedup | 群管理操作幂等记录 | 1,642 估计 | 0.56 MiB
+im_groups | 群资料/群主/策略/版本/解散 | 131 估计 | 0.08 MiB
+im_private_messages | 私聊正文/MID/CID/投递与已读状态 | 1,011,218 估计 | 512.05 MiB
+im_user_relations | 双向好友关系与状态 | 215,617 估计 | 23.55 MiB
+im_users | 用户/昵称/状态/密码摘要 | 78,945 精确 | 20.58 MiB
+
+
+========================================================================
+6. 缓存、队列、发现与监控数据
+========================================================================
+Redis主要存在线会话/presence、未读投影和缓存/协调状态；RocketMQ保存队列存储和日志；ZooKeeper存注册协调数据；Prometheus保存时序指标。这些不能代替MySQL业务历史。
+容器是运行环境，持久数据通常在卷或bind挂载中。停止容器不会自动清除卷；历史停止容器有审计/回退用途。本次没有清理容器或卷。
+
+容器 | 卷 | Ubuntu物理目录 | 容器内路径
+tinyimx-m21-zookeeper-1 | tinyimx-m21_zookeeper-data | /var/lib/docker/volumes/tinyimx-m21_zookeeper-data/_data | /data
+tinyimx-m21-zookeeper-1 | tinyimx-m21_zookeeper-datalog | /var/lib/docker/volumes/tinyimx-m21_zookeeper-datalog/_data | /datalog
+tinyimx-m21-zookeeper-1 | d75a1ff782669a140c4010ad6f3c9af115fdb322221086ea61045d04c40705a4 | /var/lib/docker/volumes/d75a1ff782669a140c4010ad6f3c9af115fdb322221086ea61045d04c40705a4/_data | /logs
+tinyimx-m21-rocketmq-broker-1 | tinyimx-m21_rocketmq-logs | /var/lib/docker/volumes/tinyimx-m21_rocketmq-logs/_data | /home/rocketmq/logs
+tinyimx-m21-rocketmq-broker-1 | tinyimx-m21_rocketmq-store | /var/lib/docker/volumes/tinyimx-m21_rocketmq-store/_data | /home/rocketmq/store
+tinyimx-m21-prometheus-1 | tinyimx-m21_prometheus-data | /var/lib/docker/volumes/tinyimx-m21_prometheus-data/_data | /prometheus
+tinyimx-m21-redis-1 | tinyimx-m21_redis-data | /var/lib/docker/volumes/tinyimx-m21_redis-data/_data | /data
+
+
+========================================================================
+7. Windows上的数据：任务、下载、模型与易失状态
+========================================================================
+本次正常客户端数据根有4个作用域任务日志，共1个任务，已见completed上传记录；日常下载目录存在，当前普通接收文件0个。功能测试下载在独立evidence目录。
+原始上传文件仍在你选取的位置，tasks.json的path指向上传源/下载目标；服务器另存副本，不搬走原文件。任务记录可能含附件能力，属于本机私有资料。
+任务作用域=SHA256(文件入口地址+"|"+用户ID)，每作用域最多100任务。任务记录不是全部聊天记录。
+已发送聊天历史在服务器。草稿、输入偏好、界面状态、当前AI会话目前只在本进程；退出/登出会清对应内存状态。尚无完整本地聊天数据库、跨设备任务同步或持久AI历史。
+Ollama models是模型权重/清单，不是聊天历史。现有qwen3:0.6b约498MiB；本次11434没有监听，使用前运行Start-AI.cmd。
+
+内容 | 准确位置 | 说明
+任务日志 | C:\Users\Administrator\AppData\Local\TinyIMX\TinyIMX Desktop\transfers | SHA256子目录下tasks.json
+日常接收文件 | D:\Downloads\TinyIMX | 本机下载目录已重定向至D:\Downloads；UUID-文件名，未完成.part
+Qt缓存 | C:\Users\Administrator\AppData\Local\TinyIMX\TinyIMX Desktop\cache | 渲染缓存，不是账户库
+模型程序 | C:\Users\Administrator\AppData\Local\Programs\Ollama\ollama.exe | Windows Ollama程序
+模型数据 | C:\Users\Administrator\.ollama\models | 权重、清单、metadata
+测试下载 | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\evidence\qt6-features-e2e-attempt8\client-*\downloads | 隔离合成文件，含保留的故意损坏样本
+所有构建/日志/截图 | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\evidence | 成功/失败轮次均保留
+
+正常数据目录：C:\Users\Administrator\AppData\Local\TinyIMX\TinyIMX Desktop
+日常下载目录：D:\Downloads\TinyIMX
+
+========================================================================
+8. 所有功能：在哪里点、已完成什么、尚缺什么
+========================================================================
+以前三份说明把“删除好友”写成已完成，本次核对LiveStore/ContactsPage/SocialService RPC及实现，确认没有当前客户端入口或对外方法，已纠正。UserService仅Authenticate/GetUserProfile，不能把管理员插入演示账户当成产品注册功能。
+--demo/--capture是隔离设计样例；真实LiveStore使用后端。设计数据不等于你服务器里的真实记录。
+
+功能 | 页面入口 | 已实现行为 | 限制/未实现
+账号 | 登录页；设置→退出 | 真实认证、本人信息；不同账号独立窗口；同机账号排他；跨网关旧会话下一心跳确认后退出 | 无自助注册/改密/资料编辑
+私聊 | 消息/联系人→发消息 | 多行/Unicode、入库确认、投递ACK、MID/CID去重、原CID重试、历史分页、离线补投、已读/未读 | ACK不同于已读；会话列表当前最多50
+好友 | 联系人→添加/申请列表 | 数值ID申请、接受/拒绝、好友列表、打开私聊；申请15秒刷新 | 好友列表最多100；无在线订阅；删除好友未实现
+群组 | 群组→创建/加入/选择/管理 | 开放加入、邀请、移出、角色、禁言/解除、资料版本更新、转让、退出/解散；成员/群自动分页 | 新群默认最多100人；群主先转让/解散再退出
+群历史 | 选择群会话/加载历史 | 当前成员与原投递快照权限；重新登录恢复 | 后入群不读取此前未投给自己的消息；群未读本地，无持久化群已读回执
+上传分享 | 先选择私聊/群聊→附件 | 原生选文件、256KiB分块、逐块/整文件SHA256、终验成功再分享、接收人/群绑定授权 | 1B–64MiB普通非符号链接文件
+下载任务 | 卡片→下载；文件任务页 | 64KiB范围校验、整文件校验、暂停/继续/重试、服务确认取消、账号任务恢复、唯一文件名无覆盖 | 损坏整文件新任务重试，原失败保留；续传校验上传源未变
+AI | AI→应用并检测→提问 | 真实Ollama流式问答、停止、模型检测/错误；可选最近已加载20条会话；期间可聊天 | qwen3:0.6b；尚无完整MCP Agent；无持久AI对话
+设置 | 设置页 | Enter/Ctrl+Enter发送，Shift+Enter换行；浅色主题；地址/本人/退出 | 通知开关是本地预览，无Windows系统通知；偏好/草稿不持久化
+连接 | 聊天9000；文件/群历史18082 | 异步联网，文件入口独立鉴权与分享签名 | 目前私网明文；服务端9443TLS尚未接入Qt
+
+
+========================================================================
+9. 正常启动与三个账号的操作顺序
+========================================================================
+先开启Ubuntu虚拟机，确认当前地址192.168.220.128。再开启正常服务器、本机所需程序。Ollama与聊天服务器分别在Windows/Ubuntu，AI不工作时聊天仍可使用。
+整个build目录的DLL、platforms、qml需要保留。直接双击exe可用；Start-3-Clients打开三个不同账号预填窗口，分别输入123456。启动助手绑定本机已验收部署，不是空白机器的一键新部署。
+
+用途 | 路径/地址
+服务器 | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\Start-Server.cmd
+AI模型 | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\Start-AI.cmd
+一个客户端 | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\Start-Client.cmd
+三个客户端 | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\Start-3-Clients.cmd
+聊天TCP | 192.168.220.128:9000
+文件/群历史 | http://192.168.220.128:18082/desktop
+文件健康检查 | http://192.168.220.128:18082/health
+本机模型 | http://127.0.0.1:11434 / qwen3:0.6b
+
+1. 双击Start-Server.cmd，核对READY、running:20、expected:20。已运行容器保持运行。
+2. 需要AI时双击Start-AI.cmd；确认11434监听和qwen3:0.6b。
+3. Start-3-Clients.cmd，Alice/Bob/Carol分别登录；选好友发私聊。
+4. Alice新建群，邀请750002/750003，群组页选群进入群聊。
+5. 先选目标会话再上传附件；对方点击文件卡下载，任务页查看状态/暂停恢复/保存位置。
+6. AI页应用并检测，再提问；勾选上下文才附加当前已加载片段。
+7. 同入口同账号旧窗口占用时先退出或自行关闭，再开新版本；同一账号的第二窗口不是第二名用户。
+
+Windows工作区PowerShell，仅检查：
+.\tools\Start-TinyIMX-Server.ps1 -StatusOnly
+
+Ubuntu终端启动已验收现有服务：
+python3 /home/jackson7/projects/TinyIMX_publish/clients/qt6/server/start_existing_server.py --start
+
+========================================================================
+10. 正常服务器为何是20个Docker容器
+========================================================================
+2个Gateway、5个业务服务、文件/群历史入口、Outbox/未读投影和数据库/缓存/队列/发现/监控分进程运行，所以启动服务器是恢复一组依赖，不是一个exe。
+压测程序产生连接/业务流量，正常后端接收客户端。现有20个正常容器用于日常演示；130个Exited、3个Created历史容器是旧诊断/构建/试验/回退资料，不表示133个活跃用户进程。
+Start-Server核对accepted-runtime中的容器ID/镜像/挂载，并按依赖启动；不要用docker compose down -v处理启动问题，卷中有数据。
+
+容器 | 作用 | 本次状态
+tinyimx-desktop-file-20261007 | 文件/群历史认证入口；客户端18082 | running/healthy
+tinyimx-m21-message-service-1 | 消息持久化/历史/确认/投递 | running/healthy
+tinyimx-m21-gateway-b-1 | TCP网关B：第二实例 | running/healthy
+tinyimx-m21-gateway-a-1 | TCP网关A：会话/协议/路由 | running/healthy
+tinyimx-m21-social-service-1 | 好友申请/关系/私聊权限 | running/healthy
+tinyimx-m21-file-service-1 | 文件会话/分块/校验/范围 | running/healthy
+tinyimx-m21-group-service-1 | 群/成员/权限 | running/healthy
+tinyimx-m21-user-service-1 | 登录认证/资料 | running/healthy
+tinyimx-m21-mcp-server-1 | 只读工具服务；VM本地18080；不是Qt的Ollama | running/healthy
+tinyimx-m21-unread-projector-1 | 未读投影更新 | running
+tinyimx-m21-zookeeper-1 | 注册发现与协调 | running/healthy
+tinyimx-m21-outbox-relay-1 | 持久事件接入异步链 | running
+tinyimx-m21-nginx-1 | 对外9000/9443；内部代理 | running/healthy
+tinyimx-m21-mysql-1 | 业务事实数据 | running/healthy
+tinyimx-m21-rocketmq-proxy-1 | 队列访问入口 | running
+tinyimx-m21-rocketmq-broker-1 | 队列存储与投递 | running
+tinyimx-m21-prometheus-1 | 监控；VM本地19090 | running/healthy
+tinyimx-m21-redis-1 | 会话/presence/投影/缓存 | running/healthy
+tinyimx-m21-rocketmq-namesrv-1 | 队列服务发现 | running
+tinyimx-m21-otel-collector-1 | 观测采集；VM本地13133健康 | running
+
+
+========================================================================
+11. 每轮代码、结果、Git与问题记录
+========================================================================
+正式Git在Ubuntu，Windows source为镜像。业务提交21d88c6、启动顺序修正b9980d5；本轮仅文档整理，保留原有3个benchmark改动与.env.example，不push，不改变运行镜像或exe。
+源码快照/失败测试/旧容器均保留。有效分享能力、服务配置、SSH私钥、原始私有事件与本次全量CSV不进Git；公开验证保存去敏检查名称/状态与源码/二进制指纹。
+
+资料 | 位置 | 意义
+Qt源码/构建轮次 | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\evidence\qt6-ui-features-20261007-attempt1 至 attempt9 | 源码快照、构建日志、自检、设计截图
+功能联调轮次 | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\evidence\qt6-features-e2e-attempt1 至 attempt8 | 原始事件/报告/隔离任务与下载；失败保留
+后端容量工具 | /home/jackson7/projects/TinyIMX_publish/benchmark/local_capacity | 合同/负载/诊断/证据导出工具
+部署前像与审计 | /home/jackson7/projects/TinyIMX_publish/.local/codex | 代码前像、镜像/容器身份、私有原始结果
+问题台账 | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\source\docs\performance\ISSUES.md | 问题、原因、候选、验证
+当前容量总评 | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\source\docs\performance\CAPACITY_OPTIMIZATION_AND_ACCEPTANCE_20261007.md | 有效成绩与未达标范围
+功能复盘 | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\source\docs\client\FEATURE_COMPLETION_20261007.md | 群/文件/AI及启动问题修正
+功能公开验收 | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\source\clients\qt6\validation\FEATURES_20261007.json | 正常功能检查；不是容量验收
+每轮源码与结果索引 | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\source\clients\qt6\validation\ITERATIONS_20261007.json | 轮次/指纹/状态
+代码快照包 | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\evidence\qt6-features-audit-20261007\iteration-code-snapshots.tar.gz | 源码迭代；不含业务库/附件
+既有增量Git bundle | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\evidence\qt6-features-audit-20261007\tinyimx-features-final-20261007.bundle | 恢复依赖fcb55487基线；不含数据库
+早期镜像 | C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\source-original | 旧代码快照；不是业务备份
+
+问题台账：C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\source\docs\performance\ISSUES.md
+功能复盘：C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\source\docs\client\FEATURE_COMPLETION_20261007.md
+容量总评：C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\source\docs\performance\CAPACITY_OPTIMIZATION_AND_ACCEPTANCE_20261007.md
+
+========================================================================
+12. 当前功能结果与性能目标分别是什么
+========================================================================
+下面引用归档成绩，本轮没有重新压测。不同版本、不同业务合同的数据不能拼成同一容量曲线；100ms是具体合同门槛，文件吞吐与AI完整回答需独立指标。
+待继续完成：删除好友；注册/改密/资料管理；持久化群已读与跨设备未读；好友/会话完整分页及在线订阅；草稿/AI历史持久化；客户端TLS与完整MCP Agent；20k尾延迟、大群、50k联合负载。文件入口1024登录会话、8小时过期、每IP30次/分钟属于当前功能部署限制，不代表50k文件用户容量。
+
+范围 | 归档结果 | 结论
+当前Qt功能 | 原生整链63、私聊31、文件入口37、跨Gateway6、Qt状态19/协议15检查通过 | 小规模真实功能通过；不是容量验收
+后端群历史 | MessageApplication/gRPC集成两个CTest目标通过，新增7例 | 参数/排序/游标/身份/错误传播验证
+历史10k混合 | 10k认证TCP；私聊100条/s、会话页20次/s；主窗口60秒；ACK P99上界57.5/50.9ms，会话页P99 38.293/34.199ms | 历史指定合同通过，不代表当前所有功能
+历史20k混合 | 20k认证TCP；私聊135条/s、会话页20次/s；正确性过；ACK P99上界201ms，会话页155.029ms | 延迟未过，多段等待待按同MID定位
+历史群诊断 | 2/16/65/100人群小样本正确；65/100人尾延迟未过；4–8RPC轮询线程无稳定收益 | 大群性能仍待解决
+50k全部功能 | 未验收 | 不能写成已达极致性能；当前压测暂停
+
+
+========================================================================
+13. 备份覆盖范围：代码有记录，业务数据备份尚未确认
+========================================================================
+已确认：Git提交/增量bundle、每轮源码快照、改动前preimages、原始结果、精确部署身份审计、旧容器保留。
+尚未确认：完整MySQL一致性备份、相应file-data备份、含完整分片/快照链的一致VM备份。本次仅在本任务evidence、guest .local/codex与tinyimx私有根的指定后缀范围搜索，找到7个Git bundle，没有找到.sql.gz/.dump/.backup数据库备份；不能据此断言其它磁盘绝无备份。
+本次CSV是定位索引，不包含消息正文、密码摘要、文件字节或完整数据库内容，不可用来恢复项目。旧容器也不会复制它们共享的MySQL卷。
+业务恢复要一起考虑MySQL事实数据、file-data、文件签名密钥/真实私有配置、必要的队列/协调状态与版本一致性。本次没有额外整库导出或更改已有数据。
+
+
+========================================================================
+14. 如何自己查看账号、群组与文件
+========================================================================
+优先用三个UTF-8索引搜索用户名、群ID、文件ID。账户索引包含ID/用户名/昵称/状态/创建与最后登录；群索引含群主/策略/有效成员数；文件索引含所有者/大小/状态/存储相对键。
+群状态1有效、2解散；文件状态1上传、2校验、3可用、4失败、5取消、6过期、7删除。记录存在不代表可下载，应用仍需检查权限/状态。
+Ubuntu终端可以从容器环境传入已有管理密码，不将值写在命令中。中文必须指定utf8mb4。以下进入只读事务，仅查询指定数据，不执行UPDATE/DELETE。
+
+
+docker exec -it tinyimx-m21-mysql-1 sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot --default-character-set=utf8mb4 "$MYSQL_DATABASE"'
+
+-- mysql控制台内：
+SET SESSION TRANSACTION READ ONLY;
+START TRANSACTION;
+SELECT user_id,username,nickname,status FROM im_users WHERE user_id BETWEEN 750001 AND 750006 ORDER BY user_id;
+SELECT group_id,name,owner_user_id,status FROM im_groups ORDER BY group_id DESC LIMIT 20;
+SELECT file_id,owner_user_id,file_name,total_size,status,storage_key FROM im_files ORDER BY file_id DESC LIMIT 20;
+ROLLBACK;
+账号索引UTF-8：C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\evidence\project-handover-20261007\accounts-index-utf8.csv
+群组索引UTF-8：C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\evidence\project-handover-20261007\groups-index-utf8.csv
+文件索引UTF-8：C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\evidence\project-handover-20261007\files-index-utf8.csv
+
+========================================================================
+15. 本轮整理审计与问题修正
+========================================================================
+
+数据库仅SELECT，密码核对限于6个已知合成账号；全量索引不含密码摘要、消息内容或分享能力。
+新增文件先检查不存在；修改4份已有文档前保存SHA256及前像；guest写入/提交再次核对HEAD与原有改动。
+首次用户前缀JSON聚合查询被数据库拒绝，改派生表，失败脚本/记录保留；无数据写入。
+初始CLI默认latin1导致群名称导出为问号；HEX证明库中中文完整；改utf8mb4重导出并校验。请使用带-utf8后缀的CSV，旧导出保留。
+手册生成器首版未写入文件，因嵌套引号解析失败；修正脚本承载方式，失败状态保留。
+修正删除好友声明、D盘真实下载位置、E盘VM位置。未启停服务、压测、改密码、清缓存、删除/移动数据或影响其它应用。
+本次审计目录：C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\evidence\project-handover-20261007
+文档写入前审计：C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\evidence\project-handover-20261007\documentation-write-audit.json
+索引行数/字节/哈希核验：C:\Users\Administrator\Documents\Codex\2026-10-04\chatgpt-c-vmwarelinux\evidence\project-handover-20261007\utf8-index-receipt.json
+

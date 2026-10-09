@@ -1,0 +1,128 @@
+{
+  "status": "NATIVE_QT6_UI_DESIGN_BUILD_VISUAL_AND_STATE_VALIDATED",
+  "qt": "6.10.2 MinGW 64-bit",
+  "build": "Release",
+  "state_contract": {
+    "backend_requests": 0,
+    "checks": 19,
+    "failures": 0,
+    "results": [
+      {
+        "name": "initial conversations",
+        "pass": true
+      },
+      {
+        "name": "empty message rejected",
+        "pass": true
+      },
+      {
+        "name": "offline message retained",
+        "pass": true
+      },
+      {
+        "name": "offline not sent",
+        "pass": true
+      },
+      {
+        "name": "retry while offline remains failed",
+        "pass": true
+      },
+      {
+        "name": "retry does not duplicate or change cid",
+        "pass": true
+      },
+      {
+        "name": "retry status stored not read",
+        "pass": true
+      },
+      {
+        "name": "muted group denied",
+        "pass": true
+      },
+      {
+        "name": "accept request idempotent",
+        "pass": true
+      },
+      {
+        "name": "reject no new friend",
+        "pass": true
+      },
+      {
+        "name": "empty group rejected",
+        "pass": true
+      },
+      {
+        "name": "created group appears",
+        "pass": true
+      },
+      {
+        "name": "canceled transfer cannot resume",
+        "pass": true
+      },
+      {
+        "name": "ai thinking",
+        "pass": true
+      },
+      {
+        "name": "ai canceled",
+        "pass": true
+      },
+      {
+        "name": "conversation switch retains history",
+        "pass": true
+      },
+      {
+        "name": "draft scoped to conversation",
+        "pass": true
+      },
+      {
+        "name": "draft survives conversation switch",
+        "pass": true
+      },
+      {
+        "name": "disbanded group denies send",
+        "pass": true
+      }
+    ],
+    "status": "PASS"
+  },
+  "native_capture": {
+    "data_mode": "local-demo-no-network",
+    "pages": 8,
+    "qt_version": "6.10.2",
+    "qt_warnings": 0,
+    "status": "QT6_NATIVE_PAGES_CAPTURED",
+    "utc": "2026-10-07T07:48:54Z"
+  },
+  "screenshots": {
+    "ai.png": "22b0c6b37b96667ac228f4142366c3a767acfd9d4e50a3805025dfc9265b5649",
+    "compact.png": "7363e35a3bb8a8091079c73f9df917dc27be0b4f2f4541c2584f3aad6df4ad0b",
+    "contacts.png": "21d277f9fe2f497753079cf9228ca7346d79b4dcb7b17d2677e687bb16b8e04f",
+    "files.png": "6f696264c65d771427aa9bfba7a8efc0a2604e57578126f4f7918936bd1c5864",
+    "groups.png": "3e8c62eacf6ae162bf6b63c30721c13fdb3a9ed549d2cb5320744deeebc19b10",
+    "login.png": "da3d62533b8c24a4496104a8811ed768586995145cdb920d29b77134925731c2",
+    "messages.png": "10a37d6928d31d7e2817dc9bd360ac7e358a3ebd574ba7cc19119de366933798",
+    "settings.png": "e01577176c9dd270d1f787822776ab945d8eaa2e435be905d851d92343276bc9"
+  },
+  "exe_sha256": "e2e08ffd6bc56a8f497a382d5b8e80da0c58b2ce7bc04a4b724a0f082e3b486c",
+  "evidence_relative_to_windows_workspace": "evidence/qt6-ui-20261007-attempt3",
+  "first_build": "evidence/qt6-ui-20261007-attempt1",
+  "preserved_failed_packaging": "evidence/qt6-ui-20261007-attempt2/failed.json",
+  "packaging_warning": "windeployqt cannot find dxcompiler.dll/dxil.dll; existing machine native page capture succeeded. No claim about arbitrary GPU/other-machine deployment. No SDK installation or global changes.",
+  "visual_review": [
+    "chat/title/avatar/inspector reviewed",
+    "contacts/request/profile reviewed",
+    "group bottom operations now visible",
+    "file header and rows aligned",
+    "AI empty state / settings / login reviewed",
+    "compact chat scroll and input remain visible"
+  ],
+  "limits": [
+    "Local synthetic UI prototype; backend_requests=0",
+    "Server login, real file transfer and Ollama/Agent not integrated",
+    "19 state checks do not imply real service or input-method/high-DPI certification",
+    "New implementation does not establish 10k-50k all-feature performance"
+  ],
+  "pressure": "PAUSED_BY_USER",
+  "utc": "2026-10-07T07:52:35.562660+00:00"
+}

@@ -1,0 +1,158 @@
+{
+  "app": {
+    "name": "TinyIMX-Gateway",
+    "env": "dev",
+    "instance_id": "tinyimx-gateway-1"
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 9000,
+    "backlog": 128,
+    "io_thread_count": 2
+  },
+  "logger": {
+    "level": "info",
+    "console": true,
+    "file": "logs/tinyimx.log",
+    "max_file_size_mb": 1,
+    "max_backup_files": 3,
+    "async": false,
+    "flush_each_log": false
+  },
+  "thread_pool": {
+    "worker_threads": 4,
+    "queue_capacity": 1024,
+    "enable_dynamic_resize": false,
+    "min_threads": 2,
+    "max_threads": 8,
+    "queue_full_policy": "block",
+    "scale_up_threshold": 0.75,
+    "scale_down_threshold": 0.2,
+    "manager_thread_interval_ms": 1000,
+    "scale_cooldown_ms": 3000,
+    "worker_idle_timeout_ms": 5000
+  },
+  "business_runtime": {
+    "worker_threads": 4,
+    "max_pending_tasks": 128,
+    "stripe_count": 64,
+    "per_stripe_queue_capacity": 32,
+    "default_deadline_ms": 3000,
+    "shutdown_timeout_ms": 30000
+  },
+  "protocol": {
+    "max_body_size": 1048576,
+    "heartbeat_interval_sec": 30,
+    "heartbeat_timeout_sec": 90
+  },
+  "rpc": {
+    "enable": false,
+    "connect_timeout_ms": 1000,
+    "request_timeout_ms": 3000,
+    "compress": "none",
+    "encrypt": false
+  },
+  "mysql": {
+    "enable": true,
+    "host": "127.0.0.1",
+    "port": 3306,
+    "database": "tinyimx",
+    "user": "tinyimx",
+    "password": "CHANGE_ME",
+    "pool_size": 4
+  },
+  "redis": {
+    "enable": true,
+    "host": "127.0.0.1",
+    "port": 6379,
+    "password": "",
+    "db": 0,
+    "pool_size": 4
+  },
+  "rocketmq": {
+    "enable": false,
+    "endpoint": "127.0.0.1:8081",
+    "message_topic": "tinyimx-message-events",
+    "request_timeout_ms": 3000,
+    "tls": false,
+    "access_key": "",
+    "access_secret": ""
+  },
+  "outbox_relay": {
+    "enable": false,
+    "instance_id": "outbox-relay-1",
+    "batch_size": 32,
+    "worker_threads": 4,
+    "max_inflight": 128,
+    "poll_interval_ms": 100,
+    "lease_ms": 30000,
+    "lease_renew_interval_ms": 5000,
+    "retry_base_ms": 200,
+    "retry_max_ms": 30000,
+    "published_retention_hours": 168,
+    "cleanup_interval_ms": 60000,
+    "cleanup_batch_size": 1000,
+    "shutdown_timeout_ms": 10000
+  },
+  "unread_projection": {
+    "enable": false,
+    "owner": "gateway",
+    "shadow_mode": false,
+    "consumer_group": "tinyimx-unread-projector-v1",
+    "consumer_request_timeout_ms": 30000,
+    "batch_size": 16,
+    "invisible_duration_ms": 30000,
+    "await_duration_ms": 5000,
+    "receive_error_backoff_ms": 500
+  },
+  "gateway_registry": {
+    "enable": true,
+    "lease_ttl_seconds": 15,
+    "heartbeat_interval_seconds": 5,
+    "discovery_refresh_interval_seconds": 3
+  },
+  "zookeeper": {
+    "enable": false,
+    "connect_string": "127.0.0.1:2181",
+    "session_timeout_ms": 10000,
+    "connect_timeout_ms": 5000,
+    "registration_timeout_ms": 15000,
+    "service_root": "/tinyimx/services",
+    "advertise_host": "127.0.0.1",
+    "service_version": "v1"
+  },
+  "service_discovery": {
+    "provider": "static",
+    "initial_sync_timeout_ms": 5000,
+    "snapshot_stale_after_ms": 30000,
+    "retain_last_known_good": true
+  },
+  "observability": {
+    "enable": false,
+    "metrics_enable": true,
+    "traces_enable": false,
+    "otlp_endpoint": "http://127.0.0.1:4317",
+    "metric_export_interval_ms": 5000,
+    "export_timeout_ms": 3000,
+    "shutdown_timeout_ms": 5000,
+    "trace_max_queue_size": 2048,
+    "trace_max_export_batch_size": 512,
+    "trace_schedule_delay_ms": 5000
+  },
+  "mcp": {
+    "enable": false,
+    "endpoint": "http://127.0.0.1:8080/mcp",
+    "timeout_ms": 5000,
+    "listen_host": "127.0.0.1",
+    "listen_port": 8080,
+    "endpoint_path": "/mcp",
+    "io_threads": 1,
+    "worker_threads": 4,
+    "queue_capacity": 128,
+    "max_request_bytes": 1048576,
+    "allowed_origins": [],
+    "auth_token_env": "TINYIMX_MCP_TOKEN",
+    "static_user_id": 1,
+    "static_subject": "tinyimx:mcp:development"
+  }
+}

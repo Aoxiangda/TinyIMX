@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)";cd "$ROOT_DIR";TARGET="${1:?file target required}";STATE="${2:?state dir required}";THREADS="${3:-16}";OPS="${4:-64}";RANGE="${5:-131072}";BUILD="${M21_BUILD_DIR:-$ROOT_DIR/build/linux-release}";STAMP="$(date +%Y%m%d-%H%M%S)";ART="${M21_FILE_STRESS_ARTIFACT_DIR:-$ROOT_DIR/artifacts/m21-file-stress-$STAMP}";mkdir -p "$ART";cmake --build "$BUILD" --target file_download_stress_client -- -j1|tee "$ART/build.log";"$BUILD/file_download_stress_client" "$TARGET" "$STATE" "$THREADS" "$OPS" "$RANGE"|tee "$ART/stress.log";grep -q 'failures=0' "$ART/stress.log";echo M21_FILE_STRESS_GATE=PASS;echo "M21_FILE_STRESS_ARTIFACT_DIR=$ART"

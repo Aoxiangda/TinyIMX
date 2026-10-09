@@ -1,0 +1,501 @@
+#include "common/config/Config.h"
+#include "common/db/MySqlConnectionPool.h"
+#include "common/logging/Logger.h"
+#include "services/eventing/EventCodec.h"
+#include "services/message/application/MessageEventFactory.h"
+#include "services/message/application/MessageApplicationService.h"
+#include "services/message/repository/MessageRepositoryAdapter.h"
+#include "services/outbox/OutboxRepository.h"
+#include "services/repository/MessageRepository.h"
+
+#include <barrier>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <iostream>
+#include <memory>
+#include <string>
+#include <thread>
+#include <vector>
+
+namespace {
+
+constexpr std::uint64_t kUserA = 10001;
+constexpr std::uint64_t kUserB = 10002;
+
+int g_failed = 0;
+
+void Expect(bool condition, const std::string& name) {
+    if (condition) {
+        std::cout << "[PASS] " << name << '\n';
+    } else {
+        std::cerr << "[FAIL] " << name << '\n';
+        ++g_failed;
+    }
+}
+
+std::string UniqueId(const std::string& prefix) {
+    const auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::system_clock::now().time_since_epoch()
+    ).count();
+    return prefix + std::to_string(static_cast<long long>(nanos));
+}
+
+bool QueryScalar(
+    tinyimx::MySqlConnectionPool* pool,
+    const std::string& sql,
+    std::string* value
+) {
+    if (pool == nullptr || value == nullptr) {
+        return false;
+    }
+    auto connection = pool->Acquire();
+    if (!connection) {
+        return false;
+    }
+    tinyimx::MySqlQueryResult result;
+    if (!connection->Query(sql, &result) ||
+        result.rows.size() != 1 || result.rows.front().size() != 1) {
+        return false;
+    }
+    *value = result.rows.front().front();
+    return true;
+}
+
+std::uint64_t EventCount(
+    tinyimx::MySqlConnectionPool* pool,
+    const std::string& event_id
+) {
+    auto connection = pool->Acquire();
+    if (!connection) {
+        return 0;
+    }
+    const std::string sql =
+        "SELECT COUNT(*) FROM im_event_outbox WHERE event_id = '" +
+        connection->EscapeString(event_id) + "'";
+    tinyimx::MySqlQueryResult result;
+    if (!connection->Query(sql, &result) ||
+        result.rows.size() != 1 || result.rows.front().size() != 1) {
+        return 0;
+    }
+    return static_cast<std::uint64_t>(std::stoull(result.rows.front().front()));
+}
+
+std::uint64_t DialogReadEventCount(
+    tinyimx::MySqlConnectionPool* pool,
+    std::uint64_t reader,
+    std::uint64_t peer
+) {
+    auto connection = pool->Acquire();
+    if (!connection) {
+        return 0;
+    }
+    const std::string aggregate = std::to_string(reader) + ":" + std::to_string(peer);
+    const std::string sql =
+        "SELECT COUNT(*) FROM im_event_outbox "
+        "WHERE event_type = 'dialog.read_advanced.v1' "
+        "AND aggregate_id = '" + connection->EscapeString(aggregate) + "'";
+    tinyimx::MySqlQueryResult result;
+    if (!connection->Query(sql, &result) ||
+        result.rows.size() != 1 || result.rows.front().size() != 1) {
+        return 0;
+    }
+    return static_cast<std::uint64_t>(std::stoull(result.rows.front().front()));
+}
+
+std::string EventPayload(
+    tinyimx::MySqlConnectionPool* pool,
+    const std::string& event_id
+) {
+    auto connection = pool->Acquire();
+    if (!connection) {
+        return {};
+    }
+    const std::string sql =
+        "SELECT payload FROM im_event_outbox WHERE event_id = '" +
+        connection->EscapeString(event_id) + "' LIMIT 1";
+    tinyimx::MySqlQueryResult result;
+    if (!connection->Query(sql, &result) ||
+        result.rows.size() != 1 || result.rows.front().size() != 1) {
+        return {};
+    }
+    return result.rows.front().front();
+}
+
+bool OutboxTableExists(tinyimx::MySqlConnectionPool* pool) {
+    std::string value;
+    return QueryScalar(
+        pool,
+        "SELECT COUNT(*) FROM information_schema.tables "
+        "WHERE table_schema = DATABASE() AND table_name = 'im_event_outbox'",
+        &value
+    ) && value == "1";
+}
+
+void TestRecipientConfirmation(
+    tinyimx::MySqlConnectionPool* pool,
+    tinyimx::MessageRepository* repository,
+    tinyimx::message::MessageRepositoryAdapter* adapter
+) {
+    using namespace tinyimx::message;
+    MessageApplicationService app(adapter);
+    auto fresh = [&](const char* prefix) {
+        return adapter->PersistPrivateMessage(kUserA, kUserB, UniqueId(prefix), 1, "owned confirmation fixture");
+    };
+    auto state = [&](std::uint64_t mid, tinyimx::DeliveryStatus expected) {
+        const auto row = repository->FindPrivateMessageById(mid);
+        return row.Found() && row.record.delivery_status == static_cast<std::uint32_t>(expected);
+    };
+    auto update_owned = [&](std::uint64_t mid, unsigned status) {
+        auto lease = pool->Acquire();
+        return lease && lease->Execute("UPDATE im_private_messages SET delivery_status = " +
+            std::to_string(status) + " WHERE message_id = " + std::to_string(mid));
+    };
+    auto select_count = [&]() -> std::optional<std::uint64_t> {
+        auto lease = pool->Acquire(); tinyimx::MySqlQueryResult rows;
+        if (!lease || !lease->Query("SHOW SESSION STATUS LIKE 'Com_select'", &rows) ||
+            rows.rows.size() != 1 || rows.rows[0].size() != 2 || rows.rows[0][0] != "Com_select") return std::nullopt;
+        try { return std::stoull(rows.rows[0][1]); } catch (...) { return std::nullopt; }
+    };
+    const auto pending = fresh("confirm-single-");
+    Expect(pending.Accepted(), "ReceiverConfirm owned pending fixture");
+    Expect(app.ConfirmReceiver(pending.message_id, kUserA).status == MessageApplicationStatus::kPermissionDenied &&
+               state(pending.message_id, tinyimx::DeliveryStatus::kPending),
+           "ReceiverConfirm wrong recipient leaves Pending unchanged");
+    const auto selects_before = pool->Size() == 1 ? select_count() : std::nullopt;
+    const auto first = app.ConfirmReceiver(pending.message_id, kUserB);
+    const auto selects_after = pool->Size() == 1 ? select_count() : std::nullopt;
+    if (pool->Size() == 1) {
+        // Preserve cost evidence without requiring the rejected guarded-update
+        // strategy. The current path intentionally reads/validates first.
+        if (selects_before && selects_after)
+            std::cout << "[OBSERVE] ReceiverConfirm Pending SELECT before="
+                      << *selects_before << " after=" << *selects_after << '\n';
+        else std::cout << "[OBSERVE] ReceiverConfirm Pending SELECT unavailable\n";
+    }
+    Expect(first.Succeeded() && first.affected_rows == 1 &&
+               state(pending.message_id, tinyimx::DeliveryStatus::kReceiverConfirmed),
+           "ReceiverConfirm correct recipient commits once");
+    Expect(pool->AvailableCount() == pool->Size(), "ReceiverConfirm returns its one lease");
+    const auto duplicate = app.ConfirmReceiver(pending.message_id, kUserB);
+    Expect(duplicate.Succeeded() && duplicate.affected_rows == 0, "ReceiverConfirm duplicate is idempotent");
+    Expect(app.ConfirmReceiver(pending.message_id, kUserA).status == MessageApplicationStatus::kPermissionDenied &&
+               state(pending.message_id, tinyimx::DeliveryStatus::kReceiverConfirmed),
+           "ReceiverConfirm wrong owner cannot reuse Confirmed success");
+    const auto read = app.MarkDialogRead(kUserB, kUserA);
+    const auto read_ack = app.ConfirmReceiver(pending.message_id, kUserB);
+    Expect(read.Succeeded() && read_ack.Succeeded() && read_ack.affected_rows == 0 &&
+               state(pending.message_id, tinyimx::DeliveryStatus::kRead),
+           "ReceiverConfirm cannot downgrade Read");
+
+    Expect(app.ConfirmReceiver(pending.message_id, kUserA).status == MessageApplicationStatus::kPermissionDenied &&
+               state(pending.message_id, tinyimx::DeliveryStatus::kRead),
+           "ReceiverConfirm wrong owner cannot reuse Read success");
+    for (unsigned type : {0U, 4U}) {
+        const auto invalid_type = fresh("confirm-invalid-type-");
+        bool changed = false;
+        { auto lease = pool->Acquire(); changed = lease && lease->Execute(
+              "UPDATE im_private_messages SET message_type = " + std::to_string(type) +
+              " WHERE message_id = " + std::to_string(invalid_type.message_id)); }
+        const auto rejected = app.ConfirmReceiver(invalid_type.message_id, kUserB);
+        tinyimx::MySqlQueryResult raw;
+        bool still_pending = false;
+        { auto lease = pool->Acquire(); still_pending = lease && lease->Query(
+              "SELECT delivery_status FROM im_private_messages WHERE message_id = " +
+              std::to_string(invalid_type.message_id), &raw) && raw.rows.size() == 1 &&
+              raw.rows[0].size() == 1 && raw.rows[0][0] == "0"; }
+        Expect(invalid_type.Accepted() && changed && rejected.status == MessageApplicationStatus::kInvalidRecord && still_pending,
+               "ReceiverConfirm invalid message type remains Pending without mutation");
+    }
+
+    const auto failed = fresh("confirm-failed-");
+    Expect(failed.Accepted() && update_owned(failed.message_id, 3) &&
+               app.ConfirmReceiver(failed.message_id, kUserB).status == MessageApplicationStatus::kFailedPrecondition &&
+               state(failed.message_id, tinyimx::DeliveryStatus::kFailed),
+           "ReceiverConfirm rejects owned Failed record without mutation");
+    const auto corrupt = fresh("confirm-invalid-");
+    Expect(corrupt.Accepted() && update_owned(corrupt.message_id, 9) &&
+               app.ConfirmReceiver(corrupt.message_id, kUserB).status == MessageApplicationStatus::kInvalidRecord,
+           "ReceiverConfirm retains full-record invalid status rejection");
+    Expect(app.ConfirmReceiver(0, kUserB).status == MessageApplicationStatus::kInvalidArgument &&
+               app.ConfirmReceiver(pending.message_id, 0).status == MessageApplicationStatus::kInvalidArgument,
+           "ReceiverConfirm invalid identity fast-fails");
+    Expect(app.ConfirmReceiver(UINT64_MAX, kUserB).status == MessageApplicationStatus::kNotFound,
+           "ReceiverConfirm missing message does not update other records");
+    Expect(pool->AvailableCount() == pool->Size(), "ReceiverConfirm terminal paths return every lease");
+
+    const auto concurrent = fresh("confirm-concurrent-");
+    constexpr std::size_t count = 4;
+    std::barrier start(static_cast<std::ptrdiff_t>(count));
+    std::vector<MessageMutationApplicationResult> results(count);
+    std::vector<std::thread> threads;
+    for (std::size_t i = 0; i < count; ++i) threads.emplace_back([&, i] {
+        start.arrive_and_wait(); results[i] = app.ConfirmReceiver(concurrent.message_id, kUserB);
+    });
+    for (auto& thread : threads) thread.join();
+    std::uint64_t affected = 0; bool all_ok = concurrent.Accepted();
+    for (const auto& result : results) { all_ok = all_ok && result.Succeeded(); affected += result.affected_rows; }
+    Expect(all_ok && affected == 1 && state(concurrent.message_id, tinyimx::DeliveryStatus::kReceiverConfirmed),
+           "ReceiverConfirm concurrent retries commit exactly one transition");
+    Expect(pool->AvailableCount() == pool->Size(), "ReceiverConfirm concurrent retries release all slots");
+
+    const auto competing = fresh("confirm-owner-race-");
+    std::barrier owner_start(2);
+    MessageMutationApplicationResult wrong_owner, right_owner;
+    std::thread wrong([&] { owner_start.arrive_and_wait(); wrong_owner = app.ConfirmReceiver(competing.message_id, kUserA); });
+    std::thread right([&] { owner_start.arrive_and_wait(); right_owner = app.ConfirmReceiver(competing.message_id, kUserB); });
+    wrong.join(); right.join();
+    Expect(competing.Accepted() && wrong_owner.status == MessageApplicationStatus::kPermissionDenied &&
+               wrong_owner.affected_rows == 0 && right_owner.Succeeded() && right_owner.affected_rows == 1 &&
+               state(competing.message_id, tinyimx::DeliveryStatus::kReceiverConfirmed),
+           "ReceiverConfirm competing wrong owner cannot perform transition");
+    Expect(pool->AvailableCount() == pool->Size(), "ReceiverConfirm owner race releases every slot");
+
+    const auto racing = fresh("confirm-read-race-");
+    std::barrier race_start(2);
+    MessageMutationApplicationResult confirm_result, read_result;
+    std::thread confirmer([&] { race_start.arrive_and_wait(); confirm_result = app.ConfirmReceiver(racing.message_id, kUserB); });
+    std::thread reader([&] { race_start.arrive_and_wait(); read_result = app.MarkDialogRead(kUserB, kUserA); });
+    confirmer.join(); reader.join();
+    // Read only advances status1. If it runs before Pending confirmation,
+    // status1 is the correct intermediate result; a later Read must reach2.
+    Expect(racing.Accepted() && confirm_result.Succeeded() && read_result.Succeeded() &&
+               (state(racing.message_id, tinyimx::DeliveryStatus::kReceiverConfirmed) ||
+                state(racing.message_id, tinyimx::DeliveryStatus::kRead)),
+           "ReceiverConfirm concurrent Read retains original Pending ordering contract");
+    const auto later_read = app.MarkDialogRead(kUserB, kUserA);
+    const auto later_ack = app.ConfirmReceiver(racing.message_id, kUserB);
+    Expect(later_read.Succeeded() && later_ack.Succeeded() && later_ack.affected_rows == 0 &&
+               state(racing.message_id, tinyimx::DeliveryStatus::kRead),
+           "ReceiverConfirm subsequent Read reaches2 and late ACK cannot downgrade");
+    Expect(pool->AvailableCount() == pool->Size(), "ReceiverConfirm concurrent Read returns all slots");
+}
+
+}  // namespace
+
+int main(int argc, char* argv[]) {
+    std::string config_path = "config/gateway-a.local.json";
+    if (argc >= 2) {
+        config_path = argv[1];
+    }
+
+    tinyimx::Config config;
+    if (!config.LoadFromFile(config_path)) {
+        std::cerr << "[FAIL] config load: " << config.LastError() << '\n';
+        return 1;
+    }
+    if (!config.MySql().enable) {
+        std::cerr << "[FAIL] MySQL must be enabled\n";
+        return 1;
+    }
+    if (!tinyimx::Logger::Instance().Init(config.Logger())) {
+        std::cerr << "[FAIL] logger init\n";
+        return 1;
+    }
+
+    tinyimx::MySqlConnectionPool pool;
+    if (!pool.Initialize(config.MySql())) {
+        std::cerr << "[FAIL] mysql pool init\n";
+        tinyimx::Logger::Instance().Shutdown();
+        return 1;
+    }
+
+    tinyimx::MessageRepository repository(&pool);
+    tinyimx::outbox::OutboxRepository outbox(&pool);
+    tinyimx::message::MessageRepositoryAdapter adapter(
+        &repository,
+        &pool,
+        &outbox
+    );
+
+    std::cout << "========== TinyIMX M16-A Transactional Outbox Integration ==========\n";
+
+    Expect(OutboxTableExists(&pool), "Outbox schema exists");
+
+    // Event contract is intentionally minimal: content and client id are not
+    // required by downstream unread/notification projections.
+    tinyimx::message::MessageView event_probe;
+    event_probe.message_id = 900000001;
+    event_probe.client_message_id = "must-not-leak-client-message-id";
+    event_probe.from_user_id = kUserA;
+    event_probe.to_user_id = kUserB;
+    event_probe.message_type = 1;
+    event_probe.content = "must-not-leak-message-content";
+    event_probe.created_at = "2026-09-08 00:00:00";
+    const auto event_spec = tinyimx::message::MessageEventFactory::MessageCreated(event_probe);
+    const auto encoded = tinyimx::eventing::EventCodec::Encode(event_spec.event);
+    Expect(encoded.success, "EventCodec encodes message.created");
+    Expect(encoded.encoded.find("must-not-leak-message-content") == std::string::npos,
+           "message.created excludes content");
+    Expect(encoded.encoded.find("must-not-leak-client-message-id") == std::string::npos,
+           "message.created excludes client_message_id");
+
+    const std::string created_c = UniqueId("m16a-created-");
+    const std::string created_content =
+        R"({"from":10001,"text":"m16a transactional outbox","to":10002})";
+    const auto created = adapter.PersistPrivateMessage(
+        kUserA, kUserB, created_c, 1, created_content
+    );
+    Expect(created.Completed() &&
+           created.outcome == tinyimx::message::PersistPrivateMessageOutcome::kCreated &&
+           created.message_id != 0,
+           "Created commits durable message");
+
+    const std::string created_event_id =
+        "message.created.v1:" + std::to_string(created.message_id);
+    Expect(EventCount(&pool, created_event_id) == 1,
+           "Created commits exactly one message.created outbox row");
+    Expect(pool.AvailableCount() == pool.Size(),
+           "Created returns its single persistence lease");
+    const std::string created_payload = EventPayload(&pool, created_event_id);
+    Expect(!created_payload.empty(), "Created outbox payload readable");
+    Expect(created_payload.find(created_content) == std::string::npos,
+           "durable outbox payload excludes message content");
+    Expect(created_payload.find(created_c) == std::string::npos,
+           "durable outbox payload excludes client_message_id");
+
+    const auto reused = adapter.PersistPrivateMessage(
+        kUserA, kUserB, created_c, 1, created_content
+    );
+    Expect(reused.Completed() &&
+           reused.outcome == tinyimx::message::PersistPrivateMessageOutcome::kReused &&
+           reused.message_id == created.message_id,
+           "Same C reuses same M");
+    Expect(EventCount(&pool, created_event_id) == 1,
+           "Reused does not duplicate outbox event");
+    Expect(pool.AvailableCount() == pool.Size(),
+           "Precheck reuse returns its lease without opening a transaction");
+
+    const auto conflict = adapter.PersistPrivateMessage(
+        kUserA, kUserB, created_c, 1, created_content + "-conflict"
+    );
+    Expect(conflict.Completed() &&
+           conflict.outcome == tinyimx::message::PersistPrivateMessageOutcome::kIdempotencyConflict &&
+           conflict.message_id == created.message_id,
+           "Same C with different identity conflicts");
+    Expect(EventCount(&pool, created_event_id) == 1,
+           "Conflict does not duplicate outbox event");
+    Expect(pool.AvailableCount() == pool.Size(),
+           "Precheck identity conflict returns its lease");
+
+    // Deterministic UNIQUE-key race: all callers must miss precheck before any
+    // caller is allowed to insert.
+    constexpr std::size_t kThreads = 4;
+    const std::string concurrent_c = UniqueId("m16a-concurrent-");
+    const std::string concurrent_content =
+        R"({"from":10001,"text":"m16a concurrent outbox","to":10002})";
+    auto barrier = std::make_shared<std::barrier<>>(
+        static_cast<std::ptrdiff_t>(kThreads)
+    );
+    adapter.SetTransactionalPreInsertHookForTest([barrier]() {
+        barrier->arrive_and_wait();
+    });
+
+    std::vector<tinyimx::message::MessageRepositoryPersistResult> concurrent(kThreads);
+    std::vector<std::thread> threads;
+    for (std::size_t i = 0; i < kThreads; ++i) {
+        threads.emplace_back([&, i]() {
+            concurrent[i] = adapter.PersistPrivateMessage(
+                kUserA, kUserB, concurrent_c, 1, concurrent_content
+            );
+        });
+    }
+    for (auto& thread : threads) {
+        thread.join();
+    }
+    adapter.SetTransactionalPreInsertHookForTest({});
+
+    std::size_t created_count = 0;
+    std::size_t reused_count = 0;
+    std::uint64_t common_message_id = 0;
+    bool common_id = true;
+    for (const auto& result : concurrent) {
+        if (result.outcome == tinyimx::message::PersistPrivateMessageOutcome::kCreated &&
+            result.Completed()) {
+            ++created_count;
+        } else if (result.outcome == tinyimx::message::PersistPrivateMessageOutcome::kReused &&
+                   result.Completed()) {
+            ++reused_count;
+        }
+        if (common_message_id == 0) {
+            common_message_id = result.message_id;
+        } else if (result.message_id != common_message_id) {
+            common_id = false;
+        }
+    }
+    Expect(created_count == 1, "Concurrent same C has exactly one Created");
+    Expect(reused_count == kThreads - 1, "Concurrent same C reuses all other requests");
+    Expect(common_id && common_message_id != 0, "Concurrent same C converges to one M");
+    Expect(pool.AvailableCount() == pool.Size(),
+           "Concurrent UNIQUE race releases every persistence and recovery lease");
+    Expect(EventCount(
+               &pool,
+               "message.created.v1:" + std::to_string(common_message_id)
+           ) == 1,
+           "Concurrent same C commits exactly one outbox event");
+
+    // Atomicity fault: Outbox failure must roll the newly inserted business row
+    // back instead of returning a durable message without a durable event.
+    const std::string rollback_c = UniqueId("m16a-rollback-");
+    outbox.SetForceInsertFailureForTest(true);
+    const auto rollback_result = adapter.PersistPrivateMessage(
+        kUserA, kUserB, rollback_c, 1,
+        R"({"from":10001,"text":"must rollback","to":10002})"
+    );
+    outbox.SetForceInsertFailureForTest(false);
+    Expect(!rollback_result.Completed(), "Injected outbox failure rejects persistence");
+    const auto rollback_lookup = repository.FindPrivateMessageByClientMessageId(
+        kUserA, rollback_c
+    );
+    Expect(rollback_lookup.Succeeded() && !rollback_lookup.Found(),
+           "Outbox failure rolls back message row");
+
+    // Read transition uses the same UoW rule. First prepare one confirmed row.
+    const std::string read_c = UniqueId("m16a-read-");
+    const auto read_created = adapter.PersistPrivateMessage(
+        kUserA, kUserB, read_c, 1,
+        R"({"from":10001,"text":"read transition","to":10002})"
+    );
+    Expect(read_created.Accepted(), "Read fixture message persisted");
+    const auto confirmed = repository.MarkReceiverConfirmed(read_created.message_id);
+    Expect(confirmed.Succeeded(), "Read fixture advanced to ReceiverConfirmed");
+
+    const std::uint64_t read_events_before = DialogReadEventCount(&pool, kUserB, kUserA);
+    outbox.SetForceInsertFailureForTest(true);
+    const auto read_rollback = adapter.MarkDialogRead(kUserB, kUserA);
+    outbox.SetForceInsertFailureForTest(false);
+    Expect(!read_rollback.Succeeded(), "Injected read outbox failure rejects mutation");
+    const auto after_read_rollback = repository.FindPrivateMessageById(read_created.message_id);
+    Expect(after_read_rollback.Found() &&
+           after_read_rollback.record.delivery_status ==
+               static_cast<std::uint32_t>(tinyimx::DeliveryStatus::kReceiverConfirmed),
+           "Read outbox failure rolls back delivery-state transition");
+    Expect(DialogReadEventCount(&pool, kUserB, kUserA) == read_events_before,
+           "Read outbox failure creates no durable event");
+
+    const auto read_success = adapter.MarkDialogRead(kUserB, kUserA);
+    Expect(read_success.Succeeded() && read_success.affected_rows > 0,
+           "MarkDialogRead commits durable transition");
+    Expect(DialogReadEventCount(&pool, kUserB, kUserA) == read_events_before + 1,
+           "MarkDialogRead commits one dialog.read_advanced event");
+
+    const auto read_retry = adapter.MarkDialogRead(kUserB, kUserA);
+    Expect(read_retry.Succeeded() && read_retry.affected_rows == 0,
+           "MarkDialogRead retry is idempotent");
+    Expect(DialogReadEventCount(&pool, kUserB, kUserA) == read_events_before + 1,
+           "MarkDialogRead retry creates no duplicate event");
+
+    TestRecipientConfirmation(&pool, &repository, &adapter);
+
+    pool.Shutdown();
+    tinyimx::Logger::Instance().Shutdown();
+
+    std::cout << "====================================================================\n";
+    if (g_failed == 0) {
+        std::cout << "[PASS] M16-A Transactional Outbox integration tests\n";
+        return 0;
+    }
+    std::cerr << "[FAIL] M16-A Transactional Outbox integration tests, failed="
+              << g_failed << '\n';
+    return 1;
+}

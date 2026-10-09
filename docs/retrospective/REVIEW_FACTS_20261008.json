@@ -1,0 +1,60 @@
+{
+  "document_kind": "public_product_review",
+  "project": "TinyIMX",
+  "repository": "https://github.com/Aoxiangda/TinyIMX",
+  "scope": "Public source, implemented functions, design boundaries and public documentation only.",
+  "architecture": {
+    "backend": "C++20 / Linux / epoll / Reactor / TCP / TIMX",
+    "gateway": "Two Gateway instances and gRPC business services",
+    "services": [
+      "User",
+      "Social",
+      "Message",
+      "Group",
+      "File"
+    ],
+    "data": [
+      "MySQL",
+      "Redis",
+      "RocketMQ",
+      "transactional Outbox"
+    ],
+    "desktop": "C++17 / Qt6 / QML / Windows",
+    "ai": [
+      "Desktop Ollama streaming",
+      "Independent backend Agent",
+      "Eight read-only MCP tools"
+    ],
+    "observability": [
+      "OpenTelemetry",
+      "Prometheus"
+    ],
+    "deployment": "Docker Compose with optional desktop file/history ingress"
+  },
+  "features": [
+    "Password login, heartbeat, session replacement and per-account window lock",
+    "Friend requests, acceptance, rejection and relationship-based private chat authorization",
+    "Private chat, durable acknowledgment, receiver acknowledgment, retry and offline recovery",
+    "Conversation list, unread projection, private read state and paginated history",
+    "Group creation, membership, invitation, roles, muting, transfer and dissolution",
+    "Group history authorization using current membership and original delivery scope",
+    "Chunked file upload, resume, cancel, retry, SHA-256 verification and authorized download",
+    "Desktop multi-account workflows with isolated transfer tasks",
+    "Ollama streaming, model detection, cancellation and optional loaded conversation context"
+  ],
+  "boundaries": [
+    "Public source distribution does not include runtime databases, private configuration or model weights",
+    "Desktop Ollama and backend MCP are separate integration paths",
+    "Benchmark claims must retain the workload, version and acceptance boundaries in public reports",
+    "Self-service registration, complete desktop TLS and full 20k-50k capacity acceptance remain future work"
+  ],
+  "documentation": {
+    "product": "README.md",
+    "quickstart": "docs/getting-started/QUICKSTART.md",
+    "desktop": "clients/qt6/README.md",
+    "deployment": "deploy/production/README.md",
+    "features": "docs/client/FEATURE_COMPLETION_20261007.md",
+    "performance": "docs/performance/CAPACITY_OPTIMIZATION_AND_ACCEPTANCE_20261007.md"
+  },
+  "privacy": "Raw internal retrospective and audit material is retained locally and is excluded from this public summary."
+}

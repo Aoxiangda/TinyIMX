@@ -1,0 +1,16 @@
+# Optional measured health-probe candidate; baseline compose stays immutable.
+# Same Mode predicate as zkServer.sh status without starting a Java CLI for each
+# probe. srvr is already explicitly whitelisted by the base ZK configuration.
+services:
+  zookeeper:
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          bash -ec 'exec 3<>/dev/tcp/127.0.0.1/2181;
+          printf srvr >&3;
+          cat <&3 | grep -Eq "Mode: (standalone|leader|follower)"'
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s

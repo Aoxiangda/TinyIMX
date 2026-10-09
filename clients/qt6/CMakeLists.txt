@@ -1,0 +1,27 @@
+cmake_minimum_required(VERSION 3.24)
+project(TinyIMXDesktop VERSION 0.3.0 LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Svg Network)
+qt_standard_project_setup(REQUIRES 6.8)
+qt_add_executable(tinyimx_desktop src/main.cpp src/DemoStore.cpp src/DemoStore.h src/TimxCodec.cpp src/TimxCodec.h src/LiveStore.cpp src/LiveStore.h src/LiveGroups.cpp src/LiveAI.cpp src/ClientChecks.cpp src/ClientChecks.h src/FeatureChecks.cpp src/FileTransfers.cpp src/FileTransfers.h src/LiveFiles.cpp)
+qt_add_qml_module(tinyimx_desktop URI TinyIMX.Client VERSION 1.0
+    QML_FILES qml/Main.qml qml/UiButton.qml qml/Avatar.qml qml/Badge.qml
+              qml/ChatPage.qml qml/ContactsPage.qml qml/GroupsPage.qml
+              qml/LiveFilesPage.qml qml/LiveGroupsPage.qml qml/LiveAIPage.qml qml/FilesPage.qml qml/AIPage.qml qml/SettingsPage.qml)
+file(GLOB UI_ICONS CONFIGURE_DEPENDS assets/icons/*.svg)
+qt_add_resources(tinyimx_desktop icons PREFIX "/" BASE assets FILES ${UI_ICONS})
+target_link_libraries(tinyimx_desktop PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Svg Qt6::Network)
+target_compile_definitions(tinyimx_desktop PRIVATE QT_NO_CAST_FROM_ASCII QT_NO_CAST_TO_ASCII)
+if(MSVC)
+    target_compile_options(tinyimx_desktop PRIVATE /utf-8 /W4)
+else()
+    target_compile_options(tinyimx_desktop PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+set_target_properties(tinyimx_desktop PROPERTIES WIN32_EXECUTABLE TRUE)
+enable_testing()
+add_test(NAME desktop_state_contract COMMAND tinyimx_desktop --self-test --self-test-report ${CMAKE_CURRENT_BINARY_DIR}/state-contract.json)
+set_tests_properties(desktop_state_contract PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software")
+
+add_test(NAME desktop_protocol_contract COMMAND tinyimx_desktop --protocol-test --self-test-report ${CMAKE_CURRENT_BINARY_DIR}/protocol-contract.json)
+set_tests_properties(desktop_protocol_contract PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software")

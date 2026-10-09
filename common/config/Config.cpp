@@ -1,0 +1,1230 @@
+#include "common/config/Config.h"
+
+#include <algorithm>
+#include <cctype>
+#include <fstream>
+#include <sstream>
+#include <stdexcept>
+#include <thread>
+
+#include <nlohmann/json.hpp>
+
+namespace tinyimx {
+
+namespace {
+
+using json = nlohmann::json;
+
+bool IsValidLogLevel(const std::string& level) {
+    return level == "trace" ||
+           level == "debug" ||
+           level == "info" ||
+           level == "warn" ||
+           level == "error" ||
+           level == "fatal";
+}
+
+bool IsValidEnv(const std::string& env) {
+    return env == "dev" || env == "test" || env == "prod";
+}
+
+bool IsValidCompressType(const std::string& compress) {
+    return compress == "none" ||
+           compress == "zstd" ||
+           compress == "zlib";
+}
+
+bool IsValidRocketMQTopic(const std::string& topic) {
+    if (topic.empty() || topic.size() > 128) {
+        return false;
+    }
+
+    for (char ch : topic) {
+        const unsigned char value = static_cast<unsigned char>(ch);
+        if (std::isalnum(value) != 0 || ch == '-' || ch == '_') {
+            continue;
+        }
+        return false;
+    }
+
+    return true;
+}
+
+bool IsValidInstanceId(const std::string& instance_id) {
+    if (instance_id.empty() ||
+        instance_id.size() > 64) {
+        return false;
+    }
+
+    for (char ch : instance_id) {
+        const unsigned char value =
+            static_cast<unsigned char>(
+                ch
+            );
+
+        if (std::isalnum(value) != 0) {
+            continue;
+        }
+
+        if (ch == '-' ||
+            ch == '_' ||
+            ch == '.') {
+            continue;
+        }
+
+        return false;
+    }
+
+    return true;
+}
+
+template <typename T>
+void ReadIfExists(const json& section, const char* key, T* output) {
+    if (section.contains(key)) {
+        *output = section.at(key).get<T>();
+    }
+}
+
+}  // namespace
+
+bool Config::LoadFromFile(const std::string& config_path) {
+    Reset();
+    config_path_ = config_path;
+
+    std::ifstream input(config_path);
+    if (!input.is_open()) {
+        return SetError("failed to open config file: " + config_path);
+    }
+
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+
+    return LoadFromString(buffer.str(), config_path);
+}
+
+bool Config::LoadFromString(const std::string& json_content,
+                            const std::string& source_name) {
+    Reset();
+    config_path_ = source_name;
+
+    if (!ApplyJsonConfig(json_content)) {
+        return false;
+    }
+
+    if (!Validate()) {
+        return false;
+    }
+
+    loaded_ = true;
+    return true;
+}
+
+bool Config::IsLoaded() const {
+    return loaded_;
+}
+
+const std::string& Config::LastError() const {
+    return last_error_;
+}
+
+const std::string& Config::ConfigPath() const {
+    return config_path_;
+}
+
+const AppConfig& Config::App() const {
+    return app_;
+}
+
+const ServerConfig& Config::Server() const {
+    return server_;
+}
+
+const LoggerConfig& Config::Logger() const {
+    return logger_;
+}
+
+const ThreadPoolConfig& Config::ThreadPool() const {
+    return thread_pool_;
+}
+
+const BusinessRuntimeConfig& Config::BusinessRuntime() const {
+    return business_runtime_;
+}
+
+const ProtocolConfig& Config::Protocol() const {
+    return protocol_;
+}
+
+const RpcConfig& Config::Rpc() const {
+    return rpc_;
+}
+
+const MySqlConfig& Config::MySql() const {
+    return mysql_;
+}
+
+const RedisConfig& Config::Redis() const {
+    return redis_;
+}
+
+const RocketMQConfig& Config::RocketMQ() const {
+    return rocketmq_;
+}
+
+const OutboxRelayConfig& Config::OutboxRelay() const {
+    return outbox_relay_;
+}
+
+const UnreadProjectionConfig& Config::UnreadProjection() const {
+    return unread_projection_;
+}
+
+const GatewayRegistryConfig& Config::GatewayRegistry() const {
+    return gateway_registry_;
+}
+
+const ZooKeeperConfig& Config::ZooKeeper() const {
+    return zookeeper_;
+}
+
+const ServiceDiscoveryConfig& Config::ServiceDiscovery() const {
+    return service_discovery_;
+}
+
+const McpConfig& Config::Mcp() const {
+    return mcp_;
+}
+
+const ObservabilityConfig& Config::Observability() const {
+    return observability_;
+}
+
+std::string Config::ServerName() const {
+    return app_.name;
+}
+
+std::string Config::ServerHost() const {
+    return server_.host;
+}
+
+uint16_t Config::ServerPort() const {
+    return static_cast<uint16_t>(server_.port);
+}
+
+std::string Config::LogLevel() const {
+    return logger_.level;
+}
+
+std::string Config::LogFile() const {
+    return logger_.file;
+}
+
+bool Config::LogConsole() const {
+    return logger_.console;
+}
+
+int Config::ThreadPoolWorkerThreads() const {
+    return static_cast<int>(thread_pool_.worker_threads);
+}
+
+int Config::ThreadPoolQueueCapacity() const {
+    return static_cast<int>(thread_pool_.queue_capacity);
+}
+
+void Config::Reset() {
+    loaded_ = false;
+    last_error_.clear();
+
+    app_ = AppConfig{};
+    server_ = ServerConfig{};
+    logger_ = LoggerConfig{};
+    thread_pool_ = ThreadPoolConfig{};
+    business_runtime_ = BusinessRuntimeConfig{};
+    protocol_ = ProtocolConfig{};
+    rpc_ = RpcConfig{};
+    mysql_ = MySqlConfig{};
+    redis_ = RedisConfig{};
+    rocketmq_ = RocketMQConfig{};
+    outbox_relay_ = OutboxRelayConfig{};
+    unread_projection_ = UnreadProjectionConfig{};
+    gateway_registry_ = GatewayRegistryConfig{};
+    zookeeper_ = ZooKeeperConfig{};
+    service_discovery_ = ServiceDiscoveryConfig{};
+    mcp_ = McpConfig{};
+    observability_ = ObservabilityConfig{};
+}
+
+bool Config::ApplyJsonConfig(const std::string& json_content) {
+    try {
+        json root = json::parse(json_content);
+        if (root.contains("app")) {
+            const auto& section = root.at("app");
+
+            ReadIfExists(section, "name", &app_.name);
+            ReadIfExists(section, "env", &app_.env);
+            ReadIfExists(section, "instance_id", &app_.instance_id);
+        }
+        if (root.contains("server")) {
+            const auto& section = root.at("server");
+
+            ReadIfExists(section, "host", &server_.host);
+            ReadIfExists(section, "port", &server_.port);
+            ReadIfExists(section, "backlog", &server_.backlog);
+            ReadIfExists(section, "io_thread_count", &server_.io_thread_count);
+        }
+
+        if (root.contains("logger")) {
+            const auto& section = root.at("logger");
+            ReadIfExists(section, "level", &logger_.level);
+            ReadIfExists(section, "console", &logger_.console);
+            ReadIfExists(section, "file", &logger_.file);
+            ReadIfExists(section, "max_file_size_mb", &logger_.max_file_size_mb);
+            ReadIfExists(section, "max_backup_files", &logger_.max_backup_files);
+            ReadIfExists(section, "async", &logger_.async);
+            ReadIfExists(section, "flush_each_log", &logger_.flush_each_log);
+        }
+
+        if (root.contains("thread_pool")) {
+            const auto& section = root.at("thread_pool");
+
+            ReadIfExists(section, "worker_threads", &thread_pool_.worker_threads);
+            ReadIfExists(section, "queue_capacity", &thread_pool_.queue_capacity);
+            ReadIfExists(section, "enable_dynamic_resize",
+                         &thread_pool_.enable_dynamic_resize);
+            ReadIfExists(section, "min_threads", &thread_pool_.min_threads);
+            ReadIfExists(section, "max_threads", &thread_pool_.max_threads);
+
+            std::string policy;
+            ReadIfExists(section, "queue_full_policy", &policy);
+            if (!policy.empty()) { // 读取成功才解析
+                thread_pool_.queue_full_policy = ParseQueueFullPolicy(policy);
+            }
+            ReadIfExists(section, "scale_up_threshold",
+                         &thread_pool_.scale_up_threshold);
+            ReadIfExists(section, "scale_down_threshold",
+                         &thread_pool_.scale_down_threshold);
+            ReadIfExists(section, "manager_thread_interval_ms",
+                         &thread_pool_.manager_thread_interval_ms);
+            ReadIfExists(section, "scale_cooldown_ms",
+                            &thread_pool_.scale_cooldown_ms);
+            ReadIfExists(section, "worker_idle_timeout_ms",
+                            &thread_pool_.worker_idle_timeout_ms);
+
+        }
+
+        /*
+         * M13-C1 backward-compatible migration:
+         * old configs without business_runtime preserve the previous
+         * ThreadPool -> BusinessExecutor bootstrap behavior.
+         */
+        business_runtime_.worker_threads =
+            thread_pool_.worker_threads;
+        business_runtime_.max_pending_tasks =
+            thread_pool_.queue_capacity;
+        business_runtime_.per_stripe_queue_capacity =
+            std::min(
+                business_runtime_.per_stripe_queue_capacity,
+                business_runtime_.max_pending_tasks
+            );
+
+        if (root.contains("business_runtime")) {
+            const auto& section =
+                root.at("business_runtime");
+
+            const bool has_per_stripe_capacity =
+                section.contains(
+                    "per_stripe_queue_capacity"
+                );
+
+            ReadIfExists(
+                section,
+                "worker_threads",
+                &business_runtime_.worker_threads
+            );
+            ReadIfExists(
+                section,
+                "max_pending_tasks",
+                &business_runtime_.max_pending_tasks
+            );
+            ReadIfExists(
+                section,
+                "stripe_count",
+                &business_runtime_.stripe_count
+            );
+            ReadIfExists(
+                section,
+                "per_stripe_queue_capacity",
+                &business_runtime_.per_stripe_queue_capacity
+            );
+            ReadIfExists(
+                section,
+                "default_deadline_ms",
+                &business_runtime_.default_deadline_ms
+            );
+            ReadIfExists(
+                section,
+                "shutdown_timeout_ms",
+                &business_runtime_.shutdown_timeout_ms
+            );
+
+            /*
+             * A partial max_pending override should not accidentally
+             * become invalid only because the inherited/default
+             * per-stripe value is larger. Explicit contradictory values
+             * still fail validation below.
+             */
+            if (
+                !has_per_stripe_capacity &&
+                business_runtime_.per_stripe_queue_capacity >
+                    business_runtime_.max_pending_tasks
+            ) {
+                business_runtime_.per_stripe_queue_capacity =
+                    business_runtime_.max_pending_tasks;
+            }
+        }
+
+        if (root.contains("protocol")) {
+            const auto& section = root.at("protocol");
+            ReadIfExists(section, "max_body_size", &protocol_.max_body_size);
+            ReadIfExists(section, "heartbeat_interval_sec",
+                         &protocol_.heartbeat_interval_sec);
+            ReadIfExists(section, "heartbeat_timeout_sec",
+                         &protocol_.heartbeat_timeout_sec);
+        }
+
+        if (root.contains("rpc")) {
+            const auto& section = root.at("rpc");
+            ReadIfExists(section, "enable", &rpc_.enable);
+            ReadIfExists(section, "connect_timeout_ms", &rpc_.connect_timeout_ms);
+            ReadIfExists(section, "request_timeout_ms", &rpc_.request_timeout_ms);
+            ReadIfExists(section, "compress", &rpc_.compress);
+            ReadIfExists(section, "encrypt", &rpc_.encrypt);
+        }
+
+        if (root.contains("mysql")) {
+            const auto& section = root.at("mysql");
+            ReadIfExists(section, "enable", &mysql_.enable);
+            ReadIfExists(section, "host", &mysql_.host);
+            ReadIfExists(section, "port", &mysql_.port);
+            ReadIfExists(section, "database", &mysql_.database);
+            ReadIfExists(section, "user", &mysql_.user);
+            ReadIfExists(section, "password", &mysql_.password);
+            ReadIfExists(section, "pool_size", &mysql_.pool_size);
+        }
+
+        if (root.contains("redis")) {
+            const auto& section = root.at("redis");
+            ReadIfExists(section, "enable", &redis_.enable);
+            ReadIfExists(section, "host", &redis_.host);
+            ReadIfExists(section, "port", &redis_.port);
+            ReadIfExists(section, "password", &redis_.password);
+            ReadIfExists(section, "db", &redis_.db);
+            ReadIfExists(section, "pool_size", &redis_.pool_size);
+        }
+
+        if (root.contains("rocketmq")) {
+            const auto& section = root.at("rocketmq");
+            ReadIfExists(section, "enable", &rocketmq_.enable);
+            ReadIfExists(section, "endpoint", &rocketmq_.endpoint);
+            ReadIfExists(section, "message_topic", &rocketmq_.message_topic);
+            ReadIfExists(section, "request_timeout_ms", &rocketmq_.request_timeout_ms);
+            ReadIfExists(section, "tls", &rocketmq_.tls);
+            ReadIfExists(section, "access_key", &rocketmq_.access_key);
+            ReadIfExists(section, "access_secret", &rocketmq_.access_secret);
+        }
+
+        if (root.contains("outbox_relay")) {
+            const auto& section = root.at("outbox_relay");
+            ReadIfExists(section, "enable", &outbox_relay_.enable);
+            ReadIfExists(section, "instance_id", &outbox_relay_.instance_id);
+            ReadIfExists(section, "batch_size", &outbox_relay_.batch_size);
+            ReadIfExists(section, "worker_threads", &outbox_relay_.worker_threads);
+            ReadIfExists(section, "max_inflight", &outbox_relay_.max_inflight);
+            ReadIfExists(section, "poll_interval_ms", &outbox_relay_.poll_interval_ms);
+            ReadIfExists(section, "lease_ms", &outbox_relay_.lease_ms);
+            ReadIfExists(section, "lease_renew_interval_ms", &outbox_relay_.lease_renew_interval_ms);
+            ReadIfExists(section, "retry_base_ms", &outbox_relay_.retry_base_ms);
+            ReadIfExists(section, "retry_max_ms", &outbox_relay_.retry_max_ms);
+            ReadIfExists(section, "published_retention_hours", &outbox_relay_.published_retention_hours);
+            ReadIfExists(section, "cleanup_interval_ms", &outbox_relay_.cleanup_interval_ms);
+            ReadIfExists(section, "cleanup_batch_size", &outbox_relay_.cleanup_batch_size);
+            ReadIfExists(section, "shutdown_timeout_ms", &outbox_relay_.shutdown_timeout_ms);
+        }
+
+        if (root.contains("unread_projection")) {
+            const auto& section = root.at("unread_projection");
+            ReadIfExists(section, "enable", &unread_projection_.enable);
+            ReadIfExists(section, "owner", &unread_projection_.owner);
+            ReadIfExists(section, "shadow_mode", &unread_projection_.shadow_mode);
+            ReadIfExists(section, "consumer_group", &unread_projection_.consumer_group);
+            ReadIfExists(
+                section,
+                "consumer_request_timeout_ms",
+                &unread_projection_.consumer_request_timeout_ms
+            );
+            ReadIfExists(section, "batch_size", &unread_projection_.batch_size);
+            ReadIfExists(section, "invisible_duration_ms", &unread_projection_.invisible_duration_ms);
+            ReadIfExists(section, "await_duration_ms", &unread_projection_.await_duration_ms);
+            ReadIfExists(section, "receive_error_backoff_ms", &unread_projection_.receive_error_backoff_ms);
+        }
+
+        if (root.contains("gateway_registry")) {
+            const auto& section =
+                root.at("gateway_registry");
+
+            ReadIfExists(
+                section,
+                "enable",
+                &gateway_registry_.enable
+            );
+            ReadIfExists(
+                section,
+                "advertise_host",
+                &gateway_registry_.advertise_host
+            );
+            ReadIfExists(
+                section,
+                "lease_ttl_seconds",
+                &gateway_registry_.lease_ttl_seconds
+            );
+
+            ReadIfExists(
+                section,
+                "heartbeat_interval_seconds",
+                &gateway_registry_.
+                    heartbeat_interval_seconds
+            );
+
+            ReadIfExists(
+                section,
+                "discovery_refresh_interval_seconds",
+                &gateway_registry_.
+                    discovery_refresh_interval_seconds
+            );
+        }
+
+        if (root.contains("zookeeper")) {
+            const auto& section = root.at("zookeeper");
+            ReadIfExists(section, "enable", &zookeeper_.enable);
+            ReadIfExists(
+                section,
+                "connect_string",
+                &zookeeper_.connect_string
+            );
+            ReadIfExists(
+                section,
+                "session_timeout_ms",
+                &zookeeper_.session_timeout_ms
+            );
+            ReadIfExists(
+                section,
+                "connect_timeout_ms",
+                &zookeeper_.connect_timeout_ms
+            );
+            ReadIfExists(
+                section,
+                "registration_timeout_ms",
+                &zookeeper_.registration_timeout_ms
+            );
+            ReadIfExists(
+                section,
+                "service_root",
+                &zookeeper_.service_root
+            );
+            ReadIfExists(
+                section,
+                "advertise_host",
+                &zookeeper_.advertise_host
+            );
+            ReadIfExists(
+                section,
+                "service_version",
+                &zookeeper_.service_version
+            );
+        }
+
+        if (root.contains("service_discovery")) {
+            const auto& section = root.at("service_discovery");
+            ReadIfExists(
+                section,
+                "provider",
+                &service_discovery_.provider
+            );
+            ReadIfExists(
+                section,
+                "initial_sync_timeout_ms",
+                &service_discovery_.initial_sync_timeout_ms
+            );
+            ReadIfExists(
+                section,
+                "snapshot_stale_after_ms",
+                &service_discovery_.snapshot_stale_after_ms
+            );
+            ReadIfExists(
+                section,
+                "retain_last_known_good",
+                &service_discovery_.retain_last_known_good
+            );
+        }
+
+        if (root.contains("observability")) {
+            const auto& section = root.at("observability");
+            ReadIfExists(section, "enable", &observability_.enable);
+            ReadIfExists(section, "metrics_enable", &observability_.metrics_enable);
+            ReadIfExists(section, "traces_enable", &observability_.traces_enable);
+            ReadIfExists(section, "otlp_endpoint", &observability_.otlp_endpoint);
+            ReadIfExists(section, "metric_export_interval_ms",
+                         &observability_.metric_export_interval_ms);
+            ReadIfExists(section, "export_timeout_ms",
+                         &observability_.export_timeout_ms);
+            ReadIfExists(section, "shutdown_timeout_ms",
+                         &observability_.shutdown_timeout_ms);
+            ReadIfExists(section, "trace_max_queue_size",
+                         &observability_.trace_max_queue_size);
+            ReadIfExists(section, "trace_max_export_batch_size",
+                         &observability_.trace_max_export_batch_size);
+            ReadIfExists(section, "trace_schedule_delay_ms",
+                         &observability_.trace_schedule_delay_ms);
+        }
+
+        if (root.contains("mcp")) {
+            const auto& section = root.at("mcp");
+            ReadIfExists(section, "enable", &mcp_.enable);
+            ReadIfExists(section, "endpoint", &mcp_.endpoint);
+            ReadIfExists(section, "timeout_ms", &mcp_.timeout_ms);
+            ReadIfExists(section, "listen_host", &mcp_.listen_host);
+            ReadIfExists(section, "listen_port", &mcp_.listen_port);
+            ReadIfExists(section, "endpoint_path", &mcp_.endpoint_path);
+            ReadIfExists(section, "io_threads", &mcp_.io_threads);
+            ReadIfExists(section, "worker_threads", &mcp_.worker_threads);
+            ReadIfExists(section, "queue_capacity", &mcp_.queue_capacity);
+            ReadIfExists(section, "max_request_bytes", &mcp_.max_request_bytes);
+            ReadIfExists(section, "auth_token_env", &mcp_.auth_token_env);
+            ReadIfExists(section, "static_user_id", &mcp_.static_user_id);
+            ReadIfExists(section, "static_subject", &mcp_.static_subject);
+            if (section.contains("allowed_origins")) {
+                mcp_.allowed_origins = section.at("allowed_origins").get<std::vector<std::string>>();
+            }
+        }
+
+        return true;
+
+
+    } catch (const json::parse_error& e) {
+        return SetError("json parse error: " + std::string(e.what()));
+    } catch (const json::type_error& e) {
+        return SetError("json type error: " + std::string(e.what()));
+    } catch (const json::out_of_range& e) {
+        return SetError("json missing field error: " + std::string(e.what()));
+    } catch (const std::exception& e) {
+        return SetError("config load error: " + std::string(e.what()));
+    }
+}
+
+bool Config::Validate() {
+    if (app_.name.empty()) {
+        return SetError("app.name cannot be empty");
+    }
+
+    if (!IsValidEnv(app_.env)) {
+        return SetError("app.env must be one of: dev, test, prod");
+    }
+
+    if (!IsValidInstanceId(app_.instance_id)) {
+        return SetError("app.instance_id must be 1-64 characters and contain "
+            "only letters, digits, '-', "
+            "'_' or '.'");
+    }
+
+    if (server_.host.empty()) {
+        return SetError("server.host cannot be empty");
+    }
+
+    if (server_.port <= 0 || server_.port > 65535) {
+        return SetError("server.port must be in range 1-65535");
+    }
+
+    if (server_.backlog <= 0) {
+        return SetError("server.backlog must be greater than 0");
+    }
+
+    if (server_.io_thread_count < 0) {
+        return SetError("server.io_thread_count cannot be negative");
+    }
+
+    if (!IsValidLogLevel(logger_.level)) {
+        return SetError("logger.level must be one of: trace, debug, info, warn, error, fatal");
+    }
+
+    if (logger_.file.empty()) {
+        return SetError("logger.file cannot be empty");
+    }
+
+    if (logger_.max_file_size_mb <= 0) {
+        return SetError("logger.max_file_size_mb must be greater than 0");
+    }
+
+    if (logger_.max_backup_files < 0) {
+        return SetError("logger.max_backup_files cannot be negative");
+    }
+
+    if (thread_pool_.worker_threads == 0) {
+        return SetError("thread_pool.worker_threads must be greater than 0");
+    }
+
+    if (thread_pool_.queue_capacity == 0) {
+        return SetError("thread_pool.queue_capacity must be greater than 0");
+    }
+
+    if (thread_pool_.min_threads == 0) {
+        return SetError("thread_pool.min_threads must be greater than 0");
+    }
+
+    if (thread_pool_.max_threads == 0) {
+        return SetError("thread_pool.max_threads must be greater than 0");
+    }
+
+    if (thread_pool_.max_threads < thread_pool_.min_threads) {
+        return SetError(
+            "thread_pool.max_threads must be greater than or equal to min_threads"
+        );
+    }
+
+    if (thread_pool_.enable_dynamic_resize) {
+        if (thread_pool_.worker_threads < thread_pool_.min_threads ||
+            thread_pool_.worker_threads > thread_pool_.max_threads) {
+            return SetError(
+                "thread_pool.worker_threads must be between min_threads and max_threads when dynamic resize is enabled"
+            );
+        }
+    }
+
+    if (thread_pool_.scale_up_threshold <= 0.0 ||
+        thread_pool_.scale_up_threshold > 1.0) {
+        return SetError("thread_pool.scale_up_threshold must be in (0, 1]");
+    }
+
+    if (thread_pool_.scale_down_threshold < 0.0 ||
+        thread_pool_.scale_down_threshold >= 1.0) {
+        return SetError("thread_pool.scale_down_threshold must be in [0, 1)");
+    }
+
+    if (thread_pool_.scale_down_threshold >=
+        thread_pool_.scale_up_threshold) {
+        return SetError(
+            "thread_pool.scale_down_threshold must be less than scale_up_threshold"
+        );
+    }
+
+    if (thread_pool_.manager_thread_interval_ms <= 0) {
+        return SetError(
+            "thread_pool.manager_check_interval_ms must be greater than 0"
+        );
+    }
+
+    if (thread_pool_.scale_cooldown_ms < 0) {
+        return SetError("thread_pool.scale_cooldown_ms cannot be negative");
+    }
+
+    if (thread_pool_.worker_idle_timeout_ms <= 0) {
+        return SetError(
+            "thread_pool.worker_idle_timeout_ms must be greater than 0"
+        );
+    }
+
+    if (business_runtime_.worker_threads == 0) {
+        return SetError(
+            "business_runtime.worker_threads must be greater than 0"
+        );
+    }
+
+    if (business_runtime_.max_pending_tasks == 0) {
+        return SetError(
+            "business_runtime.max_pending_tasks must be greater than 0"
+        );
+    }
+
+    if (business_runtime_.stripe_count == 0) {
+        return SetError(
+            "business_runtime.stripe_count must be greater than 0"
+        );
+    }
+
+    if (business_runtime_.per_stripe_queue_capacity == 0) {
+        return SetError(
+            "business_runtime.per_stripe_queue_capacity "
+            "must be greater than 0"
+        );
+    }
+
+    if (
+        business_runtime_.per_stripe_queue_capacity >
+        business_runtime_.max_pending_tasks
+    ) {
+        return SetError(
+            "business_runtime.per_stripe_queue_capacity "
+            "must not exceed max_pending_tasks"
+        );
+    }
+
+    if (business_runtime_.default_deadline_ms <= 0) {
+        return SetError(
+            "business_runtime.default_deadline_ms "
+            "must be greater than 0"
+        );
+    }
+
+    if (business_runtime_.shutdown_timeout_ms <= 0) {
+        return SetError(
+            "business_runtime.shutdown_timeout_ms "
+            "must be greater than 0"
+        );
+    }
+
+    if (protocol_.max_body_size == 0) {
+        return SetError("protocol.max_body_size must be greater than 0");
+    }
+
+    if (protocol_.heartbeat_interval_sec <= 0) {
+        return SetError("protocol.heartbeat_interval_sec must be greater than 0");
+    }
+
+    if (protocol_.heartbeat_timeout_sec <= protocol_.heartbeat_interval_sec) {
+        return SetError("protocol.heartbeat_timeout_sec must be greater than heartbeat_interval_sec");
+    }
+
+    if (rpc_.connect_timeout_ms <= 0) {
+        return SetError("rpc.connect_timeout_ms must be greater than 0");
+    }
+
+    if (rpc_.request_timeout_ms <= 0) {
+        return SetError("rpc.request_timeout_ms must be greater than 0");
+    }
+
+    if (!IsValidCompressType(rpc_.compress)) {
+        return SetError("rpc.compress must be one of: none, zstd, zlib");
+    }
+
+    if (mysql_.enable) {
+        if (mysql_.host.empty()) {
+            return SetError("mysql.host cannot be empty when mysql.enable=true");
+        }
+
+        if (mysql_.port <= 0 || mysql_.port > 65535) {
+            return SetError("mysql.port must be in range 1-65535");
+        }
+
+        if (mysql_.database.empty()) {
+            return SetError("mysql.database cannot be empty when mysql.enable=true");
+        }
+
+        if (mysql_.user.empty()) {
+            return SetError("mysql.user cannot be empty when mysql.enable=true");
+        }
+
+        if (mysql_.pool_size <= 0) {
+            return SetError("mysql.pool_size must be greater than 0");
+        }
+    }
+
+    if (redis_.enable) {
+        if (redis_.host.empty()) {
+            return SetError("redis.host cannot be empty when redis.enable=true");
+        }
+
+        if (redis_.port <= 0 || redis_.port > 65535) {
+            return SetError("redis.port must be in range 1-65535");
+        }
+
+        if (redis_.db < 0) {
+            return SetError("redis.db cannot be negative");
+        }
+
+        if (redis_.pool_size <= 0) {
+            return SetError("redis.pool_size must be greater than 0");
+        }
+    }
+
+    if (rocketmq_.enable) {
+        if (rocketmq_.endpoint.empty()) {
+            return SetError("rocketmq.endpoint cannot be empty when rocketmq.enable=true");
+        }
+        if (!IsValidRocketMQTopic(rocketmq_.message_topic)) {
+            return SetError(
+                "rocketmq.message_topic must be 1-128 characters using only [A-Za-z0-9_-]"
+            );
+        }
+        if (rocketmq_.request_timeout_ms <= 0) {
+            return SetError("rocketmq.request_timeout_ms must be greater than 0");
+        }
+        if (rocketmq_.access_key.empty() != rocketmq_.access_secret.empty()) {
+            return SetError("rocketmq access_key and access_secret must be configured together");
+        }
+    }
+
+    if (outbox_relay_.enable) {
+        if (!mysql_.enable) {
+            return SetError("outbox_relay requires mysql.enable=true");
+        }
+        if (!rocketmq_.enable) {
+            return SetError("outbox_relay requires rocketmq.enable=true");
+        }
+        if (!IsValidInstanceId(outbox_relay_.instance_id)) {
+            return SetError("outbox_relay.instance_id is invalid");
+        }
+        if (outbox_relay_.batch_size == 0 || outbox_relay_.batch_size > 1024) {
+            return SetError("outbox_relay.batch_size must be in range 1-1024");
+        }
+        if (outbox_relay_.worker_threads == 0 || outbox_relay_.worker_threads > 64) {
+            return SetError("outbox_relay.worker_threads must be in range 1-64");
+        }
+        if (outbox_relay_.max_inflight < outbox_relay_.batch_size ||
+            outbox_relay_.max_inflight < outbox_relay_.worker_threads ||
+            outbox_relay_.max_inflight > 8192) {
+            return SetError("outbox_relay.max_inflight must cover batch/workers and not exceed 8192");
+        }
+        if (outbox_relay_.poll_interval_ms <= 0 || outbox_relay_.lease_ms <= 0 ||
+            outbox_relay_.lease_renew_interval_ms <= 0 ||
+            outbox_relay_.lease_renew_interval_ms * 3 >= outbox_relay_.lease_ms) {
+            return SetError("outbox_relay lease/poll timing is invalid");
+        }
+        if (outbox_relay_.retry_base_ms <= 0 ||
+            outbox_relay_.retry_max_ms < outbox_relay_.retry_base_ms) {
+            return SetError("outbox_relay retry timing is invalid");
+        }
+        if (outbox_relay_.published_retention_hours <= 0 ||
+            outbox_relay_.cleanup_interval_ms <= 0 ||
+            outbox_relay_.cleanup_batch_size == 0 ||
+            outbox_relay_.shutdown_timeout_ms <= 0) {
+            return SetError("outbox_relay cleanup/shutdown configuration is invalid");
+        }
+    }
+
+    if (unread_projection_.owner != "gateway" &&
+        unread_projection_.owner != "projector") {
+        return SetError("unread_projection.owner must be one of: gateway, projector");
+    }
+    if (unread_projection_.shadow_mode && unread_projection_.owner != "gateway") {
+        return SetError("unread_projection.shadow_mode requires owner=gateway");
+    }
+    if (unread_projection_.owner == "projector" && !unread_projection_.enable) {
+        return SetError("unread_projection.enable must be true when owner=projector");
+    }
+    if (unread_projection_.enable) {
+        if (!mysql_.enable || !redis_.enable || !rocketmq_.enable) {
+            return SetError("unread_projection requires mysql, redis and rocketmq enabled");
+        }
+        if (unread_projection_.consumer_group.empty() ||
+            unread_projection_.consumer_group.size() > 128) {
+            return SetError("unread_projection.consumer_group is invalid");
+        }
+        if (unread_projection_.batch_size == 0 || unread_projection_.batch_size > 256) {
+            return SetError("unread_projection.batch_size must be in range 1-256");
+        }
+        /*
+         * RocketMQ SimpleConsumer requires an invisibility window of
+         * at least 10 seconds. Reject invalid configurations before
+         * they reach Receive() and fail at the broker/proxy boundary.
+         */
+        if (unread_projection_.invisible_duration_ms < 10000) {
+            return SetError(
+                "unread_projection.invisible_duration_ms "
+                "must be at least 10000"
+            );
+        }
+
+        if (unread_projection_.consumer_request_timeout_ms <= 0 ||
+            unread_projection_.await_duration_ms <= 0 ||
+            unread_projection_.receive_error_backoff_ms <= 0) {
+            return SetError(
+                "unread_projection await/backoff timing values "
+                "must be positive"
+            );
+        }
+    }
+
+    if (gateway_registry_.enable) {
+        if (!redis_.enable) {
+            return SetError(
+                "gateway_registry requires "
+                "redis.enable=true"
+            );
+        }
+
+        if (
+            gateway_registry_.
+                advertise_host.empty()
+        ) {
+            return SetError(
+                "gateway_registry."
+                "advertise_host cannot be empty "
+                "when gateway_registry.enable=true"
+            );
+        }
+
+        if (
+            gateway_registry_.
+                advertise_host == "0.0.0.0" ||
+            gateway_registry_.
+                advertise_host == "::"
+        ) {
+            return SetError(
+                "gateway_registry."
+                "advertise_host cannot be "
+                "a wildcard listen address"
+            );
+        }
+
+        if (
+            gateway_registry_.
+                lease_ttl_seconds < 3 ||
+            gateway_registry_.
+                lease_ttl_seconds > 300
+        ) {
+            return SetError(
+                "gateway_registry."
+                "lease_ttl_seconds "
+                "must be in range 3-300"
+            );
+        }
+
+        if (
+            gateway_registry_.
+                heartbeat_interval_seconds <
+                1 ||
+            gateway_registry_.
+                heartbeat_interval_seconds >
+                60
+        ) {
+            return SetError(
+                "gateway_registry."
+                "heartbeat_interval_seconds "
+                "must be in range 1-60"
+            );
+        }
+
+        if (
+            gateway_registry_.
+                discovery_refresh_interval_seconds < 1 ||
+            gateway_registry_.
+                discovery_refresh_interval_seconds > 60
+        ) {
+            return SetError(
+                "gateway_registry."
+                "discovery_refresh_interval_seconds "
+                "must be in range 1-60"
+            );
+        }
+
+        if (
+            gateway_registry_.
+                lease_ttl_seconds <
+            gateway_registry_.
+                heartbeat_interval_seconds *
+                3
+        ) {
+            return SetError(
+                "gateway_registry."
+                "lease_ttl_seconds "
+                "must be at least 3 times "
+                "heartbeat_interval_seconds"
+            );
+        }
+    }
+    if (zookeeper_.enable) {
+        if (zookeeper_.connect_string.empty()) {
+            return SetError(
+                "zookeeper.connect_string cannot be empty "
+                "when zookeeper.enable=true"
+            );
+        }
+
+        if (zookeeper_.session_timeout_ms <= 0) {
+            return SetError(
+                "zookeeper.session_timeout_ms must be greater than 0"
+            );
+        }
+
+        if (zookeeper_.connect_timeout_ms <= 0) {
+            return SetError(
+                "zookeeper.connect_timeout_ms must be greater than 0"
+            );
+        }
+
+        if (zookeeper_.registration_timeout_ms <= 0) {
+            return SetError(
+                "zookeeper.registration_timeout_ms must be greater than 0"
+            );
+        }
+
+        if (
+            zookeeper_.service_root.empty() ||
+            zookeeper_.service_root.front() != '/' ||
+            zookeeper_.service_root == "/" ||
+            zookeeper_.service_root.back() == '/' ||
+            zookeeper_.service_root.find("//") != std::string::npos
+        ) {
+            return SetError(
+                "zookeeper.service_root must be an absolute, non-root "
+                "path without a trailing or duplicate slash"
+            );
+        }
+
+        if (zookeeper_.advertise_host.empty()) {
+            return SetError(
+                "zookeeper.advertise_host cannot be empty "
+                "when zookeeper.enable=true"
+            );
+        }
+
+        if (zookeeper_.advertise_host == "0.0.0.0" ||
+            zookeeper_.advertise_host == "::") {
+            return SetError(
+                "zookeeper.advertise_host cannot be a wildcard "
+                "listen address"
+            );
+        }
+
+        if (zookeeper_.service_version.empty()) {
+            return SetError(
+                "zookeeper.service_version cannot be empty "
+                "when zookeeper.enable=true"
+            );
+        }
+    }
+
+    if (service_discovery_.provider != "static" &&
+        service_discovery_.provider != "zookeeper") {
+        return SetError(
+            "service_discovery.provider must be one of: static, zookeeper"
+        );
+    }
+
+    if (service_discovery_.initial_sync_timeout_ms <= 0) {
+        return SetError(
+            "service_discovery.initial_sync_timeout_ms must be greater than 0"
+        );
+    }
+
+    if (service_discovery_.snapshot_stale_after_ms <= 0) {
+        return SetError(
+            "service_discovery.snapshot_stale_after_ms must be greater than 0"
+        );
+    }
+
+    if (service_discovery_.provider == "zookeeper" && !zookeeper_.enable) {
+        return SetError(
+            "zookeeper.enable must be true when service_discovery.provider=zookeeper"
+        );
+    }
+
+    if (observability_.enable) {
+        if (!observability_.metrics_enable && !observability_.traces_enable) {
+            return SetError(
+                "observability requires metrics_enable or traces_enable when enabled"
+            );
+        }
+
+        if (observability_.otlp_endpoint.empty()) {
+            return SetError(
+                "observability.otlp_endpoint cannot be empty when observability.enable=true"
+            );
+        }
+
+        if (observability_.metric_export_interval_ms <= 0 ||
+            observability_.export_timeout_ms <= 0 ||
+            observability_.shutdown_timeout_ms <= 0 ||
+            observability_.trace_schedule_delay_ms <= 0) {
+            return SetError(
+                "observability export/shutdown timing values must be positive"
+            );
+        }
+
+        if (observability_.trace_max_queue_size == 0 ||
+            observability_.trace_max_export_batch_size == 0 ||
+            observability_.trace_max_export_batch_size >
+                observability_.trace_max_queue_size) {
+            return SetError(
+                "observability trace queue/batch limits are invalid"
+            );
+        }
+    }
+
+    if (mcp_.enable) {
+        if (mcp_.endpoint.empty()) {
+            return SetError("mcp.endpoint cannot be empty when mcp.enable=true");
+        }
+
+        if (mcp_.timeout_ms <= 0) {
+            return SetError("mcp.timeout_ms must be greater than 0");
+        }
+
+        if (mcp_.listen_host.empty() || mcp_.listen_port == 0) {
+            return SetError("mcp.listen_host/listen_port must be valid when mcp.enable=true");
+        }
+
+        if (mcp_.endpoint_path.empty() || mcp_.endpoint_path.front() != '/') {
+            return SetError("mcp.endpoint_path must start with '/'");
+        }
+
+        if (mcp_.worker_threads == 0 || mcp_.queue_capacity == 0 ||
+            mcp_.max_request_bytes < 1024) {
+            return SetError("mcp worker/queue/request limits must be positive");
+        }
+
+        if (mcp_.auth_token_env.empty() || mcp_.static_subject.empty()) {
+            return SetError("mcp auth_token_env/static_subject cannot be empty");
+        }
+    }
+
+    unsigned int hardware_threads = std::thread::hardware_concurrency();
+    if (hardware_threads > 0 &&
+        thread_pool_.worker_threads > static_cast<std::size_t>(hardware_threads * 4)) {
+        return SetError("thread_pool.worker_threads is too large for current hardware");
+    }
+    if (hardware_threads > 0 && server_.io_thread_count >
+            static_cast<int>( hardware_threads * 4)) {
+        return SetError("server.io_thread_count is too large for current hardware");
+    }
+    return true;
+}
+
+bool Config::SetError(const std::string& message) {
+    last_error_ = message;
+    loaded_ = false;
+    return false;
+}
+
+QueueFullPolicy Config::ParseQueueFullPolicy(const std::string& policy) {
+    if (policy == "block" || policy == "BLOCK") {
+        return QueueFullPolicy::kBlock;
+    }
+
+    if (policy == "discard" || policy == "DISCARD") {
+        return QueueFullPolicy::kDiscard;
+    }
+
+    if (policy == "overwrite" || policy == "OVERWRITE") {
+        return QueueFullPolicy::kOverwrite;
+    }
+
+    throw std::invalid_argument(
+        "invalid queue_full_policy: " + policy +
+        ", valid values: block, discard, overwrite"
+    );
+}
+
+std::string Config::QueueFullPolicyToString(QueueFullPolicy policy) {
+    switch (policy) {
+        case QueueFullPolicy::kBlock:
+            return "block";
+        case QueueFullPolicy::kDiscard:
+            return "discard";
+        case QueueFullPolicy::kOverwrite:
+            return "overwrite";
+        default:
+            return "unknown";
+    }
+}
+
+}  // namespace tinyimx

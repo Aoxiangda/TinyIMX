@@ -1,0 +1,63 @@
+{
+  "status": "VERIFIED_RESUME_CLAIMS_AND_PENDING_CAPACITY_TARGETS",
+  "measured_head": "3e504a77a48aea926719ccb1b2666c0ebe70e4f4",
+  "hardware": {
+    "vm_vcpu": 8,
+    "vm_ram_approximately_gib": 16
+  },
+  "accepted_10k": {
+    "authenticated_connections": 10000,
+    "private_per_second": 100,
+    "conversation_pages_per_second": 20,
+    "items_per_page": 50,
+    "main_steady_seconds": 60,
+    "private_ack_p99_upper_bin_ms": [
+      57.5,
+      50.9
+    ],
+    "list_p99_ms": [
+      38.29333,
+      34.198594
+    ],
+    "two_member_group_per_second": 2,
+    "formal_group_samples_per_case": 60,
+    "claims_are_scoped_not_all_features_capacity": true
+  },
+  "unread_batch_separate_experiment": {
+    "network_commands_50_items_before": 100,
+    "after": 2,
+    "server_get_count_unchanged": 50,
+    "conservative_list_p99_gain_percent": 80.45552689076712,
+    "calculation": {
+      "fastest_off_p99_ms": 232.961,
+      "slowest_on_p99_ms": 45.531
+    }
+  },
+  "failed_20k": {
+    "authenticated_connections": 20000,
+    "private_per_second": 135,
+    "conversation_pages_per_second": 20,
+    "private_ack_p99_upper_bin_ms": 201.0,
+    "list_p99_ms": 155.028951,
+    "status": "LATENCY_FAIL_CORRECTNESS_PASS"
+  },
+  "rejected_poller_candidate": {
+    "profile_min_max": [
+      4,
+      8
+    ],
+    "accepted": false
+  },
+  "50k_all_features_accepted": false,
+  "new_load_or_product_changes_this_turn": false,
+  "source_sha256": {
+    "source/docs/performance/CURRENT_PERFORMANCE_ASSESSMENT_20261006.md": "b5db8822d18781b9e9ca715ee6d09fd702d9c1edbbd760883cfb383f86d6ed0c",
+    "source/docs/performance/CONVERSATION_UNREAD_BATCH_RESULT_20261006.md": "84f58f748dd6a31e4ec8243c605540d4b741571f5ea2a712a3b5b46be8c98315",
+    "evidence/conversation-unread-batch-20261006/group-fanout-wake-mixed10k-summary.json": "6c025155d49781e87941d5e78102fbdcc855605ffb254fe7498b002ce346d1ca",
+    "evidence/conversation-unread-batch-20261006/mixed20k-analysis-summary.json": "6fa0fd9b13ffcbe4d9d0e007e0d10e5be3a72b9bb669efb5f3a84d24faf6dca5",
+    "evidence/conversation-unread-batch-20261006/message-rpc-pollers-analysis-20261007-summary.json": "f1b3cbd2b7c99b1b9401db214d0030ef8e9e1ae127b6411799b4272eb15fbfe6",
+    "source/gateway/GatewayServer.cpp": "1f9a9439cafbc9bb51bae789974d98afd72628d5769bc27c9b9539c0d2a1c861",
+    "source/gateway/business/BusinessExecutor.cpp": "3b707e2e5a63cd7671a92c977ea75fc7fcaad29de1c90e92e41bcb8f9017cb22",
+    "source/common/logging/Logger.cpp": "49e91df2a2ea2f3e1e5fdfc5b8de07ea1209bed61223ea13c9b5d448f1e7632e"
+  }
+}

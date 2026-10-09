@@ -1,0 +1,445 @@
+name: ${COMPOSE_PROJECT_NAME:-tinyimx-m21}
+
+services:
+  mysql:
+    image: mysql:8.0.40
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${TINYIMX_MYSQL_DATABASE:-tinyimx}
+      MYSQL_USER: ${TINYIMX_MYSQL_USER:-tinyimx}
+      MYSQL_PASSWORD: ${TINYIMX_MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${TINYIMX_MYSQL_ROOT_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ../../common/db/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+      - ../../db/migrations/009_create_file_domain.sql:/docker-entrypoint-initdb.d/009-create-file-domain.sql:ro
+      - ../../db/migrations/010_create_file_upload_chunks.sql:/docker-entrypoint-initdb.d/010-create-file-upload-chunks.sql:ro
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+
+  redis:
+    image: redis:7.4.11-alpine
+    restart: unless-stopped
+    environment:
+      TINYIMX_REDIS_PASSWORD: ${TINYIMX_REDIS_PASSWORD}
+    command: ["sh", "-ec", "exec redis-server --appendonly yes --requirepass \"$$TINYIMX_REDIS_PASSWORD\""]
+    volumes:
+      - redis-data:/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$TINYIMX_REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  zookeeper:
+    image: zookeeper:3.8.5
+    restart: unless-stopped
+    environment:
+      ZOO_4LW_COMMANDS_WHITELIST: ruok,stat,srvr,mntr
+    volumes:
+      - zookeeper-data:/data
+      - zookeeper-datalog:/datalog
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "zkServer.sh status 2>/dev/null | grep -Eq 'Mode: (standalone|leader|follower)'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  rocketmq-namesrv:
+    image: apache/rocketmq:5.5.0
+    restart: unless-stopped
+    command: sh mqnamesrv
+    networks: [backend]
+
+  rocketmq-broker:
+    image: apache/rocketmq:5.5.0
+    restart: unless-stopped
+    environment:
+      NAMESRV_ADDR: rocketmq-namesrv:9876
+    command: sh mqbroker -c /home/rocketmq/broker.conf
+    volumes:
+      - ./rocketmq/broker.conf:/home/rocketmq/broker.conf:ro
+      - rocketmq-store:/home/rocketmq/store
+      - rocketmq-logs:/home/rocketmq/logs
+    networks: [backend]
+    depends_on:
+      rocketmq-namesrv:
+        condition: service_started
+
+  rocketmq-proxy:
+    image: apache/rocketmq:5.5.0
+    restart: unless-stopped
+    environment:
+      NAMESRV_ADDR: rocketmq-namesrv:9876
+    command: sh mqproxy
+    networks: [backend]
+    depends_on:
+      rocketmq-namesrv:
+        condition: service_started
+      rocketmq-broker:
+        condition: service_started
+
+  rocketmq-init:
+    image: apache/rocketmq:5.5.0
+    restart: "no"
+    environment:
+      NAMESRV_ADDR: rocketmq-namesrv:9876
+      TINYIMX_ROCKETMQ_TOPIC: ${TINYIMX_ROCKETMQ_TOPIC:-tinyimx-message-events}
+    command:
+      - bash
+      - -ec
+      - |
+        for i in $$(seq 1 60); do
+          if sh mqadmin updateTopic \
+              -n "$$NAMESRV_ADDR" \
+              -c DefaultCluster \
+              -t "$$TINYIMX_ROCKETMQ_TOPIC"; then
+            echo "topic-ready=$$TINYIMX_ROCKETMQ_TOPIC"
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "topic initialization timed out" >&2
+        exit 1
+    networks: [backend]
+    depends_on:
+      rocketmq-proxy:
+        condition: service_started
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.161.0
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "127.0.0.1:${TINYIMX_COLLECTOR_HEALTH_PORT:-13133}:13133"
+    networks: [backend]
+
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus-rules.yml:/etc/prometheus/prometheus-rules.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${TINYIMX_PROMETHEUS_HOST_PORT:-19090}:9090"
+    networks: [backend]
+    depends_on:
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/ready >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  user-service:
+    image: ${TINYIMX_RUNTIME_IMAGE:-tinyimx/runtime:m21}
+    user: "${TINYIMX_RUNTIME_UID:-1000}:${TINYIMX_RUNTIME_GID:-1000}"
+    init: true
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    command: ["/opt/tinyimx/bin/user_service_demo", "/run/tinyimx/config/user.json", "0.0.0.0:50052"]
+    environment:
+      TINYIMX_USER_GRPC_NUM_CQS: "2"
+      TINYIMX_USER_GRPC_MIN_POLLERS: "2"
+      TINYIMX_USER_GRPC_MAX_POLLERS: "4"
+    volumes:
+      - ${TINYIMX_M21_STATE_DIR}/config:/run/tinyimx/config:ro
+    networks: [backend]
+    depends_on:
+      mysql: {condition: service_healthy}
+      zookeeper: {condition: service_healthy}
+      otel-collector: {condition: service_started}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 50052"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+      start_period: 5s
+
+  social-service:
+    image: ${TINYIMX_RUNTIME_IMAGE:-tinyimx/runtime:m21}
+    user: "${TINYIMX_RUNTIME_UID:-1000}:${TINYIMX_RUNTIME_GID:-1000}"
+    init: true
+    restart: unless-stopped
+    command: ["/opt/tinyimx/bin/social_service_demo", "/run/tinyimx/config/social.json", "0.0.0.0:50051"]
+    volumes:
+      - ${TINYIMX_M21_STATE_DIR}/config:/run/tinyimx/config:ro
+    networks: [backend]
+    depends_on:
+      mysql: {condition: service_healthy}
+      zookeeper: {condition: service_healthy}
+      otel-collector: {condition: service_started}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 50051"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+      start_period: 5s
+
+  group-service:
+    image: ${TINYIMX_RUNTIME_IMAGE:-tinyimx/runtime:m21}
+    user: "${TINYIMX_RUNTIME_UID:-1000}:${TINYIMX_RUNTIME_GID:-1000}"
+    init: true
+    restart: unless-stopped
+    command: ["/opt/tinyimx/bin/group_service_demo", "/run/tinyimx/config/group.json", "0.0.0.0:50054"]
+    volumes:
+      - ${TINYIMX_M21_STATE_DIR}/config:/run/tinyimx/config:ro
+    networks: [backend]
+    depends_on:
+      mysql: {condition: service_healthy}
+      zookeeper: {condition: service_healthy}
+      otel-collector: {condition: service_started}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 50054"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+      start_period: 5s
+
+  file-service:
+    image: ${TINYIMX_RUNTIME_IMAGE:-tinyimx/runtime:m21}
+    user: "${TINYIMX_RUNTIME_UID:-1000}:${TINYIMX_RUNTIME_GID:-1000}"
+    init: true
+    restart: unless-stopped
+    command: ["/opt/tinyimx/bin/file_service_demo", "/run/tinyimx/config/file.json", "0.0.0.0:50055", "/var/lib/tinyimx/files"]
+    volumes:
+      - ${TINYIMX_M21_STATE_DIR}/config:/run/tinyimx/config:ro
+      - ${TINYIMX_M21_STATE_DIR}/file-data:/var/lib/tinyimx/files
+    networks: [backend]
+    depends_on:
+      mysql: {condition: service_healthy}
+      zookeeper: {condition: service_healthy}
+      otel-collector: {condition: service_started}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 50055"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+      start_period: 5s
+
+  message-service:
+    image: ${TINYIMX_RUNTIME_IMAGE:-tinyimx/runtime:m21}
+    user: "${TINYIMX_RUNTIME_UID:-1000}:${TINYIMX_RUNTIME_GID:-1000}"
+    init: true
+    restart: unless-stopped
+    command: ["/opt/tinyimx/bin/message_service_demo", "/run/tinyimx/config/message.json", "0.0.0.0:50053"]
+    volumes:
+      - ${TINYIMX_M21_STATE_DIR}/config:/run/tinyimx/config:ro
+    networks: [backend]
+    depends_on:
+      mysql: {condition: service_healthy}
+      zookeeper: {condition: service_healthy}
+      group-service: {condition: service_healthy}
+      otel-collector: {condition: service_started}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 50053"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+      start_period: 5s
+
+  outbox-relay:
+    image: ${TINYIMX_RUNTIME_IMAGE:-tinyimx/runtime:m21}
+    user: "${TINYIMX_RUNTIME_UID:-1000}:${TINYIMX_RUNTIME_GID:-1000}"
+    init: true
+    restart: unless-stopped
+    command: ["/opt/tinyimx/bin/outbox_relay_demo", "/run/tinyimx/config/outbox-relay.json"]
+    volumes:
+      - ${TINYIMX_M21_STATE_DIR}/config:/run/tinyimx/config:ro
+    networks: [backend]
+    depends_on:
+      mysql: {condition: service_healthy}
+      rocketmq-init: {condition: service_completed_successfully}
+
+  unread-projector:
+    image: ${TINYIMX_RUNTIME_IMAGE:-tinyimx/runtime:m21}
+    user: "${TINYIMX_RUNTIME_UID:-1000}:${TINYIMX_RUNTIME_GID:-1000}"
+    init: true
+    restart: unless-stopped
+    command: ["/opt/tinyimx/bin/unread_projector_demo", "/run/tinyimx/config/unread-projector.json"]
+    volumes:
+      - ${TINYIMX_M21_STATE_DIR}/config:/run/tinyimx/config:ro
+    networks: [backend]
+    depends_on:
+      mysql: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      rocketmq-init: {condition: service_completed_successfully}
+
+  gateway-a:
+    image: ${TINYIMX_RUNTIME_IMAGE:-tinyimx/runtime:m21}
+    user: "${TINYIMX_RUNTIME_UID:-1000}:${TINYIMX_RUNTIME_GID:-1000}"
+    init: true
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    command: ["/opt/tinyimx/bin/gateway_demo", "/run/tinyimx/config/gateway-a.json"]
+    environment:
+      TINYIMX_GROUP_FANOUT_ENABLE: "1"
+    volumes:
+      - ${TINYIMX_M21_STATE_DIR}/config:/run/tinyimx/config:ro
+    networks:
+      backend:
+        aliases:
+          - gateway-a.tinyimx.invalid
+    dns:
+      - 127.0.0.1
+    depends_on:
+      mysql: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      zookeeper: {condition: service_healthy}
+      user-service: {condition: service_healthy}
+      social-service: {condition: service_healthy}
+      message-service: {condition: service_healthy}
+      group-service: {condition: service_healthy}
+      file-service: {condition: service_healthy}
+      otel-collector: {condition: service_started}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 9000"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+      start_period: 5s
+
+  gateway-b:
+    image: ${TINYIMX_RUNTIME_IMAGE:-tinyimx/runtime:m21}
+    user: "${TINYIMX_RUNTIME_UID:-1000}:${TINYIMX_RUNTIME_GID:-1000}"
+    init: true
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    command: ["/opt/tinyimx/bin/gateway_demo", "/run/tinyimx/config/gateway-b.json"]
+    environment:
+      TINYIMX_GROUP_FANOUT_ENABLE: "1"
+    volumes:
+      - ${TINYIMX_M21_STATE_DIR}/config:/run/tinyimx/config:ro
+    networks:
+      backend:
+        aliases:
+          - gateway-b.tinyimx.invalid
+    dns:
+      - 127.0.0.1
+    depends_on:
+      mysql: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      zookeeper: {condition: service_healthy}
+      user-service: {condition: service_healthy}
+      social-service: {condition: service_healthy}
+      message-service: {condition: service_healthy}
+      group-service: {condition: service_healthy}
+      file-service: {condition: service_healthy}
+      otel-collector: {condition: service_started}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 9000"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+      start_period: 5s
+
+  mcp-server:
+    image: ${TINYIMX_RUNTIME_IMAGE:-tinyimx/runtime:m21}
+    user: "${TINYIMX_RUNTIME_UID:-1000}:${TINYIMX_RUNTIME_GID:-1000}"
+    init: true
+    restart: unless-stopped
+    command: ["/opt/tinyimx/bin/tinyimx_mcp_server", "/run/tinyimx/config/mcp.json"]
+    environment:
+      TINYIMX_MCP_TOKEN: ${TINYIMX_MCP_TOKEN}
+    volumes:
+      - ${TINYIMX_M21_STATE_DIR}/config:/run/tinyimx/config:ro
+    ports:
+      - "127.0.0.1:${TINYIMX_MCP_HOST_PORT:-18080}:18080"
+    networks: [backend]
+    depends_on:
+      zookeeper: {condition: service_healthy}
+      user-service: {condition: service_healthy}
+      social-service: {condition: service_healthy}
+      message-service: {condition: service_healthy}
+      group-service: {condition: service_healthy}
+      file-service: {condition: service_healthy}
+      otel-collector: {condition: service_started}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:18080/health >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  nginx:
+    image: nginx:1.31.6
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${TINYIMX_M21_STATE_DIR}/tls:/etc/nginx/tls:ro
+    ports:
+      - "${TINYIMX_GATEWAY_PLAIN_PORT:-9000}:9000"
+      - "${TINYIMX_GATEWAY_TLS_PORT:-9443}:9443"
+      - "127.0.0.1:${TINYIMX_NGINX_HEALTH_PORT:-18081}:8080"
+    networks: [backend]
+    dns:
+      - 127.0.0.1
+    depends_on:
+      gateway-a: {condition: service_healthy}
+      gateway-b: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ai-agent:
+    profiles: ["ai"]
+    image: ${TINYIMX_RUNTIME_IMAGE:-tinyimx/runtime:m21}
+    user: "${TINYIMX_RUNTIME_UID:-1000}:${TINYIMX_RUNTIME_GID:-1000}"
+    init: true
+    environment:
+      TINYIMX_MCP_TOKEN: ${TINYIMX_MCP_TOKEN}
+      TINYIMX_AI_API_KEY: ${TINYIMX_AI_API_KEY:-}
+    volumes:
+      - ${TINYIMX_M21_STATE_DIR}/config:/run/tinyimx/config:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks: [backend]
+    depends_on:
+      mcp-server: {condition: service_healthy}
+      otel-collector: {condition: service_started}
+    entrypoint: ["/opt/tinyimx/bin/tinyimx_ai_agent_demo", "/run/tinyimx/config/ai-agent.json"]
+
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  redis-data:
+  zookeeper-data:
+  zookeeper-datalog:
+  rocketmq-store:
+  rocketmq-logs:
+  prometheus-data:

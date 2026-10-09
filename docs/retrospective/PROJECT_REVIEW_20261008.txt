@@ -1,0 +1,42 @@
+TinyIMX 项目复盘（公开版）
+
+一、产品定位
+TinyIMX 面向实时沟通与群协作，将 Linux C++ 后端、Windows Qt6 原生客户端、可靠消息、授权文件和本地 AI 连接为完整工作流。
+本文件只保留可公开的产品与技术内容。内部审计、原环境交接和原始证据材料在本地保留。
+
+二、完整功能
+1. 账号与会话：密码登录、加盐 PBKDF2-HMAC-SHA256、心跳、登录替换、同机同账号窗口锁。
+2. 好友与私聊：申请、接受、拒绝、好友列表、私聊权限、多行与 Unicode、持久化确认、接收确认、重试和离线补投。
+3. 会话与历史：会话列表、未读投影、私聊已读、历史分页及消息去重。
+4. 群协作：建群、开放加入、邀请、移出、成员角色、禁言、资料修改、群主转让、退出和解散。
+5. 群权限：历史读取结合当前成员身份与原投递范围，避免后入群用户自动读取未授权历史。
+6. 文件：独立通道、分块上传、暂停与续传、取消与重试、SHA-256 校验、HMAC 授权下载和终验后分享。
+7. 桌面：Qt6/QML 多窗口、多账号、会话切换、文件任务和按账号隔离。
+8. AI：Ollama 流式响应、模型检测、停止生成、用户选择会话上下文；独立后端 MCP 提供八个只读工具。
+
+三、工程实现
+后端采用 C++20、自研 epoll/EventLoop/Reactor 和 TIMX 协议，双 Gateway 接入五个 gRPC 业务服务。
+MySQL 保存业务事实，事务 Outbox 与 RocketMQ 支撑异步事件，Redis 保存在线路由和可重建未读投影。
+有界执行器约束积压，同键 FIFO 保持本执行器内顺序；取消与优雅停机覆盖任务生命周期。
+桌面采用 C++17 / Qt6 / QML；网络与传输异步处理，文件入口与聊天 Gateway 分开。
+Docker Compose、OpenTelemetry 和 Prometheus 支撑部署与观测。
+
+四、性能复盘
+公开报告保存万人连接指定混合负载、Redis N+1 优化、ABBA 对照、失败结果与验收边界。
+连接规模、请求率、延迟分位数、功能正确性和模型推理是不同维度；不同轮次结果不能拼成一次验收。
+数据与负载详情见 docs/performance/CONVERSATION_UNREAD_BATCH_RESULT_20261006.md 与 docs/performance/CAPACITY_OPTIMIZATION_AND_ACCEPTANCE_20261007.md。
+Qt 正常功能联调不替代容量测试；两万和五万目标仍需按公开验收合同继续验证。
+
+五、获取与复现
+仓库：https://github.com/Aoxiangda/TinyIMX
+产品介绍：README.md
+首次构建与联调：docs/getting-started/QUICKSTART.md
+桌面构建：clients/qt6/README.md
+部署与数据目录：deploy/production/README.md
+正常功能记录：docs/client/FEATURE_COMPLETION_20261007.md
+新部署创建自有配置与账号，不依赖原开发者数据库、私有配置或本机助手。
+
+六、后续方向
+自助注册、改密、资料编辑、删除好友、持久化群已读、完整列表分页与在线状态订阅。
+桌面 TLS、跨设备任务同步、持续容量与故障恢复验收。
+保持功能、权限、异常路径与性能证据一起迭代，避免以单项延迟替代全项目质量。

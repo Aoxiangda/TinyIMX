@@ -1,0 +1,193 @@
+include_guard(GLOBAL)
+
+foreach(required_target IN ITEMS
+    tinyimx_rpc_proto
+    tinyimx_repository
+    tinyimx_service_registry
+)
+  if(NOT TARGET ${required_target})
+    message(FATAL_ERROR
+      "TinyIMXFileService.cmake requires target: ${required_target}. "
+      "Include this module near the end of root CMakeLists.txt.")
+  endif()
+endforeach()
+
+
+add_library(tinyimx_file_storage
+  services/file/storage/LocalFilesystemStorage.cpp
+)
+
+target_include_directories(tinyimx_file_storage PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_compile_features(tinyimx_file_storage PUBLIC cxx_std_20)
+target_link_libraries(tinyimx_file_storage PUBLIC OpenSSL::Crypto)
+
+add_library(tinyimx_file_core
+  services/file/application/FileApplicationService.cpp
+  services/file/repository/FileRepositoryAdapter.cpp
+)
+
+target_include_directories(tinyimx_file_core PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_compile_features(tinyimx_file_core PUBLIC cxx_std_20)
+
+target_link_libraries(tinyimx_file_core PUBLIC
+  tinyimx_repository
+  OpenSSL::Crypto
+)
+
+add_library(tinyimx_file_grpc
+  services/file/service/FileServiceImpl.cpp
+  services/file/server/FileServiceServer.cpp
+)
+
+target_include_directories(tinyimx_file_grpc PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_compile_features(tinyimx_file_grpc PUBLIC cxx_std_20)
+
+target_link_libraries(tinyimx_file_grpc PUBLIC
+  tinyimx_file_core
+  tinyimx_rpc_proto
+  gRPC::grpc++
+)
+
+add_executable(file_application_service_tests
+  tests/file/file_application_service_test.cpp
+)
+
+target_compile_features(file_application_service_tests PRIVATE cxx_std_20)
+target_link_libraries(file_application_service_tests PRIVATE tinyimx_file_core)
+add_test(NAME file_application_service_tests COMMAND file_application_service_tests)
+
+add_executable(file_storage_tests
+  tests/file/file_storage_test.cpp
+)
+target_compile_features(file_storage_tests PRIVATE cxx_std_20)
+target_link_libraries(file_storage_tests PRIVATE tinyimx_file_storage)
+add_test(NAME file_storage_tests COMMAND file_storage_tests)
+
+add_executable(file_service_integration_tests
+  tests/file/file_service_integration_test.cpp
+)
+
+target_compile_features(file_service_integration_tests PRIVATE cxx_std_20)
+target_link_libraries(file_service_integration_tests PRIVATE
+  tinyimx_file_grpc
+  tinyimx_rpc_proto
+  gRPC::grpc++
+)
+add_test(NAME file_service_integration_tests COMMAND file_service_integration_tests)
+
+add_executable(file_repository_integration_tests
+  tests/file/file_repository_integration_test.cpp
+)
+
+target_compile_features(file_repository_integration_tests PRIVATE cxx_std_20)
+target_link_libraries(file_repository_integration_tests PRIVATE
+  tinyimx_config
+  tinyimx_logging
+  tinyimx_db
+  tinyimx_repository
+  tinyimx_file_core
+)
+
+add_executable(file_chunk_integration_tests
+  tests/file/file_chunk_integration_test.cpp
+)
+target_compile_features(file_chunk_integration_tests PRIVATE cxx_std_20)
+target_link_libraries(file_chunk_integration_tests PRIVATE
+  tinyimx_config
+  tinyimx_logging
+  tinyimx_db
+  tinyimx_repository
+  tinyimx_file_core
+  tinyimx_file_storage
+  OpenSSL::Crypto
+)
+
+add_executable(file_finalize_integration_tests
+  tests/file/file_finalize_integration_test.cpp
+)
+target_compile_features(file_finalize_integration_tests PRIVATE cxx_std_20)
+target_link_libraries(file_finalize_integration_tests PRIVATE
+  tinyimx_config
+  tinyimx_logging
+  tinyimx_db
+  tinyimx_repository
+  tinyimx_file_core
+  tinyimx_file_storage
+  OpenSSL::Crypto
+)
+
+add_executable(file_download_integration_tests
+  tests/file/file_download_integration_test.cpp
+)
+target_compile_features(file_download_integration_tests PRIVATE cxx_std_20)
+target_link_libraries(file_download_integration_tests PRIVATE
+  tinyimx_config
+  tinyimx_logging
+  tinyimx_db
+  tinyimx_repository
+  tinyimx_file_core
+  tinyimx_file_storage
+  OpenSSL::Crypto
+)
+
+# External-MySQL test: intentionally not added to ordinary CTest. Apply
+# migration 009 and run explicitly in the M18-A1 acceptance workflow.
+
+
+# M18-A2 runnable FileService control-plane endpoint for real-TCP Gateway acceptance.
+add_executable(file_service_demo
+  examples/file_service_demo.cpp
+)
+target_compile_features(file_service_demo PRIVATE cxx_std_20)
+target_link_libraries(file_service_demo PRIVATE
+  tinyimx_config
+  tinyimx_logging
+  tinyimx_db
+  tinyimx_repository
+  tinyimx_file_core
+  tinyimx_file_storage
+  tinyimx_file_grpc
+  tinyimx_service_registry
+)
+
+# M18-C2 release/closeout clients. These are explicit acceptance tools and are
+# intentionally excluded from ordinary CTest because they require a live
+# FileService process plus real MySQL/filesystem state.
+add_executable(file_transfer_release_e2e_client
+  examples/file_transfer_release_e2e_client.cpp
+)
+target_compile_features(file_transfer_release_e2e_client PRIVATE cxx_std_20)
+target_link_libraries(file_transfer_release_e2e_client PRIVATE
+  tinyimx_rpc_proto
+  gRPC::grpc++
+  OpenSSL::Crypto
+)
+
+add_executable(file_download_stress_client
+  tests/file/file_download_stress_client.cpp
+)
+target_compile_features(file_download_stress_client PRIVATE cxx_std_20)
+target_link_libraries(file_download_stress_client PRIVATE
+  tinyimx_rpc_proto
+  gRPC::grpc++
+  OpenSSL::Crypto
+)
+
+# Manual real-MySQL regression: requires a fresh audited owned schema/config.
+# Fault wrappers are test-only and are never linked into file_service_demo.
+add_executable(file_begin_upload_snapshot_tests
+  benchmark/local_capacity/file_begin_upload_snapshot_test.cpp)
+target_compile_features(file_begin_upload_snapshot_tests PRIVATE cxx_std_20)
+target_link_libraries(file_begin_upload_snapshot_tests PRIVATE
+  tinyimx_file_core tinyimx_repository tinyimx_config tinyimx_logging)
+target_link_options(file_begin_upload_snapshot_tests PRIVATE
+  "-Wl,--wrap=mysql_query" "-Wl,--wrap=mysql_ping" "-Wl,--wrap=mysql_commit")

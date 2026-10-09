@@ -1,0 +1,54 @@
+{
+  "app": {
+    "name": "TinyIMX-MCPServer",
+    "env": "dev",
+    "instance_id": "tinyimx-mcp-1"
+  },
+  "logger": {
+    "level": "info",
+    "console": true,
+    "file": "logs/tinyimx-mcp.log",
+    "max_file_size_mb": 20,
+    "max_backup_files": 3,
+    "async": false,
+    "flush_each_log": false
+  },
+  "rpc": {
+    "enable": true,
+    "connect_timeout_ms": 1000,
+    "request_timeout_ms": 3000,
+    "compress": "none",
+    "encrypt": false
+  },
+  "service_discovery": {
+    "provider": "static",
+    "initial_sync_timeout_ms": 5000,
+    "snapshot_stale_after_ms": 30000,
+    "retain_last_known_good": true
+  },
+  "zookeeper": {
+    "enable": false,
+    "connect_string": "127.0.0.1:2181",
+    "session_timeout_ms": 10000,
+    "connect_timeout_ms": 5000,
+    "service_root": "/tinyimx/services",
+    "advertise_host": "127.0.0.1",
+    "service_version": "v1"
+  },
+  "mcp": {
+    "enable": true,
+    "endpoint": "http://127.0.0.1:18080/mcp",
+    "timeout_ms": 5000,
+    "listen_host": "127.0.0.1",
+    "listen_port": 18080,
+    "endpoint_path": "/mcp",
+    "io_threads": 1,
+    "worker_threads": 4,
+    "queue_capacity": 128,
+    "max_request_bytes": 1048576,
+    "allowed_origins": [],
+    "auth_token_env": "TINYIMX_MCP_TOKEN",
+    "static_user_id": 1,
+    "static_subject": "tinyimx:mcp:development"
+  }
+}

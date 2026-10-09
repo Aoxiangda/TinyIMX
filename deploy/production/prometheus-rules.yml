@@ -1,0 +1,18 @@
+groups:
+  - name: tinyimx-m21-production
+    rules:
+      - alert: TinyIMXObservabilityTargetDown
+        expr: up{job="tinyimx-otel-collector"} == 0
+        for: 30s
+        labels: {severity: critical}
+        annotations: {summary: "TinyIMX Collector scrape target is down"}
+      - alert: TinyIMXThreadPoolRejectedTasks
+        expr: increase(tinyimx_thread_pool_tasks_total{event="rejected"}[5m]) > 0
+        for: 1m
+        labels: {severity: warning}
+        annotations: {summary: "TinyIMX thread-pool rejection detected"}
+      - alert: TinyIMXTelemetryAbsent
+        expr: absent(tinyimx_tcp_connections_active)
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: "No TinyIMX TCP connection gauge is visible"}

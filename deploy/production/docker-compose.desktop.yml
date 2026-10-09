@@ -1,0 +1,34 @@
+# Optional overlay; pair with docker-compose.yml. Requires the runtime image
+# built from this source, which includes desktop_file_server.
+services:
+  desktop-file:
+    image: ${TINYIMX_RUNTIME_IMAGE:-tinyimx/runtime:m21}
+    user: "${TINYIMX_RUNTIME_UID:-1000}:${TINYIMX_RUNTIME_GID:-1000}"
+    init: true
+    restart: unless-stopped
+    command:
+      - /opt/tinyimx/bin/desktop_file_server
+      - /run/tinyimx/config/user.json
+      - /var/lib/tinyimx/desktop-file/signing.key
+      - user-service:50052
+      - file-service:50055
+      - message-service:50053
+      - group-service:50054
+      - "18082"
+    volumes:
+      - ${TINYIMX_M21_STATE_DIR}/config:/run/tinyimx/config:ro
+      - ${TINYIMX_M21_STATE_DIR}/desktop-file:/var/lib/tinyimx/desktop-file
+    ports:
+      - "${TINYIMX_DESKTOP_BIND_ADDRESS:-127.0.0.1}:${TINYIMX_DESKTOP_FILE_PORT:-18082}:18082"
+    networks: [backend]
+    depends_on:
+      user-service: {condition: service_healthy}
+      file-service: {condition: service_healthy}
+      message-service: {condition: service_healthy}
+      group-service: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:18082/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s

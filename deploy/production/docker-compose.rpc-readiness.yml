@@ -1,0 +1,18 @@
+# Use only with matching readiness-enabled service executables and probe.
+# Old images fail closed. Base Compose is preserved for exact restoration.
+services:
+  user-service:
+    healthcheck:
+      test: ["CMD", "/opt/tinyimx/bin/rpc_readiness_probe", "127.0.0.1:50052"]
+  social-service:
+    healthcheck:
+      test: ["CMD", "/opt/tinyimx/bin/rpc_readiness_probe", "127.0.0.1:50051"]
+  message-service:
+    healthcheck:
+      test: ["CMD", "/opt/tinyimx/bin/rpc_readiness_probe", "127.0.0.1:50053"]
+  group-service:
+    healthcheck:
+      test: ["CMD", "/opt/tinyimx/bin/rpc_readiness_probe", "127.0.0.1:50054"]
+  file-service:
+    healthcheck:
+      test: ["CMD", "/opt/tinyimx/bin/rpc_readiness_probe", "127.0.0.1:50055"]

@@ -1,0 +1,15 @@
+FROM ubuntu:24.04
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      bash ca-certificates curl netcat-openbsd openssl \
+      libstdc++6 libgcc-s1 libssl3 zlib1g \
+ && rm -rf /var/lib/apt/lists/*
+COPY bundle/ /opt/tinyimx/
+RUN chmod -R a+rX /opt/tinyimx \
+ && test -x /opt/tinyimx/bin/gateway_demo \
+ && test -x /opt/tinyimx/bin/user_service_demo \
+ && test -x /opt/tinyimx/bin/tinyimx_mcp_server
+ENV LD_LIBRARY_PATH=/opt/tinyimx/lib
+WORKDIR /opt/tinyimx
+CMD ["/bin/bash", "-lc", "echo 'TinyIMX runtime image requires a Compose service command'; exit 2"]

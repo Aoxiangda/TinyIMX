@@ -1,0 +1,200 @@
+syntax = "proto3";
+
+package tinyimx.social.v1;
+
+import "tinyimx/common/v1/common.proto";
+
+// SocialService owns durable friendship and friend-request state.
+// Gateway provides authenticated actor identity and keeps TCP/session/presence
+// concerns at the edge.  Domain/business outcomes are encoded in responses;
+// transport failures remain gRPC status failures.
+service SocialService {
+    rpc ListFriends(ListFriendsRequest) returns (ListFriendsResponse);
+    rpc CheckPrivateChatPermission(CheckPrivateChatPermissionRequest)
+        returns (CheckPrivateChatPermissionResponse);
+
+    rpc CreateFriendRequest(CreateFriendRequestRequest)
+        returns (CreateFriendRequestResponse);
+    rpc ListPendingIncomingFriendRequests(ListPendingIncomingFriendRequestsRequest)
+        returns (ListPendingIncomingFriendRequestsResponse);
+    rpc AcceptFriendRequest(AcceptFriendRequestRequest)
+        returns (AcceptFriendRequestResponse);
+    rpc RejectFriendRequest(RejectFriendRequestRequest)
+        returns (RejectFriendRequestResponse);
+}
+
+message ListFriendsRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 actor_user_id = 2;
+    uint32 limit = 3;
+}
+
+message FriendInfo {
+    uint64 friend_user_id = 1;
+    string username = 2;
+    string nickname = 3;
+    string avatar_url = 4;
+    uint32 user_status = 5;
+    uint32 relation_status = 6;
+    string relation_created_at = 7;
+    string relation_updated_at = 8;
+}
+
+message ListFriendsResponse {
+    repeated FriendInfo friends = 1;
+    bool has_more = 2;
+}
+
+enum ChatPermissionResult {
+    CHAT_PERMISSION_RESULT_UNSPECIFIED = 0;
+    CHAT_PERMISSION_RESULT_ALLOWED = 1;
+    CHAT_PERMISSION_RESULT_INVALID_ARGUMENT = 2;
+    CHAT_PERMISSION_RESULT_NOT_FRIEND = 3;
+    CHAT_PERMISSION_RESULT_BLOCKED_BY_SELF = 4;
+    CHAT_PERMISSION_RESULT_BLOCKED_BY_PEER = 5;
+    CHAT_PERMISSION_RESULT_STORAGE_ERROR = 6;
+}
+
+message CheckPrivateChatPermissionRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 from_user_id = 2;
+    uint64 to_user_id = 3;
+}
+
+message CheckPrivateChatPermissionResponse {
+    ChatPermissionResult result = 1;
+    string message = 2;
+}
+
+enum FriendRequestCreateResult {
+    FRIEND_REQUEST_CREATE_RESULT_UNSPECIFIED = 0;
+    FRIEND_REQUEST_CREATE_RESULT_CREATED = 1;
+    FRIEND_REQUEST_CREATE_RESULT_REOPENED = 2;
+    FRIEND_REQUEST_CREATE_RESULT_ALREADY_PENDING = 3;
+    FRIEND_REQUEST_CREATE_RESULT_REVERSE_PENDING = 4;
+    FRIEND_REQUEST_CREATE_RESULT_ALREADY_FRIEND = 5;
+    FRIEND_REQUEST_CREATE_RESULT_BLOCKED_BY_SELF = 6;
+    FRIEND_REQUEST_CREATE_RESULT_BLOCKED_BY_PEER = 7;
+    FRIEND_REQUEST_CREATE_RESULT_SOURCE_USER_NOT_FOUND = 8;
+    FRIEND_REQUEST_CREATE_RESULT_TARGET_USER_NOT_FOUND = 9;
+    FRIEND_REQUEST_CREATE_RESULT_SOURCE_USER_DISABLED = 10;
+    FRIEND_REQUEST_CREATE_RESULT_TARGET_USER_DISABLED = 11;
+    FRIEND_REQUEST_CREATE_RESULT_RELATION_DATA_INCONSISTENT = 12;
+    FRIEND_REQUEST_CREATE_RESULT_REQUEST_DATA_INCONSISTENT = 13;
+    FRIEND_REQUEST_CREATE_RESULT_INVALID_ARGUMENT = 14;
+    FRIEND_REQUEST_CREATE_RESULT_STORAGE_ERROR = 15;
+}
+
+message CreateFriendRequestRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 from_user_id = 2;
+    uint64 to_user_id = 3;
+    string request_message = 4;
+}
+
+message CreateFriendRequestResponse {
+    FriendRequestCreateResult result = 1;
+    uint64 request_id = 2;
+    string message = 3;
+}
+
+enum FriendRequestListResult {
+    FRIEND_REQUEST_LIST_RESULT_UNSPECIFIED = 0;
+    FRIEND_REQUEST_LIST_RESULT_SUCCEEDED = 1;
+    FRIEND_REQUEST_LIST_RESULT_INVALID_ARGUMENT = 2;
+    FRIEND_REQUEST_LIST_RESULT_INVALID_CURSOR = 3;
+    FRIEND_REQUEST_LIST_RESULT_INVALID_RECORD = 4;
+    FRIEND_REQUEST_LIST_RESULT_STORAGE_ERROR = 5;
+}
+
+message FriendRequestInfo {
+    uint64 request_id = 1;
+    uint64 from_user_id = 2;
+    uint64 to_user_id = 3;
+    string request_message = 4;
+    uint32 request_status = 5;
+    string created_at = 6;
+    string handled_at = 7;
+    string updated_at = 8;
+    string from_username = 9;
+    string from_nickname = 10;
+    string from_avatar_url = 11;
+    uint32 from_user_status = 12;
+}
+
+message ListPendingIncomingFriendRequestsRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 receiver_user_id = 2;
+    string before_created_at = 3;
+    uint64 before_request_id = 4;
+    uint32 limit = 5;
+}
+
+message ListPendingIncomingFriendRequestsResponse {
+    FriendRequestListResult result = 1;
+    repeated FriendRequestInfo requests = 2;
+    bool has_more = 3;
+    string next_before_created_at = 4;
+    uint64 next_before_request_id = 5;
+    string message = 6;
+}
+
+enum FriendRequestAcceptResult {
+    FRIEND_REQUEST_ACCEPT_RESULT_UNSPECIFIED = 0;
+    FRIEND_REQUEST_ACCEPT_RESULT_ACCEPTED = 1;
+    FRIEND_REQUEST_ACCEPT_RESULT_ALREADY_ACCEPTED = 2;
+    FRIEND_REQUEST_ACCEPT_RESULT_REQUEST_NOT_FOUND = 3;
+    FRIEND_REQUEST_ACCEPT_RESULT_NOT_REQUEST_RECEIVER = 4;
+    FRIEND_REQUEST_ACCEPT_RESULT_REQUEST_NOT_PENDING = 5;
+    FRIEND_REQUEST_ACCEPT_RESULT_BLOCKED_BY_SELF = 6;
+    FRIEND_REQUEST_ACCEPT_RESULT_BLOCKED_BY_PEER = 7;
+    FRIEND_REQUEST_ACCEPT_RESULT_REQUESTER_NOT_FOUND = 8;
+    FRIEND_REQUEST_ACCEPT_RESULT_RECEIVER_NOT_FOUND = 9;
+    FRIEND_REQUEST_ACCEPT_RESULT_REQUESTER_DISABLED = 10;
+    FRIEND_REQUEST_ACCEPT_RESULT_RECEIVER_DISABLED = 11;
+    FRIEND_REQUEST_ACCEPT_RESULT_RELATION_DATA_INCONSISTENT = 12;
+    FRIEND_REQUEST_ACCEPT_RESULT_REQUEST_DATA_INCONSISTENT = 13;
+    FRIEND_REQUEST_ACCEPT_RESULT_INVALID_ARGUMENT = 14;
+    FRIEND_REQUEST_ACCEPT_RESULT_STORAGE_ERROR = 15;
+}
+
+message AcceptFriendRequestRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 request_id = 2;
+    uint64 handler_user_id = 3;
+}
+
+message AcceptFriendRequestResponse {
+    FriendRequestAcceptResult result = 1;
+    uint64 request_id = 2;
+    uint64 requester_user_id = 3;
+    uint64 receiver_user_id = 4;
+    string message = 5;
+}
+
+enum FriendRequestRejectResult {
+    FRIEND_REQUEST_REJECT_RESULT_UNSPECIFIED = 0;
+    FRIEND_REQUEST_REJECT_RESULT_REJECTED = 1;
+    FRIEND_REQUEST_REJECT_RESULT_ALREADY_REJECTED = 2;
+    FRIEND_REQUEST_REJECT_RESULT_ALREADY_ACCEPTED = 3;
+    FRIEND_REQUEST_REJECT_RESULT_REQUEST_CANCELLED = 4;
+    FRIEND_REQUEST_REJECT_RESULT_REQUEST_NOT_FOUND = 5;
+    FRIEND_REQUEST_REJECT_RESULT_NOT_REQUEST_RECEIVER = 6;
+    FRIEND_REQUEST_REJECT_RESULT_REQUEST_DATA_INCONSISTENT = 7;
+    FRIEND_REQUEST_REJECT_RESULT_INVALID_ARGUMENT = 8;
+    FRIEND_REQUEST_REJECT_RESULT_STORAGE_ERROR = 9;
+}
+
+message RejectFriendRequestRequest {
+    tinyimx.common.v1.RequestMeta meta = 1;
+    uint64 request_id = 2;
+    uint64 handler_user_id = 3;
+}
+
+message RejectFriendRequestResponse {
+    FriendRequestRejectResult result = 1;
+    uint64 request_id = 2;
+    uint64 requester_user_id = 3;
+    uint64 receiver_user_id = 4;
+    string message = 5;
+}
