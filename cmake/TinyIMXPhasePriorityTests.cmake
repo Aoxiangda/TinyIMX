@@ -1,0 +1,4 @@
+add_executable(phase_priority_budget_tests tests/gateway/phase_priority_budget_test.cpp)
+target_include_directories(phase_priority_budget_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(phase_priority_budget_tests PRIVATE Threads::Threads)
+add_test(NAME phase_priority_budget_tests COMMAND phase_priority_budget_tests)

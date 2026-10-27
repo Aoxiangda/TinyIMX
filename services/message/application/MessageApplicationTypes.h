@@ -1,5 +1,7 @@
 #pragma once
 
+#include "common/protocol/CommittedUnreadSnapshot.h"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -28,6 +30,14 @@ enum class PersistPrivateMessageOutcome {
     kCreated = 0,
     kReused,
     kIdempotencyConflict,
+};
+
+// Internal bounded batch input. The existing unary protobuf remains unchanged.
+struct PrivateMessagePersistInput {
+    std::uint64_t from_user_id{0},to_user_id{0};
+    std::string client_message_id;
+    std::uint32_t message_type{0};
+    std::string content;
 };
 
 
@@ -202,6 +212,7 @@ struct MessageRepositoryPersistResult {
     std::uint64_t message_id{0};
     MessageView record;
     std::string message;
+    std::optional<CommittedUnreadSnapshot> committed_unread;
 
     [[nodiscard]] bool Completed() const noexcept {
         return status == MessageApplicationStatus::kSucceeded;
@@ -220,6 +231,7 @@ struct PersistPrivateMessageApplicationResult {
     std::uint64_t message_id{0};
     MessageView record;
     std::string message;
+    std::optional<CommittedUnreadSnapshot> committed_unread;
 
     [[nodiscard]] bool Completed() const noexcept {
         return status == MessageApplicationStatus::kSucceeded;

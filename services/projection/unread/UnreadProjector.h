@@ -4,12 +4,14 @@
 #include "services/projection/unread/UnreadProjectionReader.h"
 
 #include <atomic>
+#include <array>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace tinyimx {
 class UnreadCountCache;
@@ -71,6 +73,13 @@ struct UnreadProjectorOptions {
     UnreadProjectorMode mode{UnreadProjectorMode::kShadow};
     std::string topic{"tinyimx-message-events"};
     std::size_t batch_size{16};
+    // Each worker holds at most one received batch, including unacked events.
+    // Values >1 require a consumer supporting concurrent Receive/Ack calls.
+    std::size_t worker_threads{1};
+    // Opt-in bounded parallel transport ACK, only after projection succeeds.
+    bool parallel_batch_ack{false};
+    // Opt-in single-read-view SQL snapshots per received batch; writer only.
+    bool batch_snapshot_reads{false};
     int invisible_duration_ms{30000};
     int receive_error_backoff_ms{500};
 };
@@ -89,13 +98,16 @@ struct UnreadProjectorStats {
     std::uint64_t poison_failure_total{0};
 
     std::uint64_t ack_failure_total{0};
+    // API invocations and requested dialogs, not inferred SQL query counts.
+    std::uint64_t snapshot_batch_calls{0};
+    std::uint64_t snapshot_batch_dialogs{0};
 };
 
 class UnreadProjector final {
 public:
     UnreadProjector(
         eventing::EventConsumer* consumer,
-        UnreadProjectionReader* reader,
+        UnreadProjectionSource* reader,
         UnreadCountCache* cache,
         UnreadProjectorOptions options
     );
@@ -126,6 +138,13 @@ private:
     [[nodiscard]] UnreadProcessResult ProcessEvent(
         const eventing::ConsumedEvent& consumed
     );
+    [[nodiscard]] std::vector<UnreadProcessResult> ProcessBatch(
+        const std::vector<eventing::ConsumedEvent>& events
+    );
+    [[nodiscard]] UnreadProcessResult ApplyDurableSnapshot(
+        const AffectedDialog& dialog,
+        const UnreadProjectionReadResult<DialogUnreadSnapshot>& durable
+    );
     [[nodiscard]] bool ExtractAffectedDialog(
         const eventing::ConsumedEvent& consumed,
         AffectedDialog* dialog,
@@ -136,12 +155,15 @@ private:
 
 private:
     eventing::EventConsumer* consumer_{nullptr};
-    UnreadProjectionReader* reader_{nullptr};
+    UnreadProjectionSource* reader_{nullptr};
     UnreadCountCache* cache_{nullptr};
     UnreadProjectorOptions options_;
 
     std::atomic<bool> running_{false};
-    std::thread thread_;
+    std::vector<std::thread> threads_;
+    // A receiver's total spans all peers. Serialize the durable read AND cache
+    // write (also RebuildUser); locking by dialog alone permits stale totals.
+    std::array<std::mutex, 1024> receiver_mutexes_;
     mutable std::mutex lifecycle_mutex_;
     std::condition_variable lifecycle_cv_;
 
@@ -160,6 +182,8 @@ private:
     std::atomic<std::uint64_t> poison_failure_total_{0};
 
     std::atomic<std::uint64_t> ack_failure_total_{0};
+    std::atomic<std::uint64_t> snapshot_batch_calls_{0};
+    std::atomic<std::uint64_t> snapshot_batch_dialogs_{0};
 };
 
 }  // namespace tinyimx::projection::unread

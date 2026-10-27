@@ -157,7 +157,7 @@ v16 脱敏归档本机 70 文件逐 SHA 通过，archive SHA 488f8ceb9a79614ac08
 
 Windows21:39UTC只读审计：实际运行VMware16.2.4 build20089737、Ubuntu VMX8vCPU/16384MiB，当前vmware.log Monitor Mode=ULM且WHP标记存在，Windows HypervisorPresent=true、VirtualizationBasedSecurityStatus=2。真实VMX SHA726444586dbb79772b4a2127581f11fcd75d9a5087a0c9b033f6a5aed705ad4f。SecurityServicesRunning=[0]，不据此声称HVCI/内存完整性功能正在运行。VMware官方说明ULM使用WHP API： https://blogs.vmware.com/cloud-foundation/2020/05/28/vmware-workstation-now-supports-hyper-v-mode/ ；Microsoft说明状态2表示VBS运行： https://learn.microsoft.com/en-us/windows/security/hardware-security/enable-virtualization-based-protection-of-code-integrity 。此为当前环境因素，没有与CPL0成对比较，不能分配延迟因果百分比或否定软件瓶颈。没有改VBS/启动项/VMX/系统设置、重启或停止任何应用。
 
-虚拟网卡确为e1000，但guest ip route get192.168.220.128 from192.168.220.129结果local/devlo；本地压测及Docker服务链并不以物理虚拟网卡为主要传输路径。因此不盲改网卡。当前有依据的方向是进一步区分原消息组件的SQL同步/网络往返/RPC与线程成本，再选择代码优化；不是把所有高内核时间都归给VMware。主机审计JSON在本机evidence/vmware-host-mode-review-20261005，只有允许的模式/硬件字段，没有完整VMX/log或命令行。
+虚拟网卡确为e1000，但guest ip route get<LAB_VM> from192.168.220.129结果local/devlo；本地压测及Docker服务链并不以物理虚拟网卡为主要传输路径。因此不盲改网卡。当前有依据的方向是进一步区分原消息组件的SQL同步/网络往返/RPC与线程成本，再选择代码优化；不是把所有高内核时间都归给VMware。主机审计JSON在本机evidence/vmware-host-mode-review-20261005，只有允许的模式/硬件字段，没有完整VMX/log或命令行。
 
 v17将保留MCP原版red、89green/corepass、真实验证/汇总trace、自有进程停止审计、源码/镜像/更新和回滚证据，实际secret扫描且不覆盖v16。所有功能极致性能仍未实现，继续迭代。
 

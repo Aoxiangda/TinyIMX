@@ -1,0 +1,78 @@
+{
+  "exact_reverse_recovers_frozen_source": true,
+  "changes": [
+    {
+      "before": "#include <grpcpp/grpcpp.h>",
+      "after": "#include \"common/observability/SnapshotRpcTiming.h\"\n#include <grpcpp/grpcpp.h>",
+      "count": 1
+    },
+    {
+      "before": "bool Valid(const DialogUnreadSnapshot&",
+      "after": "using SnapshotTiming=diagnostics::SnapshotRpcTiming;\nSnapshotTiming::Key TimingKey(grpc::ServerContext* context)noexcept {\n    if(!SnapshotTiming::Enabled()||!context)return{};\n    const auto range=context->client_metadata().equal_range(SnapshotTiming::MetadataHeader);\n    if(range.first==range.second)return{};\n    auto next=range.first;++next;\n    if(next!=range.second)return{}; // Duplicate/untrusted tags never affect RPC status.\n    const auto&value=range.first->second;\n    return SnapshotTiming::ParseKey(std::string_view(value.data(),value.size()));\n}\nvoid AddTimingKey(SnapshotTiming& trace,grpc::ClientContext& context)noexcept {\n    if(!trace.Active())return;\n    try{context.AddMetadata(SnapshotTiming::MetadataHeader,SnapshotTiming::EncodeKey(trace.CurrentKey()));}\n    catch(...){trace.ForgetKey();} // Diagnostic allocation failure cannot fail a read.\n}\nbool Valid(const DialogUnreadSnapshot&",
+      "count": 1
+    },
+    {
+      "before": "grpc::Status UnreadSnapshotRpcService::ReadDialogUnreadSnapshot(grpc::ServerContext*c,const message::v1::ReadDialogUnreadSnapshotRequest*q,message::v1::ReadDialogUnreadSnapshotResponse*r){",
+      "after": "grpc::Status UnreadSnapshotRpcService::ReadDialogUnreadSnapshot(grpc::ServerContext*c,const message::v1::ReadDialogUnreadSnapshotRequest*q,message::v1::ReadDialogUnreadSnapshotResponse*r){\n    SnapshotTiming trace(SnapshotTiming::Server,SnapshotTiming::Dialog,q?q->receiver_user_id():0,q?q->peer_user_id():0,1,TimingKey(c));\n    const auto status=[&]()->grpc::Status{",
+      "count": 1
+    },
+    {
+      "before": "grpc::Status UnreadSnapshotRpcService::ReadUserUnreadSnapshot(grpc::ServerContext*c,const message::v1::ReadUserUnreadSnapshotRequest*q,message::v1::ReadUserUnreadSnapshotResponse*r){",
+      "after": "grpc::Status UnreadSnapshotRpcService::ReadUserUnreadSnapshot(grpc::ServerContext*c,const message::v1::ReadUserUnreadSnapshotRequest*q,message::v1::ReadUserUnreadSnapshotResponse*r){\n    SnapshotTiming trace(SnapshotTiming::Server,SnapshotTiming::User,q?q->receiver_user_id():0,0,1,TimingKey(c));\n    const auto status=[&]()->grpc::Status{",
+      "count": 1
+    },
+    {
+      "before": "source_->LoadDialogSnapshot(q->receiver_user_id(),q->peer_user_id())",
+      "after": "trace.Measure([&]{return source_->LoadDialogSnapshot(q->receiver_user_id(),q->peer_user_id());})",
+      "count": 1
+    },
+    {
+      "before": "source_->LoadUserSnapshot(q->receiver_user_id())",
+      "after": "trace.Measure([&]{return source_->LoadUserSnapshot(q->receiver_user_id());})",
+      "count": 1
+    },
+    {
+      "before": "    }catch(const std::exception&){return Unavailable();}\n}",
+      "after": "    }catch(const std::exception&){return Unavailable();}\n    }();\n    trace.Result(static_cast<int>(status.error_code()));if(status.ok())trace.ResponseValid();\n    return status;\n}",
+      "count": 2
+    },
+    {
+      "before": "UnreadProjectionReadResult<DialogUnreadSnapshot> UnreadSnapshotRpcClient::LoadDialogSnapshot(std::uint64_t receiver,std::uint64_t peer){",
+      "after": "UnreadProjectionReadResult<DialogUnreadSnapshot> UnreadSnapshotRpcClient::LoadDialogSnapshot(std::uint64_t receiver,std::uint64_t peer){\n    SnapshotTiming trace(SnapshotTiming::Client,SnapshotTiming::Dialog,receiver,peer,1,{});",
+      "count": 1
+    },
+    {
+      "before": "UnreadProjectionReadResult<UserUnreadSnapshot> UnreadSnapshotRpcClient::LoadUserSnapshot(std::uint64_t receiver){",
+      "after": "UnreadProjectionReadResult<UserUnreadSnapshot> UnreadSnapshotRpcClient::LoadUserSnapshot(std::uint64_t receiver){\n    SnapshotTiming trace(SnapshotTiming::Client,SnapshotTiming::User,receiver,0,1,{});",
+      "count": 1
+    },
+    {
+      "before": "grpc::ClientContext c;c.set_deadline",
+      "after": "grpc::ClientContext c;AddTimingKey(trace,c);c.set_deadline",
+      "count": 2
+    },
+    {
+      "before": "const auto status=stub_->ReadDialogUnreadSnapshot(&c,q,&r);",
+      "after": "const auto status=trace.Measure([&]{return stub_->ReadDialogUnreadSnapshot(&c,q,&r);});trace.Result(static_cast<int>(status.error_code()));",
+      "count": 1
+    },
+    {
+      "before": "const auto status=stub_->ReadUserUnreadSnapshot(&c,q,&r);",
+      "after": "const auto status=trace.Measure([&]{return stub_->ReadUserUnreadSnapshot(&c,q,&r);});trace.Result(static_cast<int>(status.error_code()));",
+      "count": 1
+    },
+    {
+      "before": "out.success=true;out.value=value;return out;",
+      "after": "out.success=true;out.value=value;trace.ResponseValid();return out;",
+      "count": 1
+    },
+    {
+      "before": "out.success=true;out.value=std::move(value);return out;",
+      "after": "out.success=true;out.value=std::move(value);trace.ResponseValid();return out;",
+      "count": 1
+    }
+  ],
+  "header_bytes_unchanged": true,
+  "original_cpp_sha256": "030e3faa2f41d65538e9c7e9ff06a8fa5e30b9cd79b8895bdb3a11415e3ee861",
+  "full_frozen_projector_not_relinked_yet": true
+}

@@ -1,0 +1,15 @@
+{
+  "case": "perf921-q2-local-users20k",
+  "fixture": "r9162",
+  "retained": 3012,
+  "expected60000": true,
+  "immutable_reader": "e6ac568cda233fba03492f6ed0a377045ffa2ce2414d3e7cd4862d8bf19acd67",
+  "files": {
+    "collect.py": "a84c24de86f02140734d301424af7e4bc7f0bb4c7860724cfe1b8b509e9ea0f3",
+    "native.py": "054eef17289575fa4fabcb95061fbd4201bb6bec90d3d966645a79c88f0f69cb"
+  },
+  "source_templates": [
+    "collect_demand_page_users20k_r824.py",
+    "audit_demand_page_native_users20k_r822.py"
+  ]
+}

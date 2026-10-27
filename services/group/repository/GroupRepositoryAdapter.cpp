@@ -1,4 +1,5 @@
 #include "services/group/repository/GroupRepositoryAdapter.h"
+#include <stdexcept>
 #include "services/group/repository/GroupActorSnapshotControl.h"
 
 #include "common/db/MySqlConnection.h"
@@ -340,12 +341,17 @@ GroupRepositoryAdapter::GroupRepositoryAdapter(
     tinyimx::GroupRepository* repository,
     tinyimx::MySqlConnectionPool* pool,
     tinyimx::outbox::OutboxRepository* outbox_repository,
-    const GroupPermissionPolicy* permission_policy
+    const GroupPermissionPolicy* permission_policy,
+    std::string event_topic
 )
     : repository_(repository),
       pool_(pool),
       outbox_(outbox_repository),
-      permission_(permission_policy) {
+      permission_(permission_policy),
+      event_topic_(std::move(event_topic)) {
+    if (!GroupEventFactory::IsValidTopic(event_topic_)) {
+        throw std::invalid_argument("invalid group event topic");
+    }
 }
 
 GroupRepositoryMutationResult GroupRepositoryAdapter::CreateGroup(
@@ -429,7 +435,7 @@ GroupRepositoryMutationResult GroupRepositoryAdapter::CreateGroup(
         return StorageFailure(GroupApplicationStatus::kInvalidRecord, "CreateGroup produced invalid group record");
     }
 
-    const auto event_spec = GroupEventFactory::GroupCreated(*view);
+    const auto event_spec = GroupEventFactory::WithTopic(GroupEventFactory::GroupCreated(*view), event_topic_);
     const auto outbox_result = outbox_->InsertOnConnection(
         connection.operator->(), event_spec.event, event_spec.topic,
         event_spec.tag, event_spec.message_key
@@ -664,7 +670,7 @@ GroupRepositoryMutationResult GroupRepositoryAdapter::UpdateGroup(
         return StorageFailure(GroupApplicationStatus::kInvalidRecord, "UpdateGroup produced invalid group record");
     }
 
-    const auto event_spec = GroupEventFactory::GroupUpdated(*updated_view);
+    const auto event_spec = GroupEventFactory::WithTopic(GroupEventFactory::GroupUpdated(*updated_view), event_topic_);
     const auto outbox_result = outbox_->InsertOnConnection(
         connection.operator->(), event_spec.event, event_spec.topic,
         event_spec.tag, event_spec.message_key
@@ -815,7 +821,7 @@ GroupRepositoryMutationResult GroupRepositoryAdapter::DisbandGroup(
         return StorageFailure(GroupApplicationStatus::kInvalidRecord, "DisbandGroup produced invalid group record");
     }
 
-    const auto event_spec = GroupEventFactory::GroupDisbanded(*disbanded_view);
+    const auto event_spec = GroupEventFactory::WithTopic(GroupEventFactory::GroupDisbanded(*disbanded_view), event_topic_);
     const auto outbox_result = outbox_->InsertOnConnection(
         connection.operator->(), event_spec.event, event_spec.topic,
         event_spec.tag, event_spec.message_key

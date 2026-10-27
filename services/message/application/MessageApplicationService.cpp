@@ -1,5 +1,6 @@
 #include "services/message/application/MessageApplicationService.h"
 #include "services/message/application/GroupDeliveryCompletionValidation.h"
+#include "services/message/application/ReceiverConfirmationDecision.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -16,6 +17,12 @@ constexpr std::uint32_t kMaxPendingPageLimit = 100;
 constexpr std::size_t kMaxPendingPageBytes = 2 * 1024 * 1024;
 constexpr std::size_t kPendingRecordOverheadBytes = 256;
 constexpr std::size_t kMaxConfirmBatchSize = 100;
+
+bool ValidPrivatePersist(std::uint64_t from,std::uint64_t to,const std::string& cid,
+                         std::uint32_t type,const std::string& content) noexcept {
+    return from!=0 && to!=0 && from!=to && !cid.empty() && cid.size()<=64 &&
+           type>=1 && type<=3 && !content.empty();
+}
 
 }  // namespace
 
@@ -90,14 +97,7 @@ MessageApplicationService::PersistPrivateMessage(
 ) {
     PersistPrivateMessageApplicationResult output;
 
-    if (from_user_id == 0 ||
-        to_user_id == 0 ||
-        from_user_id == to_user_id ||
-        client_message_id.empty() ||
-        client_message_id.size() > 64 ||
-        message_type < 1 ||
-        message_type > 3 ||
-        content.empty()) {
+    if (!ValidPrivatePersist(from_user_id,to_user_id,client_message_id,message_type,content)) {
         output.status = MessageApplicationStatus::kInvalidArgument;
         output.message = "invalid PersistPrivateMessage application request";
         return output;
@@ -122,7 +122,42 @@ MessageApplicationService::PersistPrivateMessage(
     output.message_id = repository_result.message_id;
     output.record = std::move(repository_result.record);
     output.message = std::move(repository_result.message);
+    output.committed_unread = std::move(repository_result.committed_unread);
     return output;
+}
+
+std::vector<PersistPrivateMessageApplicationResult>
+MessageApplicationService::PersistPrivateMessages(const std::vector<PrivateMessagePersistInput>& inputs) {
+    std::vector<PersistPrivateMessageApplicationResult> out(inputs.size());
+    if(inputs.size()>64){
+        for(auto& r:out){r.status=MessageApplicationStatus::kInvalidArgument;r.message="private persistence batch exceeds64";}
+        return out;
+    }
+    std::vector<PrivateMessagePersistInput> valid;std::vector<std::size_t> indexes;
+    valid.reserve(inputs.size());indexes.reserve(inputs.size());
+    for(std::size_t i=0;i<inputs.size();++i){
+        const auto& in=inputs[i];
+        if(!ValidPrivatePersist(in.from_user_id,in.to_user_id,in.client_message_id,in.message_type,in.content)){
+            out[i].status=MessageApplicationStatus::kInvalidArgument;
+            out[i].message="invalid PersistPrivateMessage application request";
+        }else if(!repository_){out[i].message="message repository port is unavailable";}
+        else{valid.push_back(in);indexes.push_back(i);}
+    }
+    if(valid.empty())return out;
+    auto results=repository_->PersistPrivateMessages(valid);
+    if(results.size()!=valid.size()){
+        // Side effects may already be durable. Fail explicitly; resolution is
+        // by the original CID lookup, never a second write in this call.
+        for(const auto i:indexes)out[i].message="private batch repository result count mismatch";
+        return out;
+    }
+    for(std::size_t j=0;j<indexes.size();++j){
+        auto& target=out[indexes[j]];auto& source=results[j];
+        target.status=source.status;target.outcome=source.outcome;target.message_id=source.message_id;
+        target.record=std::move(source.record);target.message=std::move(source.message);
+        target.committed_unread=std::move(source.committed_unread);
+    }
+    return out;
 }
 
 
@@ -654,40 +689,18 @@ MessageApplicationService::ConfirmReceiver(
         return output;
     }
 
+    if (auto fast = repository_->TryConfirmReceiverOwnedIfPending(message_id, receiver_user_id)) {
+        output.status = fast->status;
+        output.affected_rows = fast->affected_rows;
+        output.message = std::move(fast->message);
+        return output;
+    }
     auto lookup = repository_->GetPrivateMessage(message_id);
-    if (!lookup.Succeeded()) {
-        output.status = lookup.status;
-        output.message = std::move(lookup.message);
+    if (auto decision = ReceiverConfirmationDecision(lookup, receiver_user_id)) {
+        output.status = decision->status;
+        output.affected_rows = decision->affected_rows;
+        output.message = std::move(decision->message);
         return output;
-    }
-    if (!lookup.found) {
-        output.status = MessageApplicationStatus::kNotFound;
-        output.message = "private message not found";
-        return output;
-    }
-    if (lookup.record.to_user_id != receiver_user_id) {
-        output.status = MessageApplicationStatus::kPermissionDenied;
-        output.message = "receiver does not own private message";
-        return output;
-    }
-
-    switch (lookup.record.delivery_state) {
-        case MessageDeliveryState::kPending:
-            break;
-        case MessageDeliveryState::kReceiverConfirmed:
-        case MessageDeliveryState::kRead:
-            output.status = MessageApplicationStatus::kSucceeded;
-            output.affected_rows = 0;
-            output.message = "receiver confirmation already durable";
-            return output;
-        case MessageDeliveryState::kFailed:
-            output.status = MessageApplicationStatus::kFailedPrecondition;
-            output.message = "failed message cannot be receiver-confirmed";
-            return output;
-        default:
-            output.status = MessageApplicationStatus::kInvalidRecord;
-            output.message = "message repository returned invalid delivery status";
-            return output;
     }
 
     auto mutation = repository_->ConfirmReceiver(message_id);

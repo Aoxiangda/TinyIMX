@@ -1,4 +1,5 @@
 #include "common/db/GroupGetBoundaryTrace.h"
+#include "common/observability/RpcExecutionTrace.h"
 #include "services/message/service/MessageServiceImpl.h"
 
 #include "common/observability/GrpcTracing.h"
@@ -66,7 +67,7 @@ std::chrono::milliseconds ResolveFaultDelay(
 }
 
 bool ApplyFaultDelay(
-    grpc::ServerContext* context,
+    grpc::ServerContextBase* context,
     const char* environment_name
 ) {
     const auto delay = ResolveFaultDelay(environment_name);
@@ -114,6 +115,46 @@ void FillMessage(
     target->set_read_at(source.read_at);
 }
 
+grpc::Status FillPrivatePersistResult(const PersistPrivateMessageApplicationResult& result,
+    v1::PersistPrivateMessageResponse* response) {
+    if (!result.Completed()) {
+        return MapApplicationFailure(result.status, result.message);
+    }
+
+    switch (result.outcome) {
+        case PersistPrivateMessageOutcome::kCreated:
+            response->set_result(
+                tinyimx::message::v1::PERSIST_PRIVATE_MESSAGE_RESULT_CREATED);
+            break;
+        case PersistPrivateMessageOutcome::kReused:
+            response->set_result(
+                tinyimx::message::v1::PERSIST_PRIVATE_MESSAGE_RESULT_REUSED);
+            break;
+        case PersistPrivateMessageOutcome::kIdempotencyConflict:
+            response->set_result(
+                tinyimx::message::v1::PERSIST_PRIVATE_MESSAGE_RESULT_IDEMPOTENCY_CONFLICT);
+            break;
+    }
+
+    response->set_message_id(result.message_id);
+    response->set_message(result.message);
+    FillMessage(result.record, response->mutable_record());
+    response->clear_committed_unread();
+    if (result.Created() && result.committed_unread &&
+        result.committed_unread->ValidFor(result.message_id,
+            result.record.to_user_id, result.record.from_user_id)) {
+        const auto& snapshot = *result.committed_unread;
+        auto* target = response->mutable_committed_unread();
+        target->set_message_id(snapshot.message_id);
+        target->set_receiver_user_id(snapshot.receiver_user_id);
+        target->set_peer_user_id(snapshot.peer_user_id);
+        target->set_private_unread(snapshot.private_unread);
+        target->set_total_unread(snapshot.total_unread);
+    }
+
+    return grpc::Status::OK;
+}
+
 void FillConversation(
     const ConversationView& source,
     tinyimx::message::v1::ConversationRecord* target
@@ -136,7 +177,7 @@ void FillConversation(
 }
 
 bool ValidateRpcArguments(
-    grpc::ServerContext* context,
+    grpc::ServerContextBase* context,
     const void* request,
     void* response
 ) {
@@ -269,6 +310,18 @@ grpc::Status MessageServiceImpl::PersistPrivateMessage(
     const tinyimx::message::v1::PersistPrivateMessageRequest* request,
     tinyimx::message::v1::PersistPrivateMessageResponse* response
 ) {
+    diagnostics::RpcExecutionTrace trace(1,false,0,request?request->from_user_id():0,request?request->to_user_id():0);
+    trace.Start();
+    auto status=PersistPrivateMessageCore(context, request, response);
+    trace.Finish(static_cast<int>(status.error_code()),response?response->message_id():0);
+    return status;
+}
+
+grpc::Status MessageServiceImpl::PersistPrivateMessageCore(
+    grpc::ServerContextBase* context,
+    const v1::PersistPrivateMessageRequest* request,
+    v1::PersistPrivateMessageResponse* response
+) {
     if (!ValidateRpcArguments(context, request, response)) {
         return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                             "invalid PersistPrivateMessage RPC arguments");
@@ -294,28 +347,8 @@ grpc::Status MessageServiceImpl::PersistPrivateMessage(
         request->content()
     );
     storage_trace.Result(static_cast<int>(result.status), result.message_id);
-    if (!result.Completed()) {
-        return MapApplicationFailure(result.status, result.message);
-    }
-
-    switch (result.outcome) {
-        case PersistPrivateMessageOutcome::kCreated:
-            response->set_result(
-                tinyimx::message::v1::PERSIST_PRIVATE_MESSAGE_RESULT_CREATED);
-            break;
-        case PersistPrivateMessageOutcome::kReused:
-            response->set_result(
-                tinyimx::message::v1::PERSIST_PRIVATE_MESSAGE_RESULT_REUSED);
-            break;
-        case PersistPrivateMessageOutcome::kIdempotencyConflict:
-            response->set_result(
-                tinyimx::message::v1::PERSIST_PRIVATE_MESSAGE_RESULT_IDEMPOTENCY_CONFLICT);
-            break;
-    }
-
-    response->set_message_id(result.message_id);
-    response->set_message(result.message);
-    FillMessage(result.record, response->mutable_record());
+    const auto mapped=FillPrivatePersistResult(result,response);
+    if(!mapped.ok())return mapped;
 
     if (result.Accepted() &&
         !ApplyFaultDelay(
@@ -328,6 +361,44 @@ grpc::Status MessageServiceImpl::PersistPrivateMessage(
 }
 
 
+
+std::vector<grpc::Status> MessageServiceImpl::PersistPrivateMessageBatchCore(
+    const std::vector<PrivatePersistCallView>& calls) {
+    std::vector<grpc::Status> statuses(calls.size(),
+        grpc::Status(grpc::StatusCode::UNAVAILABLE,"private ready batch unavailable"));
+    if(calls.size()>64)return statuses;
+    std::vector<PrivateMessagePersistInput> inputs;std::vector<std::size_t> indexes;
+    inputs.reserve(calls.size());indexes.reserve(calls.size());
+    for(std::size_t i=0;i<calls.size();++i){
+        const auto& call=calls[i];
+        if(!ValidateRpcArguments(call.context,call.request,call.response)){
+            statuses[i]={grpc::StatusCode::INVALID_ARGUMENT,"invalid PersistPrivateMessage RPC arguments"};continue;
+        }
+        if(!application_service_){statuses[i]={grpc::StatusCode::UNAVAILABLE,"MessageService application service is unavailable"};continue;}
+        if(call.context->deadline()<=std::chrono::system_clock::now()){
+            statuses[i]={grpc::StatusCode::DEADLINE_EXCEEDED,"private ready batch expired before repository"};continue;
+        }
+        if(call.context->IsCancelled()||!ApplyFaultDelay(call.context,"TINYIMX_FAULT_MESSAGE_PERSIST_PRE_REPOSITORY_DELAY_MS")){
+            statuses[i]={grpc::StatusCode::CANCELLED,"PersistPrivateMessage RPC cancelled before repository"};continue;
+        }
+        const auto& q=*call.request;
+        inputs.push_back({q.from_user_id(),q.to_user_id(),q.client_message_id(),q.message_type(),q.content()});
+        indexes.push_back(i);
+    }
+    if(inputs.empty())return statuses;
+    auto results=application_service_->PersistPrivateMessages(inputs);
+    if(results.size()!=inputs.size())return statuses;
+    // All SQL batch effects and outcome recovery finish before any caller is
+    // completed. A cancellation after commit must not cause a second write.
+    for(std::size_t j=0;j<indexes.size();++j){
+        const auto i=indexes[j];const auto& call=calls[i];const auto& result=results[j];
+        statuses[i]=FillPrivatePersistResult(result,call.response);
+        if(statuses[i].ok()&&result.Accepted()&&
+           !ApplyFaultDelay(call.context,"TINYIMX_FAULT_MESSAGE_PERSIST_POST_COMMIT_DELAY_MS"))
+            statuses[i]={grpc::StatusCode::CANCELLED,"PersistPrivateMessage RPC cancelled after durable result"};
+    }
+    return statuses;
+}
 
 grpc::Status MessageServiceImpl::PersistGroupMessage(
     grpc::ServerContext* context,
@@ -634,6 +705,18 @@ grpc::Status MessageServiceImpl::GetPrivateMessage(
     const tinyimx::message::v1::GetPrivateMessageRequest* request,
     tinyimx::message::v1::GetPrivateMessageResponse* response
 ) {
+    diagnostics::RpcExecutionTrace trace(3,false,request?request->message_id():0);
+    trace.Start();
+    auto status=GetPrivateMessageCore(context, request, response);
+    trace.Finish(static_cast<int>(status.error_code()),request?request->message_id():0);
+    return status;
+}
+
+grpc::Status MessageServiceImpl::GetPrivateMessageCore(
+    grpc::ServerContextBase* context,
+    const v1::GetPrivateMessageRequest* request,
+    v1::GetPrivateMessageResponse* response
+) {
     if (!ValidateRpcArguments(context, request, response)) {
         return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                             "invalid GetPrivateMessage RPC arguments");
@@ -643,7 +726,9 @@ grpc::Status MessageServiceImpl::GetPrivateMessage(
                             "MessageService application service is unavailable");
     }
 
+    diagnostics::StorageOperationTrace storage_trace(3,0,0,request->message_id());
     auto result = application_service_->GetPrivateMessage(request->message_id());
+    storage_trace.Result(static_cast<int>(result.status),request->message_id());
     if (!result.Succeeded()) {
         return MapApplicationFailure(result.status, result.message);
     }
@@ -813,6 +898,18 @@ grpc::Status MessageServiceImpl::ConfirmReceiver(
     grpc::ServerContext* context,
     const tinyimx::message::v1::ConfirmReceiverRequest* request,
     tinyimx::message::v1::MessageMutationResponse* response
+) {
+    diagnostics::RpcExecutionTrace trace(2,false,request?request->message_id():0);
+    trace.Start();
+    auto status=ConfirmReceiverCore(context, request, response);
+    trace.Finish(static_cast<int>(status.error_code()),request?request->message_id():0);
+    return status;
+}
+
+grpc::Status MessageServiceImpl::ConfirmReceiverCore(
+    grpc::ServerContextBase* context,
+    const v1::ConfirmReceiverRequest* request,
+    v1::MessageMutationResponse* response
 ) {
     if (!ValidateRpcArguments(context, request, response)) {
         return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,

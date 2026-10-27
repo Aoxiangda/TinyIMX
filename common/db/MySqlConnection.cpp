@@ -4,8 +4,49 @@
 
 #include <cstdlib>
 #include <memory>
+#include <chrono>
+#if defined(__linux__) && defined(MYSQL_VERSION_ID) && MYSQL_VERSION_ID==80040
+#include <poll.h>
+#endif
 
 namespace tinyimx {
+namespace {
+std::int64_t HealthNowNs() noexcept {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+} // namespace
+
+bool MySqlConnection::MayReuseWithoutPing() const noexcept {
+#if defined(__linux__) && defined(MYSQL_VERSION_ID) && MYSQL_VERSION_ID==80040
+    if (!IsConnected() || transaction_active_ || health_validated_ns_<=0) return false;
+    // Unconsumed protocol results always take the original probe/reconnect path,
+    // even when remaining packets have already entered the client-library buffer.
+    if (mysql_->status!=MYSQL_STATUS_READY || ::mysql_more_results(mysql_)) return false;
+    const auto age=HealthNowNs()-health_validated_ns_;
+    if(age<0 || age>=500000000) return false;
+    // The pinned Oracle8.0.40 header exposes NET.fd (also used by DBI).
+    // Other client headers take the original wire-PING path conservatively.
+    const auto socket=mysql_->net.fd;
+    if(socket<0) return false;
+    pollfd descriptor{socket,POLLIN,0};
+    // EOF, pending unsolicited data, error, HUP, invalid fd or interrupted poll
+    // always take the original PING/reconnect path, with no socket consumption.
+    return ::poll(&descriptor,1,0)==0;
+#else
+    return false;
+#endif
+}
+
+std::string MySqlConnection::ConnectionDescription() const {
+    if (!IsConnected()) return {};
+    const char* description=::mysql_get_host_info(mysql_);
+    return description?description:"";
+}
+
+std::uint64_t MySqlConnection::GroupedStatementCommandAttempts() const noexcept {
+    return grouped_statement_command_attempts_;
+}
 
 MySqlConnection::MySqlConnection() {
     mysql_ = ::mysql_init(nullptr);
@@ -51,14 +92,27 @@ bool MySqlConnection::Connect(const MySqlConfig& config) {
         &write_timeout
     );
 
+    const bool local_socket=!config.unix_socket.empty();
+    if (local_socket && (config.unix_socket.front()!='/' ||
+        config.unix_socket.size()>107 || config.unix_socket.find('\0')!=std::string::npos)) {
+        SetError("mysql connect failed: invalid local socket path");
+        Close();return false;
+    }
+    if (local_socket) {
+        const unsigned int protocol=MYSQL_PROTOCOL_SOCKET;
+        if (::mysql_options(mysql_,MYSQL_OPT_PROTOCOL,&protocol)!=0) {
+            SetMysqlError("mysql local socket protocol selection failed");
+            Close();return false;
+        }
+    }
     MYSQL* result = ::mysql_real_connect(
         mysql_,
-        config.host.c_str(),
+        local_socket?"localhost":config.host.c_str(),
         config.user.c_str(),
         config.password.c_str(),
         config.database.c_str(),
-        static_cast<unsigned int>(config.port),
-        nullptr,
+        local_socket?0:static_cast<unsigned int>(config.port),
+        local_socket?config.unix_socket.c_str():nullptr,
         CLIENT_MULTI_STATEMENTS
     );
 
@@ -79,6 +133,7 @@ bool MySqlConnection::Connect(const MySqlConfig& config) {
 
     connected_ = true;
     transaction_active_ = false;
+    health_validated_ns_ = HealthNowNs();
 
     last_insert_id_ = 0;
     affected_rows_ = 0;
@@ -86,6 +141,7 @@ bool MySqlConnection::Connect(const MySqlConfig& config) {
     last_error_.clear();
 
     LOG_INFO("mysql connected"
+             << ", transport=" << ConnectionDescription()
              << ", host=" << config.host
              << ", port=" << config.port
              << ", database=" << config.database
@@ -112,6 +168,7 @@ void MySqlConnection::Close() {
 
     connected_ = false;
     transaction_active_ = false;
+    health_validated_ns_ = 0;
 
     last_insert_id_ = 0;
     affected_rows_ = 0;
@@ -122,6 +179,7 @@ bool MySqlConnection::IsConnected() const {
 }
 
 bool MySqlConnection::Ping() {
+    ++ping_attempts_;
     if (!IsConnected()) {
         SetError("mysql ping failed: not connected");
         return false;
@@ -133,6 +191,7 @@ bool MySqlConnection::Ping() {
         return false;
     }
 
+    health_validated_ns_ = HealthNowNs();
     return true;
 }
 /*
@@ -329,6 +388,99 @@ bool MySqlConnection::BeginInsertAndQuery(
     }
 }
 
+bool MySqlConnection::ExecuteTransactionStatements(
+    const std::vector<MySqlTransactionStatement>& statements,
+    std::vector<MySqlTransactionStatementResult>* results
+) {
+    return ExecuteTransactionStatementsBoundedRows(statements, results, 1);
+}
+
+bool MySqlConnection::ExecuteTransactionStatementsBoundedRows(
+    const std::vector<MySqlTransactionStatement>& statements,
+    std::vector<MySqlTransactionStatementResult>* results,
+    std::size_t max_query_rows
+) {
+    constexpr std::size_t kPacketBytes=1024*1024,kResultBytes=8*1024*1024;
+    if (!results) {SetError("transaction statements require a result output");return false;}
+    results->clear();
+    if (!IsConnected()||!InTransaction()||statements.empty()||statements.size()>128 ||
+        max_query_rows == 0 || max_query_rows > 64) {
+        SetError("transaction statements require active transaction and bounded input");return false;
+    }
+    std::vector<std::string> sql;sql.reserve(statements.size());
+    for (const auto& statement:statements) {
+        auto text=statement.sql;
+        while(!text.empty()&&(text.back()==';'||text.back()==' '||text.back()=='\r'||text.back()=='\n'||text.back()=='\t'))text.pop_back();
+        if(text.empty()||text.size()+1>kPacketBytes){SetError("transaction statement exceeds packet bound");return false;}
+        sql.push_back(std::move(text));
+    }
+    const auto close_failed=[&](const std::string& reason){
+        const auto error=reason.empty()?LastError():reason;
+        Close();SetError(error);return false;
+    };
+    std::size_t result_bytes=0;
+    try {
+        for(std::size_t first=0;first<sql.size();) {
+            std::string packet;std::size_t last=first;
+            while(last<sql.size()&&packet.size()+sql[last].size()+1<=kPacketBytes) {
+                packet+=sql[last++];packet+=';';
+            }
+            ++grouped_statement_command_attempts_;
+            if(::mysql_real_query(mysql_,packet.data(),static_cast<unsigned long>(packet.size()))!=0) {
+                SetMysqlError("transaction statement packet failed");return close_failed("");
+            }
+            for(std::size_t i=first;i<last;++i) {
+                MySqlTransactionStatementResult item;
+                std::unique_ptr<MYSQL_RES,decltype(&::mysql_free_result)> stored(::mysql_store_result(mysql_),::mysql_free_result);
+                const auto fail_item=[&](const std::string& reason){stored.reset();return close_failed(reason);};
+                if(statements[i].query) {
+                    if(!stored)return fail_item("transaction packet missing expected query result");
+                    const auto count=::mysql_num_fields(stored.get());
+                    if(count>16||::mysql_num_rows(stored.get())>max_query_rows)
+                        return fail_item(max_query_rows == 1
+                            ? "transaction query exceeds single-record bound"
+                            : "transaction query exceeds configured row bound");
+                    const auto* fields=::mysql_fetch_fields(stored.get());
+                    for(unsigned k=0;k<count;++k)item.rows.fields.emplace_back(fields[k].name);
+                    MYSQL_ROW row;
+                    while((row=::mysql_fetch_row(stored.get()))!=nullptr) {
+                        auto* lengths=::mysql_fetch_lengths(stored.get());
+                        if(!lengths)return fail_item("transaction query lengths unavailable");
+                        std::vector<std::string> values;values.reserve(count);
+                        for(unsigned k=0;k<count;++k) {
+                            const auto size=row[k]?lengths[k]:0;
+                            result_bytes+=size;
+                            if(result_bytes>kResultBytes)return fail_item("transaction query aggregate result bound");
+                            values.emplace_back(row[k]?std::string(row[k],size):std::string{});
+                        }
+                        item.rows.rows.push_back(std::move(values));
+                    }
+                    if(::mysql_errno(mysql_)!=0){SetMysqlError("transaction fetch failed");return fail_item("");}
+                } else if(stored||::mysql_field_count(mysql_)!=0) {
+                    return fail_item("transaction packet unexpected query result");
+                }
+                const auto affected=::mysql_affected_rows(mysql_);
+                if(affected==static_cast<my_ulonglong>(-1))return fail_item("transaction affected-row result unavailable");
+                item.affected_rows=affected;item.insert_id=::mysql_insert_id(mysql_);
+                // Internal builders contain DML/SELECT only. Never silently
+                // accept an implicit COMMIT/DDL or an already-rolled-back session.
+                if(!(mysql_->server_status&SERVER_STATUS_IN_TRANS))
+                    return fail_item("transaction packet unexpectedly left transaction");
+                last_insert_id_=item.insert_id;affected_rows_=item.affected_rows;
+                stored.reset();results->push_back(std::move(item));
+                const int next=::mysql_next_result(mysql_);
+                if(next>0){SetMysqlError("transaction packet next statement failed");return close_failed("");}
+                if((i+1<last&&next!=0)||(i+1==last&&next!=-1))
+                    return close_failed("transaction packet result count mismatch");
+            }
+            first=last;
+        }
+    } catch (...) {
+        close_failed("transaction packet parsing failed");throw;
+    }
+    last_error_.clear();return true;
+}
+
 bool MySqlConnection::Query(
     const std::string& sql,
     MySqlQueryResult* result
@@ -507,6 +659,80 @@ std::uint64_t MySqlConnection::LastInsertId() const {
 
 */
 
+bool MySqlConnection::InsertAndCommit(
+    const std::string& insert_sql, MySqlInsertCommitResult* result) {
+    if (!result) {
+        SetError("mysql insert commit requires a result output");
+        return false;
+    }
+    *result = {};
+    constexpr char kCommit[] = ";COMMIT";
+    if (!IsConnected() || !transaction_active_ ||
+        !(mysql_->server_status & SERVER_STATUS_IN_TRANS) ||
+        insert_sql.compare(0, 12, "INSERT INTO ") != 0 ||
+        insert_sql.size() > kInsertCommitPacketBytes - (sizeof(kCommit) - 1)) {
+        SetError("mysql insert commit requires an active transaction and bounded trusted INSERT");
+        return false;
+    }
+    const std::string packet = insert_sql + kCommit;
+    const auto failed = [&](std::string message) {
+        // A result may have been lost after the server committed. Never replay
+        // this packet or send another command on an uncertain result stream.
+        Close();
+        SetError(message);
+        return false;
+    };
+    result->command_attempted = true;
+    ++insert_commit_command_attempts_;
+    if (::mysql_real_query(mysql_, packet.data(), packet.size()) != 0) {
+        SetMysqlError("mysql insert commit first result failed");
+        return failed(LastError());
+    }
+    try {
+        for (unsigned index = 0; index < 2; ++index) {
+            std::unique_ptr<MYSQL_RES, decltype(&::mysql_free_result)>
+                rows(::mysql_store_result(mysql_), ::mysql_free_result);
+            if (rows || ::mysql_field_count(mysql_) != 0 || ::mysql_errno(mysql_) != 0) {
+                rows.reset();
+                return failed("mysql insert commit expected a write OK result");
+            }
+            const auto affected = ::mysql_affected_rows(mysql_);
+            if (index == 0) {
+                const auto id = ::mysql_insert_id(mysql_);
+                if (affected != 1 || id == 0 ||
+                    !(mysql_->server_status & SERVER_STATUS_IN_TRANS)) {
+                    return failed("mysql insert commit invalid INSERT result");
+                }
+                result->insert_acknowledged = true;
+                result->insert_id = id;
+                result->affected_rows = affected;
+            } else {
+                if (affected != 0 || (mysql_->server_status & SERVER_STATUS_IN_TRANS)) {
+                    return failed("mysql insert commit invalid COMMIT result");
+                }
+                result->commit_acknowledged = true;
+            }
+            rows.reset();
+            const auto next = ::mysql_next_result(mysql_);
+            if (next > 0) {
+                SetMysqlError("mysql insert commit next result failed");
+                return failed(LastError());
+            }
+            if ((index == 0 && next != 0) || (index == 1 && next != -1)) {
+                return failed("mysql insert commit expected exactly two results");
+            }
+        }
+        transaction_active_ = false;
+        last_insert_id_ = 0;
+        affected_rows_ = 0;
+        last_error_.clear();
+        return true;
+    } catch (...) {
+        Close();
+        throw;
+    }
+}
+
 bool MySqlConnection::Commit() {
     if (!IsConnected()) {
         SetError(
@@ -620,6 +846,11 @@ void MySqlConnection::SetMysqlError(
         ", error=" +
         ::mysql_error(mysql_);
 
+    const auto code=::mysql_errno(mysql_);
+    if(code==2006 || code==2013 || code==2014 || code==2055) {
+        connected_=false;
+        health_validated_ns_=0;
+    }
     LOG_ERROR(last_error_);
 }
 

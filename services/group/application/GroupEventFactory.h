@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace tinyimx::group {
 
@@ -17,6 +18,13 @@ struct GroupOutboxEventSpec {
 
 class GroupEventFactory final {
 public:
+    [[nodiscard]] static bool IsValidTopic(std::string_view topic) noexcept;
+    // Route an otherwise unchanged domain event to this deployment's topic.
+    // Event identity, payload, tag and message key remain independent of routing.
+    [[nodiscard]] static GroupOutboxEventSpec WithTopic(
+        GroupOutboxEventSpec event,
+        std::string_view topic
+    );
     [[nodiscard]] static GroupOutboxEventSpec GroupCreated(const GroupView& group);
     [[nodiscard]] static GroupOutboxEventSpec GroupUpdated(const GroupView& group);
     [[nodiscard]] static GroupOutboxEventSpec GroupDisbanded(const GroupView& group);

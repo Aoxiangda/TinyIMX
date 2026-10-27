@@ -6,14 +6,21 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <stdexcept>
 
 #include <unistd.h>
 
 namespace tinyimx::message {
 namespace {
 
-constexpr const char* kMessageEventsTopic = "tinyimx-message-events";
 constexpr const char* kProducerService = "message-service";
+
+std::string CheckedTopic(std::string_view topic) {
+    if (!MessageEventFactory::IsValidTopic(topic)) {
+        throw std::invalid_argument("message event topic must be 1-128 ASCII letters, digits, '-' or '_'");
+    }
+    return std::string(topic);
+}
 
 std::string CurrentUtcIso8601() {
     const auto now = std::chrono::system_clock::now();
@@ -52,8 +59,18 @@ std::string MakeReadEventId(
 
 }  // namespace
 
+bool MessageEventFactory::IsValidTopic(std::string_view topic) noexcept {
+    if (topic.empty() || topic.size() > 128) return false;
+    for (const char ch : topic) {
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+              (ch >= '0' && ch <= '9') || ch == '-' || ch == '_')) return false;
+    }
+    return true;
+}
+
 OutboxEventSpec MessageEventFactory::MessageCreated(
-    const MessageView& message
+    const MessageView& message,
+    std::string_view topic
 ) {
     OutboxEventSpec spec;
 
@@ -71,7 +88,7 @@ OutboxEventSpec MessageEventFactory::MessageCreated(
         {"to_user_id", message.to_user_id},
     };
 
-    spec.topic = kMessageEventsTopic;
+    spec.topic = CheckedTopic(topic);
     spec.tag = spec.event.event_type;
     spec.message_key = spec.event.event_id;
     return spec;
@@ -80,7 +97,8 @@ OutboxEventSpec MessageEventFactory::MessageCreated(
 
 
 OutboxEventSpec MessageEventFactory::GroupMessageCreated(
-    const GroupMessageView& message
+    const GroupMessageView& message,
+    std::string_view topic
 ) {
     OutboxEventSpec spec;
     spec.event.schema_version = 1;
@@ -99,7 +117,7 @@ OutboxEventSpec MessageEventFactory::GroupMessageCreated(
         {"membership_epoch", message.membership_epoch},
         {"member_version", message.member_version},
     };
-    spec.topic = kMessageEventsTopic;
+    spec.topic = CheckedTopic(topic);
     spec.tag = spec.event.event_type;
     spec.message_key = spec.event.event_id;
     return spec;
@@ -108,7 +126,8 @@ OutboxEventSpec MessageEventFactory::GroupMessageCreated(
 OutboxEventSpec MessageEventFactory::DialogReadAdvanced(
     std::uint64_t reader_user_id,
     std::uint64_t peer_user_id,
-    std::uint64_t affected_rows
+    std::uint64_t affected_rows,
+    std::string_view topic
 ) {
     OutboxEventSpec spec;
 
@@ -126,7 +145,7 @@ OutboxEventSpec MessageEventFactory::DialogReadAdvanced(
         {"affected_rows", affected_rows},
     };
 
-    spec.topic = kMessageEventsTopic;
+    spec.topic = CheckedTopic(topic);
     spec.tag = spec.event.event_type;
     spec.message_key = spec.event.event_id;
     return spec;

@@ -628,6 +628,8 @@ add_executable(business_runtime_tests
     tests/gateway/business_executor_test.cpp
 )
 
+include(cmake/TinyIMXExactKeyTests.cmake)
+
 target_link_libraries(business_runtime_tests PRIVATE
     tinyimx_gateway
 )
@@ -664,6 +666,12 @@ add_custom_target(run_business_runtime_acceptance_tests
 
 
 # M13-C1: isolated Business Runtime capacity/latency benchmark.
+add_executable(receiver_ack_bulkhead_tests
+    tests/gateway/receiver_ack_bulkhead_test.cpp
+)
+target_link_libraries(receiver_ack_bulkhead_tests PRIVATE tinyimx_gateway)
+target_include_directories(receiver_ack_bulkhead_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 add_executable(business_runtime_benchmark
     benchmark/business_runtime_benchmark.cpp
 )
@@ -1525,3 +1533,49 @@ include("${CMAKE_CURRENT_LIST_DIR}/cmake/TinyIMXPrivateChatAckBoundary.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXRpcReadiness.cmake")
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXGroupFanoutWakeTests.cmake")
+
+# Opt-in byte-echo comparator; production Gateway and configuration are unchanged.
+add_executable(peer_tinyimx_echo EXCLUDE_FROM_ALL benchmark/peer_compare/echo_adapter.cpp)
+target_link_libraries(peer_tinyimx_echo PRIVATE tinyimx_net)
+
+add_executable(message_event_topic_tests tests/outbox/message_event_topic_test.cpp)
+target_link_libraries(message_event_topic_tests PRIVATE tinyimx_message_core)
+target_include_directories(message_event_topic_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME message_event_topic_tests COMMAND message_event_topic_tests)
+
+# Requires the exact separately created owned schema; never a default ctest.
+add_executable(message_event_topic_integration tests/outbox/message_event_topic_integration.cpp)
+target_link_libraries(message_event_topic_integration PRIVATE tinyimx_message_core tinyimx_config)
+target_include_directories(message_event_topic_integration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/message/message_rpc_retention_policy_test.cpp")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXMessageRpcRetentionTests.cmake")
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/eventing/bounded_async_ack_batch_test.cpp")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXAckBatchTests.cmake")
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/gateway/phase_priority_budget_test.cpp")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXPhasePriorityTests.cmake")
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/message/bounded_callback_rpc_test.cpp")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXBoundedCallbackTests.cmake")
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/gateway/async_business_rpc_test.cpp")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXAsyncBusinessRpcTests.cmake")
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/gateway/executor_queue_trace_test.cpp")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXExecutorQueueTraceTests.cmake")
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/message/ready_batch_rpc_test.cpp")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXReadyBatchTests.cmake")
+endif()
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXLocalPrivatePermission.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXCommitPacket.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TinyIMXLocalStore.cmake")

@@ -82,6 +82,12 @@ struct BusinessRequestContext {
     std::optional<BusinessOrderingKey>
         ordering_key;
 
+    // Observation only: copied by the executor, never used for admission,
+    // cancellation, ordering or deadlines. Empty means no executor boundary.
+    BusinessTimePoint executor_submitted_at{};
+    BusinessTimePoint executor_enqueued_at{};
+    BusinessTimePoint executor_started_at{};
+
     bool HasDeadline() const noexcept {
         return
             deadline !=

@@ -106,6 +106,40 @@ int main() {
     test("phase_trace_queue_age_not_deadline_reset",[]{BusinessRequestContext r;const auto now=BusinessClock::now();r.received_at=now-3500ms;r.deadline=now-500ms;r.user_id=101;r.request_seq=7;auto original=r.deadline;trace_calls=0;{ChatRequestPhaseTrace t(r,"chat",Capture,now);t.Fail();REQUIRE(t.Current().dispatch_age_us==3500000);REQUIRE(t.Current().entry_budget_us==-500000);REQUIRE(t.Measure(ChatRequestPhaseTrace::Phase::Permission,[]{return 3;})==3);}REQUIRE(r.deadline==original&&trace_calls==1);REQUIRE(trace_output.duration_us[0]>=0&&trace_output.duration_us[2]==-1);});
     test("phase_trace_void_exception_and_peer",[]{BusinessRequestContext r;r.deadline=BusinessClock::now()+1s;trace_calls=0;{ChatRequestPhaseTrace t(r,"peer",Capture);t.SetMessageId(900);t.Measure(ChatRequestPhaseTrace::Phase::Unread,[]{});try{t.Measure(ChatRequestPhaseTrace::Phase::PeerValidate,[]{throw std::runtime_error("test");});}catch(const std::runtime_error&){} }REQUIRE(trace_calls==1&&trace_output.failed&&trace_output.message_id==900&&trace_output.duration_us[4]>=0);});
     test("fast_trace_is_suppressed",[]{BusinessRequestContext r;trace_calls=0;{ChatRequestPhaseTrace t(r,"chat",Capture);}REQUIRE(trace_calls==0);});
+    test("opt_in_fast_trace_correlates_durable_mid_and_preserves_deadline",[]{
+        BusinessRequestContext r; const auto now=BusinessClock::now();
+        r.received_at=now; r.deadline=now+1s; const auto deadline=r.deadline;
+        trace_calls=0;
+        std::uint64_t selected=1;while(!diagnostics::MessageTraceSelected(selected))++selected;
+        {ChatRequestPhaseTrace t(r,"chat",Capture,now,true);t.SetMessageId(selected);
+         REQUIRE(t.Measure(ChatRequestPhaseTrace::Phase::Persist,[]{return 42;})==42);
+         t.MarkAckHandoff(true);}
+        REQUIRE(trace_calls==1&&trace_output.sampled_fast&&!trace_output.failed);
+        REQUIRE(trace_output.message_id==selected&&trace_output.started_us>0);
+        REQUIRE(trace_output.phase_started_us[2]>=trace_output.started_us);
+        REQUIRE(trace_output.phase_finished_us[2]>=trace_output.phase_started_us[2]);
+        REQUIRE(trace_output.ack_handoff_us>=trace_output.phase_finished_us[2]);
+        REQUIRE(trace_output.ack_handoff_ok==1);
+        REQUIRE(r.deadline==deadline);
+    });
+    test("fast_sampling_skips_no_mid_and_other_mid_but_keeps_failure",[]{
+        BusinessRequestContext r;r.received_at=BusinessClock::now();trace_calls=0;
+        {ChatRequestPhaseTrace t(r,"chat",Capture,BusinessClock::now(),true);}
+        std::uint64_t unselected=1;while(diagnostics::MessageTraceSelected(unselected))++unselected;
+        {ChatRequestPhaseTrace t(r,"chat",Capture,BusinessClock::now(),true);t.SetMessageId(unselected);}
+        REQUIRE(trace_calls==0);
+        {ChatRequestPhaseTrace t(r,"chat",Capture,BusinessClock::now(),true);t.SetMessageId(unselected);t.Fail();}
+        REQUIRE(trace_calls==1&&trace_output.failed&&!trace_output.sampled_fast);
+    });
+    test("sample_selection_has_both_parities_and_is_stable",[]{
+        int even=0,odd=0;REQUIRE(!diagnostics::MessageTraceSelected(0));
+        for(std::uint64_t id=1;id<=20000;++id){
+            const bool chosen=diagnostics::MessageTraceSelected(id);
+            REQUIRE(chosen==diagnostics::MessageTraceSelected(id));
+            if(chosen){if(id%2)++odd;else ++even;}
+        }
+        REQUIRE(even>100&&even<230&&odd>100&&odd<230);
+    });
     test("phase_log_limiter_is_concurrent_and_bounded",[]{ChatPhaseLogLimiter l;std::atomic<int> n{0};std::vector<std::thread> ts;for(int i=0;i<32;i++)ts.emplace_back([&]{if(l.Admit(100))n++;});for(auto&t:ts)t.join();REQUIRE(n==8&&l.TakeSuppressed()==24);REQUIRE(l.Admit(101));REQUIRE(!l.Admit(100));});
     std::cout<<"R2A_COMPONENT_TESTS total="<<(passed+failed)<<" passed="<<passed<<" failed="<<failed<<"\n";
     std::cout<<"FULL_GATEWAY_BUILD=NOT_EVALUATED_BY_COMPONENT_TEST; MYSQL_E2E=NOT_RUN; ORIGINAL_10K=FAIL\n";

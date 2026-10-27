@@ -1,8 +1,11 @@
 #include "services/eventing/rocketmq/RocketMQSimpleConsumer.h"
 
 #include "common/logging/LogMacros.h"
+#include "services/eventing/BoundedAsyncAckBatch.h"
+#include "services/eventing/rocketmq/OptionalWireAckBatch.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <stdexcept>
 #include <system_error>
@@ -15,8 +18,25 @@
 #include <rocketmq/Message.h>
 #include <rocketmq/SimpleConsumer.h>
 
+#if defined(__linux__) && defined(_GLIBCXX_USE_CXX11_ABI)
+#include <dlfcn.h>
+#endif
+
 namespace tinyimx::eventing::rocketmq_transport {
 namespace {
+
+using WireAckApi = ::ROCKETMQ_NAMESPACE::TinyIMXBatchAckApiV1;
+
+const WireAckApi* FindWireAckApi() {
+#if defined(__linux__) && defined(_GLIBCXX_USE_CXX11_ABI)
+    using Getter = const WireAckApi* (*)() noexcept;
+    const auto getter = reinterpret_cast<Getter>(
+        dlsym(RTLD_DEFAULT, "tinyimx_rocketmq_batch_ack_api_v1"));
+    return getter ? getter() : nullptr;
+#else
+    return nullptr;
+#endif
+}
 
 ::ROCKETMQ_NAMESPACE::CredentialsProviderPtr MakeCredentials(
     const RocketMQSimpleConsumerOptions& options
@@ -60,11 +80,12 @@ namespace {
 
 class RocketMQSimpleConsumer::Impl final {
 public:
-    explicit Impl(const RocketMQSimpleConsumerOptions& options)
-        : consumer(BuildConsumer(options)) {
+    explicit Impl(const RocketMQSimpleConsumerOptions& options, const WireAckApi* api)
+        : consumer(BuildConsumer(options)), wire_ack_api(api) {
     }
 
     ::ROCKETMQ_NAMESPACE::SimpleConsumer consumer;
+    const WireAckApi* wire_ack_api;
 };
 
 RocketMQSimpleConsumer::RocketMQSimpleConsumer(
@@ -90,7 +111,20 @@ bool RocketMQSimpleConsumer::Start() {
     }
 
     try {
-        impl_ = std::make_unique<Impl>(options_);
+        // Sample once before creating the SDK client. An explicit request for
+        // the extension must never silently fall back to N individual RPCs.
+        const auto mode = detail::ParseWireAckMode(
+            std::getenv("TINYIMX_ROCKETMQ_WIRE_ACK_BATCH_ENABLE"));
+        if (mode == detail::WireAckMode::Invalid) {
+            last_error_ = "TINYIMX_ROCKETMQ_WIRE_ACK_BATCH_ENABLE must be 0 or 1";
+            return false;
+        }
+        const WireAckApi* api = mode == detail::WireAckMode::Enabled ? FindWireAckApi() : nullptr;
+        if (mode == detail::WireAckMode::Enabled && !detail::CompatibleWireAckApi(api)) {
+            last_error_ = "RocketMQ wire ACK batch requested but compatible SDK capability is unavailable";
+            return false;
+        }
+        impl_ = std::make_unique<Impl>(options_, api);
         last_error_.clear();
         LOG_INFO(
             "RocketMQ SimpleConsumer started"
@@ -98,6 +132,7 @@ bool RocketMQSimpleConsumer::Start() {
             << ", topic=" << options_.topic
             << ", group=" << options_.consumer_group
             << ", filter=" << options_.filter_expression
+            << ", wire_ack_batch=" << (api != nullptr)
         );
         return true;
     } catch (const std::exception& e) {
@@ -121,6 +156,28 @@ bool RocketMQSimpleConsumer::IsStarted() const noexcept {
 
 const std::string& RocketMQSimpleConsumer::LastError() const noexcept {
     return last_error_;
+}
+
+RocketMQWireAckStats RocketMQSimpleConsumer::ReadWireAckStats() const noexcept {
+    RocketMQWireAckStats result;
+    if (!impl_) return result;
+    result.started = true;
+    result.wire_batch_enabled = impl_->wire_ack_api != nullptr;
+    const auto* api = FindWireAckApi();
+    result.capability_available = detail::CompatibleWireAckApi(api);
+    if (!result.capability_available) return result;
+    try {
+        ::ROCKETMQ_NAMESPACE::TinyIMXBatchAckStatsV1 snapshot{};
+        api->read_stats(&snapshot);
+        result.api_calls = snapshot.api_calls;
+        result.rpc_submissions = snapshot.rpc_submissions;
+        result.submitted_entries = snapshot.submitted_entries;
+        result.rpc_terminals = snapshot.rpc_terminals;
+        result.snapshot_available = true;
+    } catch (...) {
+        // An unavailable observation must never masquerade as measured zero.
+    }
+    return result;
 }
 
 EventReceiveResult RocketMQSimpleConsumer::Receive(
@@ -219,6 +276,41 @@ EventAckResult RocketMQSimpleConsumer::Ack(
         result.message = "RocketMQ ACK threw unknown exception";
         return result;
     }
+}
+
+std::vector<EventAckResult> RocketMQSimpleConsumer::AckBatch(
+    const std::vector<ConsumedEvent>& events
+) {
+    if (!impl_) {
+        return std::vector<EventAckResult>(
+            events.size(), {false, "RocketMQ SimpleConsumer is not started"});
+    }
+    if (events.size() > 256) {
+        return std::vector<EventAckResult>(
+            events.size(), {false, "RocketMQ ACK batch exceeds 256 handles"});
+    }
+    using Message = ::ROCKETMQ_NAMESPACE::Message;
+    std::vector<std::shared_ptr<const Message>> handles;
+    handles.reserve(events.size());
+    for (const auto& event : events) {
+        handles.push_back(std::static_pointer_cast<const Message>(event.native_handle));
+    }
+    // The externally sequenced transport lifetime spans all callbacks. SDK
+    // request timeouts report through the callback; no early success or
+    // detached ACK worker can race Stop(). Each event retains its own receipt.
+    const auto errors = impl_->wire_ack_api
+        ? detail::InvokeWireAckBatch(impl_->wire_ack_api, &impl_->consumer, handles)
+        : AwaitBoundedAckBatch(handles,
+        [this](const Message& message, auto callback) {
+            impl_->consumer.asyncAck(message, std::move(callback));
+        });
+    std::vector<EventAckResult> results;
+    results.reserve(errors.size());
+    for (const auto& error : errors) {
+        results.push_back({!error, error ? "RocketMQ ACK failed: " + error.message()
+                                       : "RocketMQ message acknowledged"});
+    }
+    return results;
 }
 
 }  // namespace tinyimx::eventing::rocketmq_transport

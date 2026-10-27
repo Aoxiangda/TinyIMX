@@ -23,6 +23,7 @@ struct OutboxRelayOptions {
     std::string allowed_topic{"tinyimx-message-events"};
 
     std::size_t batch_size{32};
+    std::size_t publish_batch_size{1};
     std::size_t worker_threads{4};
     std::size_t max_inflight{128};
 
@@ -90,7 +91,7 @@ private:
     void PollLoop();
     void RenewLoop();
     void WorkerLoop(std::size_t worker_index);
-    void ProcessRecord(const OutboxRecord& record);
+    [[nodiscard]] bool ProcessRecord(const OutboxRecord& record);
     void FinishRecord(std::uint64_t outbox_id);
 
 private:

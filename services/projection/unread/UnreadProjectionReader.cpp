@@ -100,6 +100,79 @@ UnreadProjectionReader::LoadDialogSnapshot(
     return result;
 }
 
+std::vector<UnreadProjectionReadResult<DialogUnreadSnapshot>>
+UnreadProjectionReader::LoadDialogSnapshots(
+    const std::vector<std::pair<std::uint64_t, std::uint64_t>>& dialogs
+) {
+    if (dialogs.empty() || dialogs.size() > 256) return {};
+    std::vector<UnreadProjectionReadResult<DialogUnreadSnapshot>> results(dialogs.size());
+    const auto fail = [&](const std::string& message) {
+        for (auto& result : results) {
+            result.success = false;
+            result.value = {};
+            result.message = message;
+        }
+        return results;
+    };
+    if (pool_ == nullptr)
+        return fail("unread projection batch read requires MySQL pool");
+    for (const auto& [receiver, peer] : dialogs) {
+        if (receiver == 0 || peer == 0 || receiver == peer)
+            return fail("unread projection batch read rejected invalid dialog");
+    }
+    auto connection = pool_->Acquire();
+    if (!connection)
+        return fail("unread projection batch read failed: acquire MySQL connection");
+
+    // One SELECT gives all dialogs the same InnoDB read view. The bounded
+    // derived request table keeps result cardinality equal to the input even
+    // for empty receivers, duplicate dialogs and several peers of one user.
+    // COUNT(message_id), not COUNT(*), makes a LEFT JOIN miss count as zero.
+    std::string sql =
+        "SELECT requested.request_index, "
+        "COALESCE(SUM(messages.from_user_id = requested.peer_id), 0), "
+        "COUNT(messages.message_id) FROM (";
+    for (std::size_t i = 0; i < dialogs.size(); ++i) {
+        if (i != 0) sql += " UNION ALL ";
+        sql += "SELECT " + std::to_string(i) + " AS request_index, " +
+            std::to_string(dialogs[i].first) + " AS receiver_id, " +
+            std::to_string(dialogs[i].second) + " AS peer_id";
+    }
+    sql += ") AS requested LEFT JOIN im_private_messages AS messages "
+        "ON messages.to_user_id = requested.receiver_id "
+        "AND messages.delivery_status IN (0, 1) "
+        "GROUP BY requested.request_index";
+    MySqlQueryResult query;
+    if (!connection->Query(sql, &query)) return fail(connection->LastError());
+    if (query.rows.size() != dialogs.size())
+        return fail("unread projection batch returned invalid result count");
+    std::vector<bool> seen(dialogs.size(), false);
+    for (const auto& row : query.rows) {
+        if (row.size() != 3)
+            return fail("unread projection batch returned invalid row shape");
+        std::size_t consumed = 0;
+        std::uint64_t ordinal = 0;
+        try {
+            ordinal = std::stoull(row[0], &consumed, 10);
+        } catch (...) {
+            return fail("unread projection batch returned invalid request index");
+        }
+        if (consumed != row[0].size() || ordinal >= dialogs.size() || seen[ordinal])
+            return fail("unread projection batch returned duplicate/foreign request index");
+        auto& snapshot = results[ordinal].value;
+        snapshot.receiver_user_id = dialogs[ordinal].first;
+        snapshot.peer_user_id = dialogs[ordinal].second;
+        if (!ParseCount(row[1], &snapshot.private_unread) ||
+            !ParseCount(row[2], &snapshot.total_unread) ||
+            snapshot.private_unread > snapshot.total_unread)
+            return fail("unread projection batch returned invalid count snapshot");
+        seen[ordinal] = true;
+        results[ordinal].success = true;
+        results[ordinal].message = "unread projection batch snapshot loaded";
+    }
+    return results;
+}
+
 UnreadProjectionReadResult<UserUnreadSnapshot>
 UnreadProjectionReader::LoadUserSnapshot(
     std::uint64_t receiver_user_id

@@ -39,30 +39,42 @@ int main(){
     Check(captured.total_us==42&&captured.phase_us[0]==30&&captured.phase_us[1]==12,"Repeated phase accumulates elapsed time");
     Check(captured.phase_us[2]==-1&&!captured.threw&&captured.status==0&&captured.outcome==1,"Unexecuted phase and exact outcome remain distinguishable");
     {
+        Trace trace(11,22,result,true,Sink,Now,0);
+        trace.Measure(Trace::Phase::OutboxCommit,[]{ticks+=17;return true;});
+    }
+    Check(captured.phase_us[10]==17&&captured.phase_us[5]==-1&&captured.phase_us[6]==-1,
+          "Combined Outbox/COMMIT timing is not mislabeled as separate INSERT or COMMIT");
+    {
         Trace trace(1,2,result,true,Sink,Now,10000);
         trace.Measure(Trace::Phase::Commit,[]{ticks+=1;return true;});
     }
-    Check(emitted==1,"Fast successful call is not logged");
+    Check(emitted==2,"Fast successful call is not logged");
     result.status=tinyimx::message::MessageApplicationStatus::kStorageError;
     try {
         Trace trace(1,2,result,true,Sink,Now,10000);
         trace.Measure(Trace::Phase::Insert,[]{ticks+=13;throw std::runtime_error("original-exception");});
     }catch(const std::runtime_error& e){Check(std::string(e.what())=="original-exception","Original exception propagates unchanged");}
-    Check(emitted==2&&captured.threw&&captured.phase_us[3]==13&&captured.status==6,"Throwing phase retains elapsed failure evidence");
+    Check(emitted==3&&captured.threw&&captured.phase_us[3]==13&&captured.status==6,"Throwing phase retains elapsed failure evidence");
     tinyimx::message::PersistenceLogLimiter limiter;
     unsigned allowed=0;for(unsigned i=0;i<100;++i)allowed+=limiter.Admit(10);
     Check(allowed==8,"Default numeric logger bounded to eight per second");
     Check(limiter.Admit(11)&&!limiter.Admit(10),"Next bucket resumes and stale bucket rejected");
     const auto before_clocks=clocks;
+    std::uint64_t selected=1,unselected=1;
+    while(!tinyimx::diagnostics::MessageTraceSelected(selected))++selected;
+    while(tinyimx::diagnostics::MessageTraceSelected(unselected))++unselected;
     {StorageTrace trace(1,11,22,64,false,StorageSink,Now,CpuNow);trace.Result(0,64);}
     Check(clocks==before_clocks&&cpu_clocks==0&&storage_emitted==0,"Storage timing disabled invokes no clocks or sink");
-    {StorageTrace trace(1,11,22,0,true,StorageSink,Now,CpuNow);ticks+=40;cpu_ticks+=7;trace.Result(0,64);}
-    Check(storage_emitted==1&&storage_captured.total_us==40&&storage_captured.cpu_us==7&&storage_captured.mid==64&&storage_captured.status==0,
+    {StorageTrace trace(1,11,22,0,true,StorageSink,Now,CpuNow);ticks+=40;cpu_ticks+=7;trace.Result(0,selected);}
+    Check(storage_emitted==1&&storage_captured.total_us==40&&storage_captured.cpu_us==7&&storage_captured.mid==selected&&storage_captured.status==0,
           "Storage timing separates wall and thread CPU with final numeric identity");
-    {StorageTrace trace(2,0,22,65,true,StorageSink,Now,CpuNow);trace.Result(0,65);}
-    Check(storage_emitted==1,"Storage timing successful identity sampling omits non64 messages");
-    {StorageTrace trace(2,0,22,128,true,StorageSink,Now,NoCpu);trace.Result(0,128);}
+    {StorageTrace trace(2,0,22,unselected,true,StorageSink,Now,CpuNow);trace.Result(0,unselected);}
+    Check(storage_emitted==1,"Storage timing successful identity sampling omits unselected messages");
+    {StorageTrace trace(2,0,22,selected,true,StorageSink,Now,NoCpu);trace.Result(0,selected);}
     Check(storage_emitted==2&&storage_captured.cpu_us==-1,"Storage timing unavailable CPU remains explicit minus1");
+    {StorageTrace trace(1,11,22,unselected,true,StorageSink,Now,CpuNow);ticks+=10000;trace.Result(0,unselected);}
+    Check(storage_emitted==3&&storage_captured.mid==unselected&&storage_captured.total_us==10000,
+          "Slow unselected handler remains observable independently of normal MID cohort");
     Check(captured.cpu_us==-1&&captured.phase_cpu_us[1]==-1,"Legacy persistence timing leaves CPU unavailable while storage flagOFF");
     return failed?1:0;
 }

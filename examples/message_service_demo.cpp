@@ -13,15 +13,23 @@
 #include "services/rpc/ZooKeeperServiceEndpointProvider.h"
 #include "services/message/application/MessageApplicationService.h"
 #include "services/message/repository/MessageRepositoryAdapter.h"
+#include "services/message/application/MessageEventFactory.h"
 #include "services/message/server/MessageServiceServer.h"
 #include "services/message/service/MessageServiceImpl.h"
+#include "services/message/service/MessageCallbackService.h"
+#include "services/message/service/MessageReadyBatchService.h"
 #include "services/repository/MessageRepository.h"
 #include "services/outbox/OutboxRepository.h"
+#ifdef TINYIMX_HAS_NATIVE_MESSAGE_RUNTIME
+#include "services/message/local/NativeMessageRuntime.h"
+#endif
 
 #include <pthread.h>
 #include <signal.h>
 
 #include <chrono>
+#include <atomic>
+#include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
@@ -29,6 +37,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -115,11 +124,38 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    if (!tinyimx::message::MessageEventFactory::IsValidTopic(config.RocketMQ().message_topic)) {
+        LOG_ERROR("MessageService invalid rocketmq.message_topic");
+        tinyimx::Logger::Instance().Shutdown();
+        return 1;
+    }
+
+    const char* native_flag=std::getenv("TINYIMX_NATIVE_PRIVATE_STORE_ENABLE");
+    const char* native_config=std::getenv("TINYIMX_NATIVE_PRIVATE_STORE_CONFIG");
+    if((native_flag&&std::string(native_flag)!="0"&&std::string(native_flag)!="1")||
+       (native_config&&native_config[0]&&(!native_flag||std::string(native_flag)!="1"))){
+        LOG_ERROR("native Message options require explicit enable=0/1 and matching owner config");return 2;
+    }
+    const bool native_enabled=native_flag&&std::string(native_flag)=="1";
+#ifndef TINYIMX_HAS_NATIVE_MESSAGE_RUNTIME
+    if(native_enabled){LOG_ERROR("native Message runtime support was not built");return 2;}
+#endif
     tinyimx::MySqlConnectionPool mysql_pool;
     if (!mysql_pool.Initialize(config.MySql())) {
         LOG_ERROR("MessageService mysql pool initialize failed");
         tinyimx::Logger::Instance().Shutdown();
         return 1;
+    }
+    if(!native_enabled){
+        auto lease=mysql_pool.Acquire();tinyimx::MySqlQueryResult owners;
+        if(!lease||!lease->Query("SELECT COUNT(*)FROM information_schema.tables WHERE TABLE_SCHEMA=DATABASE()AND TABLE_NAME='im_native_private_owner'",&owners)||owners.rows.size()!=1||owners.rows[0].size()!=1){
+            LOG_ERROR("Message private storage ownership preflight failed");return 1;
+        }
+        if(owners.rows[0][0]=="1"){
+            if(!lease->Query("SELECT COUNT(*)FROM im_native_private_owner",&owners)||owners.rows!=std::vector<std::vector<std::string>>{{"0"}}){
+                LOG_ERROR("registered native private history prevents SQL fallback; explicit migration required");return 1;
+            }
+        }else if(owners.rows[0][0]!="0"){LOG_ERROR("unexpected private owner schema");return 1;}
     }
 
     tinyimx::MessageRepository repository(&mysql_pool);
@@ -127,10 +163,31 @@ int main(int argc, char* argv[]) {
     tinyimx::message::MessageRepositoryAdapter repository_adapter(
         &repository,
         &mysql_pool,
-        &outbox_repository
+        &outbox_repository,
+        config.RocketMQ().message_topic
     );
+    tinyimx::message::MessageRepositoryPort* selected_repository=&repository_adapter;
+#ifdef TINYIMX_HAS_NATIVE_MESSAGE_RUNTIME
+    std::unique_ptr<tinyimx::message::local::NativeMessageRuntime> native_runtime;
+    if(native_enabled){
+        if(!native_config||!native_config[0]){LOG_ERROR("native Message owner config required");return 2;}
+        try{
+            native_runtime=std::make_unique<tinyimx::message::local::NativeMessageRuntime>(
+                &mysql_pool,&repository_adapter,config.RocketMQ(),native_config);
+            selected_repository=native_runtime->Repository();
+            LOG_WARN("experimental native private Message owner active; SQL group authority retained; internal user IDs immutable");
+        }catch(const std::exception&e){LOG_ERROR("native Message initialization failed: "<<e.what());return 1;}
+    }
+#endif
+    bool storage_ok=true;
+    const auto close_storage=[&]{
+#ifdef TINYIMX_HAS_NATIVE_MESSAGE_RUNTIME
+        if(native_runtime)storage_ok=native_runtime->Shutdown()&&storage_ok;
+#endif
+        mysql_pool.Shutdown();
+    };
     tinyimx::message::MessageApplicationService application_service(
-        &repository_adapter
+        selected_repository
     );
 
     std::shared_ptr<
@@ -153,7 +210,7 @@ int main(int argc, char* argv[]) {
                 "MessageService GroupService discovery client start failed"
                 << ", error=" << rpc_zookeeper_client->LastError()
             );
-            mysql_pool.Shutdown();
+            close_storage();
             tinyimx::Logger::Instance().Shutdown();
             return 1;
         }
@@ -176,7 +233,7 @@ int main(int argc, char* argv[]) {
             );
             rpc_service_discovery->Stop();
             rpc_zookeeper_client->Stop();
-            mysql_pool.Shutdown();
+            close_storage();
             tinyimx::Logger::Instance().Shutdown();
             return 1;
         }
@@ -226,12 +283,51 @@ int main(int argc, char* argv[]) {
         &application_service,
         group_rpc_client.get()
     );
-    tinyimx::message::MessageServiceServer server(&service_impl);
+    std::unique_ptr<tinyimx::message::MessageCallbackService> callback_service;
+    if (const char* raw = std::getenv("TINYIMX_MESSAGE_CALLBACK_WORKERS")) {
+        const std::string value(raw);
+        if (value != "0") {
+            if (value != "16" && value != "32") {
+                std::cerr << "TINYIMX_MESSAGE_CALLBACK_WORKERS must be 0,16,32\n";
+                return 2;
+            }
+            callback_service = std::make_unique<tinyimx::message::MessageCallbackService>(
+                &application_service, group_rpc_client.get(), std::stoul(value), 128);
+            LOG_INFO("bounded callback message RPC enabled, workers=" << value
+                     << ", queue_capacity=128, methods=persist/get/confirm");
+        }
+    }
+    std::unique_ptr<tinyimx::message::MessageReadyBatchService> ready_batch_service;
+    if(const char* raw=std::getenv("TINYIMX_PRIVATE_READY_BATCH_SHARDS")){
+        const std::string value(raw);
+        if(value!="0"){
+            if(callback_service || (value!="1"&&value!="4"&&value!="8")){
+                std::cerr<<"ready batch shards must be0/1/4/8 and callback workers must be0\n";
+                return 2;
+            }
+            ready_batch_service=std::make_unique<tinyimx::message::MessageReadyBatchService>(
+                &application_service,group_rpc_client.get(),std::stoul(value),128);
+            LOG_WARN("private ready batch RPC enabled, shards="<<value<<", global_capacity=128, max_batch=64");
+        }
+    }
+    const auto drain_callbacks=[&]{
+        if(callback_service)callback_service->Drain();
+        if(ready_batch_service)ready_batch_service->Drain();
+    };
+    tinyimx::message::MessageServiceServer server(ready_batch_service
+        ?static_cast<grpc::Service*>(ready_batch_service.get())
+        :(callback_service ? static_cast<grpc::Service*>(callback_service.get()) : &service_impl));
+#ifdef TINYIMX_HAS_NATIVE_MESSAGE_RUNTIME
+    if(native_runtime&&!server.SetAuxiliaryService(native_runtime->SnapshotService())){
+        LOG_ERROR("native owner snapshot RPC registration failed");drain_callbacks();close_storage();return 1;
+    }
+#endif
 
     const std::string listen_target =
         ResolveListenTarget(argc, argv);
 
     if (!server.Start(listen_target)) {
+        drain_callbacks();
         LOG_ERROR(
             "MessageService start failed"
             << ", target=" << listen_target
@@ -242,7 +338,7 @@ int main(int argc, char* argv[]) {
         if (rpc_zookeeper_client != nullptr) {
             rpc_zookeeper_client->Stop();
         }
-        mysql_pool.Shutdown();
+        close_storage();
         tinyimx::Logger::Instance().Shutdown();
         return 1;
     }
@@ -259,7 +355,8 @@ int main(int argc, char* argv[]) {
             LOG_ERROR("MessageService selected invalid gRPC port");
             server.Shutdown();
             server.Wait();
-            mysql_pool.Shutdown();
+            drain_callbacks();
+            close_storage();
             tinyimx::Logger::Instance().Shutdown();
             return 1;
         }
@@ -272,7 +369,8 @@ int main(int argc, char* argv[]) {
             LOG_ERROR("MessageService ZooKeeper service instance invalid");
             server.Shutdown();
             server.Wait();
-            mysql_pool.Shutdown();
+            drain_callbacks();
+            close_storage();
             tinyimx::Logger::Instance().Shutdown();
             return 1;
         }
@@ -287,7 +385,8 @@ int main(int argc, char* argv[]) {
             );
             server.Shutdown();
             server.Wait();
-            mysql_pool.Shutdown();
+            drain_callbacks();
+            close_storage();
             tinyimx::Logger::Instance().Shutdown();
             return 1;
         }
@@ -312,16 +411,22 @@ int main(int argc, char* argv[]) {
             zookeeper_client->Stop();
             server.Shutdown();
             server.Wait();
-            mysql_pool.Shutdown();
+            drain_callbacks();
+            close_storage();
             tinyimx::Logger::Instance().Shutdown();
             return 1;
         }
     }
 
-    if (!server.SetReady(true)) {
+    bool dependencies_ready=true;
+#ifdef TINYIMX_HAS_NATIVE_MESSAGE_RUNTIME
+    dependencies_ready=!native_runtime||native_runtime->Healthy();
+#endif
+    if (!dependencies_ready||!server.SetReady(true)) {
         std::cerr << "RPC readiness initialization failed\n";
         server.Shutdown();
         server.Wait();
+        drain_callbacks();
         return 1;
     }
 
@@ -337,11 +442,24 @@ int main(int argc, char* argv[]) {
     );
 
     auto* registrar_for_signal = zookeeper_registrar.get();
+    std::atomic<bool> native_failed{false};
 
     std::thread signal_thread(
-        [&server, registrar_for_signal, signal_set]() mutable {
+        [&server, registrar_for_signal, signal_set, &native_failed
+#ifdef TINYIMX_HAS_NATIVE_MESSAGE_RUNTIME
+            ,owner=native_runtime.get()
+#endif
+        ]() mutable {
             int signal_number = 0;
-            if (sigwait(&signal_set, &signal_number) == 0) {
+            for(;;){
+                timespec timeout{0,200000000};
+                const int result=sigtimedwait(&signal_set,nullptr,&timeout);
+                if(result>0){signal_number=result;break;}
+#ifdef TINYIMX_HAS_NATIVE_MESSAGE_RUNTIME
+                if(owner&&!owner->Healthy()){native_failed=true;LOG_ERROR("native Message dependency owner failed; stop RPC readiness and drain");break;}
+#endif
+                if(errno!=EAGAIN&&errno!=EINTR){LOG_ERROR("Message signal wait failed");native_failed=true;break;}
+            }
             (void)server.SetReady(false);
                 LOG_INFO(
                     "MessageService shutdown signal received"
@@ -351,11 +469,11 @@ int main(int argc, char* argv[]) {
                     registrar_for_signal->Stop();
                 }
                 server.Shutdown();
-            }
         }
     );
 
     server.Wait();
+    drain_callbacks();
 
     if (signal_thread.joinable()) {
         signal_thread.join();
@@ -374,9 +492,9 @@ int main(int argc, char* argv[]) {
         rpc_zookeeper_client->Stop();
     }
 
-    mysql_pool.Shutdown();
+    close_storage();
     LOG_INFO("MessageService stopped");
     process_telemetry.Shutdown();
     tinyimx::Logger::Instance().Shutdown();
-    return 0;
+    return storage_ok&&!native_failed.load()?0:1;
 }

@@ -680,6 +680,22 @@ public:
         const std::string& client_message_id = ""
     );
 
+    // Same parser and SQL identity semantics, bounded protocol grouping only.
+    std::vector<FindPrivateMessageResult> FindPrivateMessageCidsOnConnection(
+        MySqlConnection* connection,
+        const std::vector<std::pair<std::uint64_t,std::string>>& identities);
+    ListPrivateMessagesResult SaveAndFindPrivateMessagesOnConnection(
+        MySqlConnection* connection,
+        const std::vector<PrivateMessageRecord>& inputs);
+
+    // Native SQL candidate. Bounded, distinct canonical CIDs; caller owns COMMIT.
+    std::vector<FindPrivateMessageResult> FindPrivateMessageCidsBulkOnConnection(
+        MySqlConnection* connection,
+        const std::vector<std::pair<std::uint64_t,std::string>>& identities);
+    ListPrivateMessagesResult SaveAndFindPrivateMessagesBulkOnConnection(
+        MySqlConnection* connection,
+        const std::vector<PrivateMessageRecord>& inputs);
+
     // Starts a transaction and writes/reads the new row in one SQL packet.
     // Caller must validate created before outbox/COMMIT and rollback errors.
     BeginSavePrivateMessageResult BeginSavePrivateMessageOnConnection(
@@ -740,6 +756,13 @@ public:
     );
 
 private:
+    static bool BuildPrivateMessageCidsBulkQuery(
+        MySqlConnection* connection,
+        const std::vector<std::pair<std::uint64_t,std::string>>& identities,
+        std::string* sql);
+    static std::vector<FindPrivateMessageResult> ParsePrivateMessageCidsBulkRows(
+        const MySqlQueryResult& rows, std::size_t identity_count);
+
     GroupDeliveryMutationResult ConfirmGroupMessageDeliveryDirect(
         std::uint64_t message_id, std::uint64_t recipient_user_id
     );

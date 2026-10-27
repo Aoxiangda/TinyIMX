@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -38,6 +39,10 @@ public:
         const CheckPrivateChatPermissionRpcRequest& request,
         const RpcCallOptions& options
     ) const;
+
+    void CheckPrivateChatPermissionAsync(CheckPrivateChatPermissionRpcRequest request,
+        RpcCallOptions options,
+        std::function<void(RpcResult<CheckPrivateChatPermissionRpcResponse>)> callback) const;
 
     [[nodiscard]] CreateFriendRequestRpcCallResult CreateFriendRequest(
         const CreateFriendRequestRpcRequest& request,
@@ -73,6 +78,8 @@ private:
     [[nodiscard]] static RpcStatus MapGrpcStatus(
         const grpc::Status& status
     );
+    static RpcResult<CheckPrivateChatPermissionRpcResponse> ParsePermissionResponse(
+        const grpc::Status&, const tinyimx::social::v1::CheckPrivateChatPermissionResponse&);
 
 private:
     const std::shared_ptr<const ServiceEndpointProvider> endpoint_provider_;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "services/group/application/GroupRepositoryPort.h"
+#include <string>
 
 namespace tinyimx {
 class GroupRepository;
@@ -21,7 +22,8 @@ public:
         tinyimx::GroupRepository* repository,
         tinyimx::MySqlConnectionPool* pool,
         tinyimx::outbox::OutboxRepository* outbox_repository,
-        const GroupPermissionPolicy* permission_policy
+        const GroupPermissionPolicy* permission_policy,
+        std::string event_topic = "tinyimx-message-events"
     );
 
     [[nodiscard]] GroupRepositoryMutationResult CreateGroup(
@@ -80,6 +82,7 @@ private:
     tinyimx::MySqlConnectionPool* pool_{nullptr};
     tinyimx::outbox::OutboxRepository* outbox_{nullptr};
     const GroupPermissionPolicy* permission_{nullptr};
+    const std::string event_topic_;
 };
 
 }  // namespace tinyimx::group

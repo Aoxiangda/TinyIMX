@@ -68,6 +68,7 @@ int main(int argc, char** argv) {
     relay_options.instance_id = relay_config.instance_id;
     relay_options.allowed_topic = config.RocketMQ().message_topic;
     relay_options.batch_size = relay_config.batch_size;
+    relay_options.publish_batch_size = relay_config.publish_batch_size;
     relay_options.worker_threads = relay_config.worker_threads;
     relay_options.max_inflight = relay_config.max_inflight;
     relay_options.poll_interval_ms = relay_config.poll_interval_ms;

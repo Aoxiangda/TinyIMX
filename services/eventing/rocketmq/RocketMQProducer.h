@@ -33,6 +33,11 @@ public:
         const PublishMessage& message
     ) override;
 
+    [[nodiscard]] std::size_t MaxBatchMessages() const noexcept override;
+    [[nodiscard]] std::vector<PublishResult> PublishBatch(
+        const std::vector<PublishMessage>& messages
+    ) override;
+
 private:
     class Impl;
 

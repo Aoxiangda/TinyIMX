@@ -158,6 +158,16 @@ message PersistPrivateMessageResponse {
     uint64 message_id = 2;
     MessageRecord record = 3;
     string message = 4;
+    // Optional native Created result; absent for legacy/SQL/retry responses.
+    CommittedUnreadSnapshot committed_unread = 5;
+}
+
+message CommittedUnreadSnapshot {
+    uint64 message_id = 1;
+    uint64 receiver_user_id = 2;
+    uint64 peer_user_id = 3;
+    uint64 private_unread = 4;
+    uint64 total_unread = 5;
 }
 
 
@@ -380,4 +390,38 @@ message ListGroupHistoryRequest {
 message ListGroupHistoryResponse {
     repeated GroupMessageRecord messages = 1;
     bool has_more = 2;
+}
+
+// Internal durable projection source. Appended separate service preserves all
+// original MessageService method ordinals and message/field descriptor indices.
+service UnreadSnapshotService {
+    rpc ReadDialogUnreadSnapshot(ReadDialogUnreadSnapshotRequest) returns (ReadDialogUnreadSnapshotResponse);
+    rpc ReadUserUnreadSnapshot(ReadUserUnreadSnapshotRequest) returns (ReadUserUnreadSnapshotResponse);
+    rpc ReadDialogUnreadSnapshots(ReadDialogUnreadSnapshotsRequest) returns (ReadDialogUnreadSnapshotsResponse);
+}
+message ReadDialogUnreadSnapshotRequest {
+    uint64 receiver_user_id = 1;
+    uint64 peer_user_id = 2;
+}
+message ReadDialogUnreadSnapshotResponse {
+    uint64 receiver_user_id = 1;
+    uint64 peer_user_id = 2;
+    int64 private_unread = 3;
+    int64 total_unread = 4;
+}
+message ReadUserUnreadSnapshotRequest { uint64 receiver_user_id = 1; }
+message UnreadPeerCount { uint64 peer_user_id = 1; int64 unread = 2; }
+message ReadUserUnreadSnapshotResponse {
+    uint64 receiver_user_id = 1;
+    int64 total_unread = 2;
+    repeated UnreadPeerCount peers = 3;
+}
+
+// Bounded internal projection read. Request order, including duplicate dialogs,
+// is preserved; no partial successful response is exposed to the projector.
+message ReadDialogUnreadSnapshotsRequest {
+    repeated ReadDialogUnreadSnapshotRequest dialogs = 1;
+}
+message ReadDialogUnreadSnapshotsResponse {
+    repeated ReadDialogUnreadSnapshotResponse snapshots = 1;
 }

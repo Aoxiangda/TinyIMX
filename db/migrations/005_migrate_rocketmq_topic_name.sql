@@ -1,4 +1,4 @@
-USE tinyimx;
+-- Apply to the schema explicitly selected by the caller.
 
 -- RocketMQ 5.x topic resources reject dots. M16-A had already persisted
 -- publication intent using tinyimx.message.events, so migrate only events

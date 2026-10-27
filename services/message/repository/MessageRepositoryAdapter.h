@@ -1,8 +1,10 @@
 #pragma once
 
 #include "services/message/application/MessageRepositoryPort.h"
+#include "common/runtime/BoundedCallerBatch.h"
 
 #include <cstddef>
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -11,6 +13,7 @@
 namespace tinyimx {
 class MessageRepository;
 class MySqlConnectionPool;
+class MySqlConnection;
 }
 
 namespace tinyimx::outbox {
@@ -28,7 +31,8 @@ public:
     MessageRepositoryAdapter(
         tinyimx::MessageRepository* repository,
         tinyimx::MySqlConnectionPool* pool,
-        tinyimx::outbox::OutboxRepository* outbox_repository
+        tinyimx::outbox::OutboxRepository* outbox_repository,
+        std::string message_events_topic = "tinyimx-message-events"
     );
 
     [[nodiscard]] MessageRepositoryPersistResult PersistPrivateMessage(
@@ -38,6 +42,9 @@ public:
         std::uint32_t message_type,
         const std::string& content
     ) override;
+
+    [[nodiscard]] std::vector<MessageRepositoryPersistResult> PersistPrivateMessages(
+        const std::vector<PrivateMessagePersistInput>& inputs) override;
 
 
     [[nodiscard]] MessageRepositoryGroupGetResult FindGroupMessageByClientMessageId(
@@ -159,10 +166,81 @@ public:
         const std::vector<GroupDeliveryAttemptCompletion>& attempts
     ) override;
 
+    [[nodiscard]] std::optional<MessageRepositoryMutationResult>
+    TryConfirmReceiverOwnedIfPending(
+        std::uint64_t message_id, std::uint64_t receiver_user_id
+    ) override;
+
+    // Configure test hooks before starting concurrent calls; never set at runtime.
+    void SetReceiverConfirmationBeforeCommitHookForTest(
+        std::function<void(tinyimx::MySqlConnection*)> hook) {
+        receiver_confirmation_before_commit_for_test_ = std::move(hook);
+    }
+    [[nodiscard]] std::size_t ReceiverConfirmationQueuedForTest() const {
+        return receiver_confirmation_batch_.QueuedCount();
+    }
+    void SetPrivatePersistBeforeCommitHookForTest(
+        std::function<void(tinyimx::MySqlConnection*)> hook) {
+        private_persist_before_commit_for_test_ = std::move(hook);
+    }
+    [[nodiscard]] std::size_t PrivatePersistQueuedForTest() const {
+        auto count=private_persist_batch_.QueuedCount();
+        for(const auto& lane:private_persist_lanes_)count+=lane.batch.QueuedCount();
+        return count;
+    }
+
 private:
+    struct PrivatePersistInput {
+        std::uint64_t from_user_id;
+        std::uint64_t to_user_id;
+        std::string client_message_id;
+        std::uint32_t message_type;
+        std::string content;
+        std::int64_t queued_at_us;
+    };
+    MessageRepositoryPersistResult PersistPrivateMessageDirect(
+        std::uint64_t from_user_id, std::uint64_t to_user_id,
+        const std::string& client_message_id, std::uint32_t message_type,
+        const std::string& content);
+    std::vector<MessageRepositoryPersistResult> ExecutePrivatePersistBatch(
+        const std::vector<PrivatePersistInput>& inputs);
+    std::vector<MessageRepositoryPersistResult> ExecutePrivatePersistBatchChosen(
+        const std::vector<PrivatePersistInput>& inputs,bool grouped);
+    std::vector<MessageRepositoryPersistResult> ExecutePrivatePersistBatchSequential(
+        const std::vector<PrivatePersistInput>& inputs);
+    std::vector<MessageRepositoryPersistResult> ExecutePrivatePersistBatchPackets(
+        const std::vector<PrivatePersistInput>& inputs);
+    std::vector<MessageRepositoryPersistResult> RecoverPrivatePersistBatch(
+        const std::vector<PrivatePersistInput>& inputs);
+    tinyimx::BoundedCallerBatch<PrivatePersistInput, MessageRepositoryPersistResult>
+        private_persist_batch_{{64, 64, std::chrono::microseconds(0)}};
+    struct PrivatePersistLane {
+        tinyimx::BoundedCallerBatch<PrivatePersistInput, MessageRepositoryPersistResult>
+            batch{{64,64,std::chrono::microseconds(0)}};
+    };
+    // Opt-in four independent caller-led lanes; no extra worker threads.
+    // Same sender (therefore same CID identity) always maps to the same lane.
+    // Aggregate queue limit is256 in that mode, not the legacy64; retain this
+    // explicit admission/transaction-concurrency tradeoff in experiment records.
+    std::array<PrivatePersistLane,4> private_persist_lanes_;
+    std::function<void(tinyimx::MySqlConnection*)> private_persist_before_commit_for_test_;
+    struct ReceiverConfirmationInput {
+        std::uint64_t message_id;
+        std::uint64_t receiver_user_id;
+    };
+    std::optional<MessageRepositoryMutationResult> TryConfirmReceiverOwnedPendingDirect(
+        std::uint64_t message_id, std::uint64_t receiver_user_id);
+    std::vector<MessageRepositoryMutationResult> ExecuteReceiverConfirmationBatch(
+        const std::vector<ReceiverConfirmationInput>& inputs);
+    // Default0us drains already-arrived work. The explicit054candidate may
+    // collect for2/5ms; the constructor selects it without a detached worker.
+    tinyimx::BoundedCallerBatch<ReceiverConfirmationInput, MessageRepositoryMutationResult>
+        receiver_confirmation_batch_{{64, 64, std::chrono::microseconds(0)}};
+    std::function<void(tinyimx::MySqlConnection*)> receiver_confirmation_before_commit_for_test_;
     tinyimx::MessageRepository* repository_{nullptr};       // non-owning
     tinyimx::MySqlConnectionPool* pool_{nullptr};           // non-owning
     tinyimx::outbox::OutboxRepository* outbox_{nullptr};    // non-owning
+    const std::string message_events_topic_;
     TransactionalPreInsertHookForTest pre_insert_hook_for_test_;
 };
 

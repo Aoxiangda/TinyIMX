@@ -1,4 +1,4 @@
-USE tinyimx;
+-- Apply to the schema explicitly selected by the caller.
 
 CREATE TABLE IF NOT EXISTS im_user_relations (
     user_id BIGINT UNSIGNED NOT NULL,
@@ -11,18 +11,6 @@ CREATE TABLE IF NOT EXISTS im_user_relations (
     PRIMARY KEY (user_id, peer_user_id),
     KEY idx_im_user_relations_peer_user_id (peer_user_id),
     KEY idx_im_user_relations_status (relation_status),
-
-    CONSTRAINT fk_im_user_relations_user
-        FOREIGN KEY (user_id)
-        REFERENCES im_users(user_id)
-        ON DELETE CASCADE
-        ON UPDATE CASCADE,
-
-    CONSTRAINT fk_im_user_relations_peer
-        FOREIGN KEY (peer_user_id)
-        REFERENCES im_users(user_id)
-        ON DELETE CASCADE
-        ON UPDATE CASCADE,
 
     CONSTRAINT chk_im_user_relations_status
         CHECK (relation_status IN (1, 2))

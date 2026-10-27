@@ -135,6 +135,22 @@ def common_config(instance_id: str, advertise_host: str):
     }
 
 
+def validate_unread_writer_ownership(gateways, projector):
+    """M21 starts one projector; Gateways must not also increment its keys."""
+    writers = []
+    for name, config in gateways.items():
+        projection = config["unread_projection"]
+        if projection["owner"] == "gateway":
+            writers.append(name)
+        if projection["owner"] != "projector" or not projection["enable"]:
+            raise ValueError(f"{name}: running projector requires projector ownership")
+    projection = projector["unread_projection"]
+    if projection["enable"] and projection["owner"] == "projector" and not projection["shadow_mode"]:
+        writers.append("unread-projector")
+    if set(gateways) != {"gateway-a", "gateway-b"} or writers != ["unread-projector"]:
+        raise ValueError("M21 must have exactly one authoritative unread writer")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", required=True)
@@ -159,11 +175,16 @@ def main():
         cfg["app"]["name"] = f"TinyIMX-{name.capitalize()}Service"
         write_json(out / f"{name}.json", cfg)
 
+    gateways = {}
     for name in ("gateway-a", "gateway-b"):
         cfg = common_config(name, name)
         cfg["app"]["name"] = "TinyIMX-Gateway"
         cfg["gateway_registry"]["enable"] = True
-        write_json(out / f"{name}.json", cfg)
+        # Gateway bootstrap uses owner (not enable) to guard its cache writer.
+        # enable=True is required by Config's existing projector-owner check;
+        # the Gateway executable does not start a projector consumer.
+        cfg["unread_projection"].update(enable=True, owner="projector")
+        gateways[name] = cfg
 
     relay = common_config("tinyimx-outbox-relay-1", "outbox-relay")
     relay["app"]["name"] = "TinyIMX-OutboxRelay"
@@ -180,6 +201,9 @@ def main():
     projector["unread_projection"]["enable"] = True
     projector["unread_projection"]["owner"] = "projector"
     projector["unread_projection"]["shadow_mode"] = False
+    validate_unread_writer_ownership(gateways, projector)
+    for name, cfg in gateways.items():
+        write_json(out / f"{name}.json", cfg)
     write_json(out / "unread-projector.json", projector)
 
     mcp = common_config("tinyimx-mcp-1", "mcp-server")

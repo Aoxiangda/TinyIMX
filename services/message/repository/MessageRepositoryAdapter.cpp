@@ -1,6 +1,10 @@
 #include "services/message/repository/MessageRepositoryAdapter.h"
+#include "common/observability/StorageCallTrace.h"
 #include "services/message/application/GroupDeliveryCompletionValidation.h"
+#include "services/message/application/ReceiverConfirmationDecision.h"
 #include "services/message/repository/PrivatePersistenceTrace.h"
+#include "services/message/repository/PrivatePersistBatchTrace.h"
+#include "services/message/repository/ReceiverConfirmationBatchPolicy.h"
 
 #include "services/repository/MessageRepository.h"
 
@@ -11,9 +15,68 @@
 
 #include <utility>
 #include <cstdlib>
+#include <map>
+#include <set>
+#include <stdexcept>
 
 namespace tinyimx::message {
 namespace {
+
+bool PrivateOutboxCommitPacketEnabled() noexcept {
+    static const bool enabled = [] {
+        const char* value = std::getenv("TINYIMX_PRIVATE_OUTBOX_COMMIT_PACKET_ENABLE");
+        return value && value[0] == '1' && value[1] == '\0';
+    }();
+    return enabled;
+}
+
+bool PrivateNativeSqlBatchEnabled() noexcept {
+    static const bool enabled = [] {
+        const char* value = std::getenv("TINYIMX_PRIVATE_NATIVE_SQL_BATCH_ENABLE");
+        return value && value[0] == '1' && value[1] == '\0';
+    }();
+    return enabled;
+}
+
+bool PrivatePersistSqlBatchEnabled() noexcept {
+    static const bool enabled=[] {
+        const char* v=std::getenv("TINYIMX_PRIVATE_PERSIST_SQL_BATCH_ENABLE");
+        return v&&v[0]=='1'&&v[1]=='\0';
+    }();
+    return enabled;
+}
+
+bool PrivatePersistShardsEnabled() noexcept {
+    static const bool enabled=[] {
+        const char* v=std::getenv("TINYIMX_PRIVATE_PERSIST_SHARDS");
+        return v&&v[0]=='4'&&v[1]=='\0';
+    }();
+    return enabled;
+}
+
+bool PrivateSenderCoalesceEnabled() noexcept {
+    static const bool enabled = [] {
+        const char* v = std::getenv("TINYIMX_PRIVATE_PERSIST_COALESCE_ENABLE");
+        return v && v[0] == '1' && v[1] == '\0';
+    }();
+    return enabled;
+}
+
+bool PrivateReceiverConfirmCoalesceEnabled() noexcept {
+    static const bool enabled = [] {
+        const char* v = std::getenv("TINYIMX_PRIVATE_CONFIRM_COALESCE_ENABLE");
+        return v && v[0] == '1' && v[1] == '\0';
+    }();
+    return enabled;
+}
+
+bool PrivateReceiverOwnedUpdateEnabled() noexcept {
+    static const bool enabled = [] {
+        const char* v = std::getenv("TINYIMX_PRIVATE_RECEIVER_OWNED_UPDATE_ENABLE");
+        return v && v[0] == '1' && v[1] == '\0';
+    }();
+    return enabled;
+}
 
 bool PrivateBeginInsertReadBatchEnabled() noexcept {
     static const bool enabled = [] {
@@ -178,11 +241,17 @@ MessageRepositoryMutationResult ToMutation(
 MessageRepositoryAdapter::MessageRepositoryAdapter(
     tinyimx::MessageRepository* repository,
     tinyimx::MySqlConnectionPool* pool,
-    tinyimx::outbox::OutboxRepository* outbox_repository
+    tinyimx::outbox::OutboxRepository* outbox_repository,
+    std::string message_events_topic
 )
-    : repository_(repository),
+    : receiver_confirmation_batch_({64,64,ReceiverConfirmationCollectWindow()}),
+      repository_(repository),
       pool_(pool),
-      outbox_(outbox_repository) {
+      outbox_(outbox_repository),
+      message_events_topic_(std::move(message_events_topic)) {
+    if (!MessageEventFactory::IsValidTopic(message_events_topic_)) {
+        throw std::invalid_argument("invalid message event topic");
+    }
 }
 
 void MessageRepositoryAdapter::SetTransactionalPreInsertHookForTest(
@@ -197,6 +266,32 @@ MessageRepositoryAdapter::PersistPrivateMessage(
     std::uint64_t to_user_id,
     const std::string& client_message_id,
     std::uint32_t message_type,
+    const std::string& content
+) {
+    // The legacy pre-insert race barrier is intentionally lease-free. Never
+    // serialize that test barrier behind a batch leader waiting on its peers.
+    if (!PrivateSenderCoalesceEnabled() || pre_insert_hook_for_test_ ||
+        !repository_ || !pool_ || !outbox_ || !from_user_id || !to_user_id ||
+        from_user_id==to_user_id || client_message_id.empty() ||
+        client_message_id.size()>64 || message_type<1 || message_type>3 ||
+        content.empty() || content.size()>65535) {
+        return PersistPrivateMessageDirect(from_user_id,to_user_id,client_message_id,message_type,content);
+    }
+    MessageRepositoryPersistResult failure;
+    failure.status=MessageApplicationStatus::kStorageError;
+    failure.message="private persistence batch unavailable or overloaded";
+    auto& batch=PrivatePersistShardsEnabled()
+        ?private_persist_lanes_[from_user_id%private_persist_lanes_.size()].batch:private_persist_batch_;
+    return batch.Run(
+        PrivatePersistInput{from_user_id,to_user_id,client_message_id,message_type,content,
+            PrivatePersistenceTrace::EnvironmentEnabled()?PrivatePersistBatchTrace::Now():0},
+        [this](const auto& inputs){return ExecutePrivatePersistBatch(inputs);},failure);
+}
+
+MessageRepositoryPersistResult
+MessageRepositoryAdapter::PersistPrivateMessageDirect(
+    std::uint64_t from_user_id, std::uint64_t to_user_id,
+    const std::string& client_message_id, std::uint32_t message_type,
     const std::string& content
 ) {
     MessageRepositoryPersistResult output;
@@ -403,7 +498,47 @@ MessageRepositoryAdapter::PersistPrivateMessage(
     }
 
     const MessageView created_view = ToView(created.record);
-    const auto event_spec = MessageEventFactory::MessageCreated(created_view);
+    const auto event_spec = MessageEventFactory::MessageCreated(created_view, message_events_topic_);
+    bool committed_with_packet = false;
+    // The legacy test seam is specifically *after* Outbox INSERT and before
+    // COMMIT. Keep it on that original path; packet response-loss contracts use
+    // a separate real-wire fixture rather than moving this seam silently.
+    if (PrivateOutboxCommitPacketEnabled() && !private_persist_before_commit_for_test_) {
+        const auto packet = trace.Measure(Phase::OutboxCommit,[&] {
+            return outbox_->InsertAndCommitOnConnection(connection.operator->(),
+                event_spec.event,event_spec.topic,event_spec.tag,event_spec.message_key);
+        });
+        if (!packet.use_separate_commands) {
+            if (!packet.success) {
+                if (connection->InTransaction())
+                    trace.Measure(Phase::Rollback,[&]{return connection->Rollback();});
+                // The combined command may already have committed even if its
+                // first/second OK was lost. Release before a read-only lookup,
+                // including pool_size=1; never replay the INSERT/COMMIT packet.
+                connection.Reset();
+                if (packet.command_attempted) {
+                    const auto recovered = trace.Measure(Phase::RecoveryRead,[&] {
+                        return repository_->FindPrivateMessageByClientMessageId(
+                            from_user_id,client_message_id);
+                    });
+                    if (recovered.Succeeded() && recovered.Found()) {
+                        set_existing_result(recovered.record);
+                        output.message = same_identity(recovered.record)
+                            ? "combined commit outcome recovered as existing private message"
+                            : "combined commit outcome recovered as idempotency conflict";
+                        return output;
+                    }
+                }
+                output.status = MessageApplicationStatus::kStorageError;
+                output.message = packet.command_attempted
+                    ? "message outbox commit outcome unresolved: " + packet.message
+                    : "message outbox insert failed: " + packet.message;
+                return output;
+            }
+            committed_with_packet = true;
+        }
+    }
+    if (!committed_with_packet) {
     const auto outbox_result = trace.Measure(Phase::OutboxInsert,[&]{return outbox_->InsertOnConnection(
         connection.operator->(),
         event_spec.event,
@@ -421,6 +556,8 @@ MessageRepositoryAdapter::PersistPrivateMessage(
         return output;
     }
 
+    if (private_persist_before_commit_for_test_)
+        private_persist_before_commit_for_test_(connection.operator->());
     if (!trace.Measure(Phase::Commit,[&]{return connection->Commit();})) {
         const std::string commit_error = connection->LastError();
         if (connection->InTransaction()) {
@@ -449,6 +586,7 @@ MessageRepositoryAdapter::PersistPrivateMessage(
         }
         return output;
     }
+    }
 
     output.status = MessageApplicationStatus::kSucceeded;
     output.outcome = PersistPrivateMessageOutcome::kCreated;
@@ -456,6 +594,245 @@ MessageRepositoryAdapter::PersistPrivateMessage(
     output.record = created_view;
     output.message = "private message and outbox event committed";
     return output;
+}
+
+std::vector<MessageRepositoryPersistResult>
+MessageRepositoryAdapter::RecoverPrivatePersistBatch(
+    const std::vector<PrivatePersistInput>& inputs) {
+    std::vector<MessageRepositoryPersistResult> results(inputs.size());
+    // This is a read-only resolution of stable CID outcomes. Never replay a
+    // possibly committed batch, nor insert while resolving uncertain COMMIT.
+    for (std::size_t i=0;i<inputs.size();++i) {
+        const auto& in=inputs[i];auto& result=results[i];
+        const auto found=repository_->FindPrivateMessageByClientMessageId(
+            in.from_user_id,in.client_message_id);
+        result.status=found.Succeeded()?MessageApplicationStatus::kStorageError:MapStatus(found.status);
+        result.message="private batch failed; no durable CID outcome found";
+        if (!found.Succeeded()||!found.Found()) continue;
+        result.status=MessageApplicationStatus::kSucceeded;
+        result.message_id=found.record.message_id;result.record=ToView(found.record);
+        const auto& r=found.record;
+        const bool same=r.message_id&&r.from_user_id==in.from_user_id&&r.to_user_id==in.to_user_id&&
+            r.client_message_id==in.client_message_id&&r.message_type==in.message_type&&r.content==in.content;
+        result.outcome=same?PersistPrivateMessageOutcome::kReused:PersistPrivateMessageOutcome::kIdempotencyConflict;
+        result.message=same?"private batch durable CID outcome recovered":"private batch CID conflict recovered";
+    }
+    return results;
+}
+
+std::vector<MessageRepositoryPersistResult>
+MessageRepositoryAdapter::ExecutePrivatePersistBatch(
+    const std::vector<PrivatePersistInput>& inputs) {
+    return ExecutePrivatePersistBatchChosen(inputs,PrivatePersistSqlBatchEnabled());
+}
+
+std::vector<MessageRepositoryPersistResult>
+MessageRepositoryAdapter::PersistPrivateMessages(const std::vector<PrivateMessagePersistInput>& inputs) {
+    if(inputs.size()>64)return std::vector<MessageRepositoryPersistResult>(inputs.size());
+    std::vector<PrivatePersistInput> batch;batch.reserve(inputs.size());
+    for(const auto& in:inputs){
+        if(!in.from_user_id||!in.to_user_id||in.from_user_id==in.to_user_id||
+           in.client_message_id.empty()||in.client_message_id.size()>64||
+           in.message_type<1||in.message_type>3||in.content.empty())
+            return std::vector<MessageRepositoryPersistResult>(inputs.size());
+        batch.push_back({in.from_user_id,in.to_user_id,in.client_message_id,in.message_type,in.content,0});
+    }
+    // Ready-queue admission and completion are outside the repository. Do not
+    // enter the old caller-led coordinator or wait on another RPC thread.
+    return ExecutePrivatePersistBatchChosen(batch,true);
+}
+
+std::vector<MessageRepositoryPersistResult>
+MessageRepositoryAdapter::ExecutePrivatePersistBatchChosen(
+    const std::vector<PrivatePersistInput>& inputs,bool grouped) {
+    if(grouped&&inputs.size()>1) {
+        std::set<std::pair<std::uint64_t,std::string>> unique;
+        bool eligible=true;
+        // The sequential path preserves same-batch duplicate/case/collation
+        // decisions. Grouped writes require distinct canonical ASCII CIDs;
+        // stored DB records still use original SQL collation and exact checks.
+        for(const auto& in:inputs) {
+            const bool canonical=std::all_of(in.client_message_id.begin(),in.client_message_id.end(),
+                [](unsigned char c){return(c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='_'||c=='-';});
+            eligible=eligible&&canonical&&unique.emplace(in.from_user_id,in.client_message_id).second;
+        }
+        if(eligible)return ExecutePrivatePersistBatchPackets(inputs);
+    }
+    return ExecutePrivatePersistBatchSequential(inputs);
+}
+
+std::vector<MessageRepositoryPersistResult>
+MessageRepositoryAdapter::ExecutePrivatePersistBatchPackets(
+    const std::vector<PrivatePersistInput>& inputs) {
+    std::vector<MessageRepositoryPersistResult> results(inputs.size());
+    PrivatePersistBatchTrace trace;
+    std::size_t created_count=0;
+    std::uint64_t grouped_commands=0;
+    const auto finish=[&](){
+        trace.SetGroupedQueryCommands(grouped_commands);
+        trace.Emit(inputs,results,created_count);return std::move(results);
+    };
+    if(inputs.size()<2||inputs.size()>64||!repository_||!pool_||!outbox_)return finish();
+    auto connection=trace.Measure(PrivatePersistBatchTrace::Acquire,[&]{return pool_->Acquire();});
+    if(!connection||!trace.Measure(PrivatePersistBatchTrace::Begin,[&]{return connection->BeginTransaction();}))return finish();
+    const auto grouped=[&](auto phase,auto&& operation){
+        const auto before=connection->GroupedStatementCommandAttempts();
+        auto output=trace.Measure(phase,std::forward<decltype(operation)>(operation));
+        grouped_commands+=connection->GroupedStatementCommandAttempts()-before;
+        return output;
+    };
+    const auto recover=[&](){
+        if(connection->InTransaction()&&!trace.Measure(PrivatePersistBatchTrace::Rollback,[&]{return connection->Rollback();}))connection->Close();
+        connection.Reset();
+        results=trace.Measure(PrivatePersistBatchTrace::Recovery,[&]{return RecoverPrivatePersistBatch(inputs);});
+        return finish();
+    };
+    const auto same=[](const auto& in,const auto& record){
+        return record.message_id&&record.from_user_id==in.from_user_id&&record.to_user_id==in.to_user_id&&
+            record.client_message_id==in.client_message_id&&record.message_type==in.message_type&&record.content==in.content;
+    };
+    std::vector<std::pair<std::uint64_t,std::string>> identities;
+    identities.reserve(inputs.size());
+    for(const auto& in:inputs)identities.emplace_back(in.from_user_id,in.client_message_id);
+    auto found=grouped(PrivatePersistBatchTrace::Lookup,[&]{
+        if (PrivateNativeSqlBatchEnabled())
+            return repository_->FindPrivateMessageCidsBulkOnConnection(connection.operator->(),identities);
+        return repository_->FindPrivateMessageCidsOnConnection(connection.operator->(),identities);
+    });
+    if(found.size()!=inputs.size())return recover();
+    std::vector<tinyimx::PrivateMessageRecord> pending;
+    std::vector<std::size_t> indexes;
+    for(std::size_t i=0;i<inputs.size();++i){
+        if(!found[i].Succeeded())return recover();
+        const auto& in=inputs[i];auto& result=results[i];
+        if(found[i].Found()){
+            result.status=MessageApplicationStatus::kSucceeded;
+            result.outcome=same(in,found[i].record)?PersistPrivateMessageOutcome::kReused:PersistPrivateMessageOutcome::kIdempotencyConflict;
+            result.message_id=found[i].record.message_id;result.record=ToView(std::move(found[i].record));
+            result.message="private grouped batch existing CID classified";
+        }else{
+            tinyimx::PrivateMessageRecord record;
+            record.from_user_id=in.from_user_id;record.to_user_id=in.to_user_id;
+            record.client_message_id=in.client_message_id;record.message_type=in.message_type;
+            record.content=in.content;record.delivery_status=static_cast<std::uint32_t>(tinyimx::DeliveryStatus::kPending);
+            pending.push_back(std::move(record));indexes.push_back(i);
+        }
+    }
+    if(pending.empty()){
+        if(!trace.Measure(PrivatePersistBatchTrace::Rollback,[&]{return connection->Rollback();}))connection->Close();
+        return finish();
+    }
+    auto verified=grouped(PrivatePersistBatchTrace::InsertVerify,[&]{
+        if (PrivateNativeSqlBatchEnabled())
+            return repository_->SaveAndFindPrivateMessagesBulkOnConnection(connection.operator->(),pending);
+        return repository_->SaveAndFindPrivateMessagesOnConnection(connection.operator->(),pending);
+    });
+    if(!verified.Succeeded()||verified.records.size()!=pending.size())return recover();
+    std::vector<tinyimx::outbox::OutboxInsertSpec> events;events.reserve(pending.size());
+    for(std::size_t j=0;j<indexes.size();++j){
+        const auto i=indexes[j];if(!same(inputs[i],verified.records[j]))return recover();
+        results[i].record=ToView(verified.records[j]);
+        auto event=MessageEventFactory::MessageCreated(results[i].record, message_events_topic_);
+        events.push_back({std::move(event.event),std::move(event.topic),std::move(event.tag),std::move(event.message_key)});
+    }
+    const auto inserted=grouped(PrivatePersistBatchTrace::Outbox,[&]{
+        if (PrivateNativeSqlBatchEnabled())
+            return outbox_->InsertBulkOnConnection(connection.operator->(),events);
+        return outbox_->InsertBatchOnConnection(connection.operator->(),events);
+    });
+    if(inserted.size()!=events.size()||!std::all_of(inserted.begin(),inserted.end(),[](const auto& item){return item.success;}))return recover();
+    created_count=indexes.size();
+    for(const auto i:indexes){
+        auto& result=results[i];result.status=MessageApplicationStatus::kSucceeded;
+        result.outcome=PersistPrivateMessageOutcome::kCreated;result.message_id=result.record.message_id;
+        result.message="private message and outbox grouped batch committed";
+    }
+    if(private_persist_before_commit_for_test_)private_persist_before_commit_for_test_(connection.operator->());
+    if(!trace.Measure(PrivatePersistBatchTrace::Commit,[&]{return connection->Commit();})){
+        connection->Close();connection.Reset();
+        results=trace.Measure(PrivatePersistBatchTrace::Recovery,[&]{return RecoverPrivatePersistBatch(inputs);});
+    }
+    // Full identity verification and every event insert precede COMMIT. Grouping
+    // SQL commands does not weaken the durable ACK or replay failed writes.
+    return finish();
+}
+
+std::vector<MessageRepositoryPersistResult>
+MessageRepositoryAdapter::ExecutePrivatePersistBatchSequential(
+    const std::vector<PrivatePersistInput>& inputs) {
+    std::vector<MessageRepositoryPersistResult> results(inputs.size());
+    PrivatePersistBatchTrace trace;
+    std::size_t created_count=0;
+    const auto finish=[&](){trace.Emit(inputs,results,created_count);return std::move(results);};
+    if (inputs.empty()||inputs.size()>64||!repository_||!pool_||!outbox_)return finish();
+    if (inputs.size()==1) {
+        const auto& in=inputs.front();
+        results.front()=trace.Measure(PrivatePersistBatchTrace::Direct,[&]{
+            return PersistPrivateMessageDirect(in.from_user_id,in.to_user_id,in.client_message_id,in.message_type,in.content);
+        });
+        created_count=results.front().Completed()&&results.front().outcome==PersistPrivateMessageOutcome::kCreated?1:0;
+        return finish();
+    }
+    auto connection=trace.Measure(PrivatePersistBatchTrace::Acquire,[&]{return pool_->Acquire();});
+    if (!connection||!trace.Measure(PrivatePersistBatchTrace::Begin,[&]{return connection->BeginTransaction();}))return finish();
+    const auto recover=[&](){
+        if (connection->InTransaction()&&!trace.Measure(PrivatePersistBatchTrace::Rollback,[&]{return connection->Rollback();}))connection->Close();
+        connection.Reset();
+        results=trace.Measure(PrivatePersistBatchTrace::Recovery,[&]{return RecoverPrivatePersistBatch(inputs);});
+        return finish();
+    };
+    for (std::size_t i=0;i<inputs.size();++i) {
+        const auto& in=inputs[i];auto& result=results[i];
+        const auto same=[&](const auto& r){return r.message_id&&r.from_user_id==in.from_user_id&&r.to_user_id==in.to_user_id&&
+            r.client_message_id==in.client_message_id&&r.message_type==in.message_type&&r.content==in.content;};
+        // Own writes remain visible inside RR, so same-batch duplicate CIDs
+        // reuse the first row and never emit a second Outbox event.
+        auto found=trace.Measure(PrivatePersistBatchTrace::Lookup,[&]{
+            return repository_->FindPrivateMessageByClientMessageIdOnConnection(
+                connection.operator->(),in.from_user_id,in.client_message_id);
+        });
+        if (!found.Succeeded())return recover();
+        if (found.Found()) {
+            result.status=MessageApplicationStatus::kSucceeded;
+            result.outcome=same(found.record)?PersistPrivateMessageOutcome::kReused:PersistPrivateMessageOutcome::kIdempotencyConflict;
+            result.message_id=found.record.message_id;result.record=ToView(std::move(found.record));
+            result.message="private batch existing CID classified";
+            continue;
+        }
+        const auto saved=trace.Measure(PrivatePersistBatchTrace::Insert,[&]{
+            return repository_->SavePrivateMessageOnConnection(connection.operator->(),
+                in.from_user_id,in.to_user_id,in.content,tinyimx::DeliveryStatus::kPending,
+                static_cast<tinyimx::PrivateMessageType>(in.message_type),in.client_message_id);
+        });
+        if (!saved.Succeeded())return recover();
+        auto verified=trace.Measure(PrivatePersistBatchTrace::Verify,[&]{
+            return repository_->FindPrivateMessageByIdOnConnection(connection.operator->(),saved.message_id);
+        });
+        if (!verified.Succeeded()||!verified.Found()||!same(verified.record))return recover();
+        result.record=ToView(verified.record);
+        const auto event=MessageEventFactory::MessageCreated(result.record, message_events_topic_);
+        const auto inserted=trace.Measure(PrivatePersistBatchTrace::Outbox,[&]{
+            return outbox_->InsertOnConnection(connection.operator->(),event.event,event.topic,event.tag,event.message_key);
+        });
+        if (!inserted.success)return recover();
+        result.status=MessageApplicationStatus::kSucceeded;result.outcome=PersistPrivateMessageOutcome::kCreated;
+        result.message_id=verified.record.message_id;result.message="private message and outbox batch committed";
+        ++created_count;
+    }
+    if (!created_count) {
+        if (!trace.Measure(PrivatePersistBatchTrace::Rollback,[&]{return connection->Rollback();}))connection->Close();
+        return finish();
+    }
+    if (private_persist_before_commit_for_test_)
+        private_persist_before_commit_for_test_(connection.operator->());
+    if (!trace.Measure(PrivatePersistBatchTrace::Commit,[&]{return connection->Commit();})) {
+        // Closing releases any still-active transaction. Resolve only by reads.
+        connection->Close();connection.Reset();
+        results=trace.Measure(PrivatePersistBatchTrace::Recovery,[&]{return RecoverPrivatePersistBatch(inputs);});
+    }
+    // No caller receives these internally prepared Created results until the
+    // one transaction has committed successfully, or durable CID was resolved.
+    return finish();
 }
 
 
@@ -632,7 +1009,7 @@ MessageRepositoryAdapter::PersistAuthorizedGroupMessage(
         return output;
     }
 
-    const auto event_spec = MessageEventFactory::GroupMessageCreated(created_view);
+    const auto event_spec = MessageEventFactory::GroupMessageCreated(created_view, message_events_topic_);
     const auto outbox_result = outbox_->InsertOnConnection(
         connection.operator->(), event_spec.event, event_spec.topic,
         event_spec.tag, event_spec.message_key);
@@ -1029,6 +1406,184 @@ MessageRepositoryAdapter::ConfirmReceiver(
     return ToMutation(repository_->MarkReceiverConfirmed(message_id));
 }
 
+std::optional<MessageRepositoryMutationResult>
+MessageRepositoryAdapter::TryConfirmReceiverOwnedIfPending(
+    std::uint64_t message_id, std::uint64_t receiver_user_id
+) {
+    if (PrivateReceiverConfirmCoalesceEnabled()) {
+        MessageRepositoryMutationResult failure;
+        failure.status = MessageApplicationStatus::kStorageError;
+        failure.message = "receiver confirmation batch unavailable or overloaded";
+        if (!message_id || !receiver_user_id) {
+            failure.status = MessageApplicationStatus::kInvalidArgument;
+            return failure;
+        }
+        return receiver_confirmation_batch_.Run(
+            ReceiverConfirmationInput{message_id, receiver_user_id},
+            [this](const auto& inputs) { return ExecuteReceiverConfirmationBatch(inputs); },
+            failure);
+    }
+    if (!PrivateReceiverOwnedUpdateEnabled()) return std::nullopt;
+    return TryConfirmReceiverOwnedPendingDirect(message_id, receiver_user_id);
+}
+
+std::optional<MessageRepositoryMutationResult>
+MessageRepositoryAdapter::TryConfirmReceiverOwnedPendingDirect(
+    std::uint64_t message_id, std::uint64_t receiver_user_id
+) {
+    MessageRepositoryMutationResult output;
+    diagnostics::StorageCallTrace storage_trace(2,message_id);
+    if (message_id == 0 || receiver_user_id == 0) {
+        output.status = MessageApplicationStatus::kInvalidArgument;
+        output.message = "invalid owned receiver confirmation identity";
+        return output;
+    }
+    if (!repository_ || !pool_) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "owned receiver confirmation storage unavailable";
+        return output;
+    }
+    auto connection = storage_trace.Measure(diagnostics::StorageCallTrace::Acquire,[&]{return pool_->Acquire();});
+    if (!connection) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "owned receiver confirmation acquire failed";
+        return output;
+    }
+    // Same validity predicates as BuildMessagesFromResult for the pending row.
+    // The PK, owner and status predicates are checked by the same durable UPDATE;
+    // read/failed/foreign/invalid/missing rows fall back to the original classifier.
+    const std::string sql =
+        "UPDATE im_private_messages SET delivery_status=1, delivered_at=NOW() "
+        "WHERE message_id=" + std::to_string(message_id) +
+        " AND to_user_id=" + std::to_string(receiver_user_id) +
+        " AND delivery_status=0 AND from_user_id>0 "
+        "AND message_type BETWEEN 1 AND 3 AND created_at IS NOT NULL";
+    if (!storage_trace.Measure(diagnostics::StorageCallTrace::Sql,[&]{return connection->Execute(sql);})) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "owned receiver confirmation failed: " + connection->LastError();
+        return output;
+    }
+    const auto affected = connection->AffectedRows();
+    if (affected == 0) return std::nullopt;
+    if (affected != 1) {
+        output.status = MessageApplicationStatus::kStorageError;
+        output.message = "owned receiver confirmation unexpected affected rows";
+        return output;
+    }
+    output.status = MessageApplicationStatus::kSucceeded;
+    output.affected_rows = 1;
+    output.message = "private message receiver confirmation durable";
+    return output;
+}
+
+std::vector<MessageRepositoryMutationResult>
+MessageRepositoryAdapter::ExecuteReceiverConfirmationBatch(
+    const std::vector<ReceiverConfirmationInput>& inputs) {
+    MessageRepositoryMutationResult failure;
+    failure.status = MessageApplicationStatus::kStorageError;
+    failure.message = "receiver confirmation batch transaction failed";
+    std::vector<MessageRepositoryMutationResult> results(inputs.size(), failure);
+    if (inputs.empty() || inputs.size() > 64 || !repository_ || !pool_) return results;
+    // Keep the low-contention single-call path one atomic autocommit UPDATE.
+    // Tests requesting a commit hook deliberately take the explicit transaction.
+    if (inputs.size() == 1 && !receiver_confirmation_before_commit_for_test_) {
+        const auto& in = inputs.front();
+        if (auto direct = TryConfirmReceiverOwnedPendingDirect(in.message_id, in.receiver_user_id)) {
+            results.front() = std::move(*direct);
+        } else {
+            auto lookup = GetPrivateMessage(in.message_id);
+            auto decision = ReceiverConfirmationDecision(lookup, in.receiver_user_id);
+            results.front() = decision ? std::move(*decision) : ConfirmReceiver(in.message_id);
+        }
+        return results;
+    }
+    std::set<std::uint64_t> ids;
+    for (const auto& in : inputs) {
+        if (!in.message_id || !in.receiver_user_id) return results;
+        ids.insert(in.message_id);
+    }
+    std::string id_list;
+    for (auto id : ids) {
+        if (!id_list.empty()) id_list += ',';
+        id_list += std::to_string(id);
+    }
+    auto connection = pool_->Acquire();
+    if (!connection || !connection->BeginTransaction()) return results;
+    tinyimx::MySqlQueryResult rows;
+    // Numeric columns are schema-typed. The validity expression is exactly the
+    // original parser's predicates; invalid records fail before owner checking.
+    // Lock PKs in ascending order, including owner/state until durable commit.
+    if (!connection->Query(
+            "SELECT message_id,to_user_id,delivery_status,"
+            "(message_id>0 AND from_user_id>0 AND to_user_id>0 "
+            "AND message_type BETWEEN 1 AND 3 AND delivery_status BETWEEN 0 AND 3 "
+            "AND created_at IS NOT NULL) FROM im_private_messages WHERE message_id IN (" +
+            id_list + ") ORDER BY message_id FOR UPDATE", &rows)) return results;
+    std::map<std::uint64_t, MessageRepositoryGetResult> lookups;
+    for (const auto& row : rows.rows) {
+        if (row.size() != 4) return results;
+        const auto id = std::stoull(row[0]);
+        if (!ids.contains(id) || lookups.contains(id)) return results;
+        MessageRepositoryGetResult lookup;
+        lookup.status = row[3] == "1" ? MessageApplicationStatus::kSucceeded
+                                       : MessageApplicationStatus::kInvalidRecord;
+        lookup.found = true;
+        lookup.record.message_id = id;
+        lookup.record.to_user_id = std::stoull(row[1]);
+        lookup.record.delivery_state = static_cast<MessageDeliveryState>(std::stoul(row[2]));
+        lookup.message = row[3] == "1" ? "private message found" : "invalid private message record";
+        lookups.emplace(id, std::move(lookup));
+    }
+    std::set<std::uint64_t> pending;
+    std::vector<std::size_t> mutations;
+    for (std::size_t i = 0; i < inputs.size(); ++i) {
+        const auto& in = inputs[i];
+        auto found = lookups.find(in.message_id);
+        MessageRepositoryGetResult missing;
+        missing.status = MessageApplicationStatus::kSucceeded;
+        const auto& lookup = found == lookups.end() ? missing : found->second;
+        if (auto decision = ReceiverConfirmationDecision(lookup, in.receiver_user_id)) {
+            results[i] = std::move(*decision);
+        } else {
+            mutations.push_back(i);
+            // Several callers for the same MID observe one state transition.
+            results[i].affected_rows = pending.insert(in.message_id).second ? 1 : 0;
+        }
+    }
+    if (pending.empty()) {
+        if (!connection->Rollback()) connection->Close();
+        return results;
+    }
+    std::string pending_list;
+    for (auto id : pending) {
+        if (!pending_list.empty()) pending_list += ',';
+        pending_list += std::to_string(id);
+    }
+    // Every included owner was checked under FOR UPDATE in this transaction.
+    // Read/failed/foreign/malformed rows are absent from this update set.
+    if (!connection->Execute(
+            "UPDATE im_private_messages SET delivery_status=1,delivered_at=NOW() "
+            "WHERE delivery_status=0 AND message_id IN (" + pending_list + ")") ||
+        connection->AffectedRows() != pending.size()) {
+        for (auto i : mutations) results[i] = failure;
+        return results;
+    }
+    if (receiver_confirmation_before_commit_for_test_)
+        receiver_confirmation_before_commit_for_test_(connection.operator->());
+    if (!connection->Commit()) {
+        // A lost COMMIT response is uncertain. Fail closed without replay and
+        // close the connection so transaction state cannot escape the lease.
+        connection->Close();
+        for (auto i : mutations) results[i] = failure;
+        return results;
+    }
+    for (auto i : mutations) {
+        results[i].status = MessageApplicationStatus::kSucceeded;
+        results[i].message = "private message receiver confirmation durable";
+    }
+    return results;
+}
+
 MessageRepositoryMutationResult
 MessageRepositoryAdapter::ConfirmReceiverBatch(
     const std::vector<std::uint64_t>& message_ids
@@ -1096,7 +1651,8 @@ MessageRepositoryAdapter::MarkDialogRead(
         const auto event_spec = MessageEventFactory::DialogReadAdvanced(
             reader_user_id,
             peer_user_id,
-            mutation.affected_rows
+            mutation.affected_rows,
+            message_events_topic_
         );
         const auto outbox_result = outbox_->InsertOnConnection(
             connection.operator->(),

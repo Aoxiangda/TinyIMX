@@ -619,8 +619,8 @@ GroupRepositoryMutationResult GroupRepositoryAdapter::JoinGroup(const JoinGroupC
         return error;
     }
     return FinalizeMutation(&connection, repository_, outbox_,
-                            GroupEventFactory::MemberJoined(*updated_group, *updated_member,
-                                                            command.actor_user_id, false),
+                            GroupEventFactory::WithTopic(GroupEventFactory::MemberJoined(*updated_group, *updated_member,
+                                                            command.actor_user_id, false), event_topic_),
                             command.actor_user_id, command.client_operation_id, kJoinOperation,
                             fingerprint, *updated_group, epoch,
                             "group join, outbox event, and idempotency record committed");
@@ -706,8 +706,8 @@ GroupRepositoryMutationResult GroupRepositoryAdapter::LeaveGroup(const LeaveGrou
         return error;
     }
     return FinalizeMutation(&connection, repository_, outbox_,
-                            GroupEventFactory::MemberLeft(*updated_group, *updated_member,
-                                                          command.actor_user_id),
+                            GroupEventFactory::WithTopic(GroupEventFactory::MemberLeft(*updated_group, *updated_member,
+                                                          command.actor_user_id), event_topic_),
                             command.actor_user_id, command.client_operation_id, kLeaveOperation,
                             fingerprint, *updated_group, actor->membership_epoch,
                             "group leave, outbox event, and idempotency record committed");
@@ -808,8 +808,8 @@ GroupRepositoryMutationResult GroupRepositoryAdapter::InviteMember(const InviteM
         return error;
     }
     return FinalizeMutation(&connection, repository_, outbox_,
-                            GroupEventFactory::MemberJoined(*updated_group, *updated_member,
-                                                            command.actor_user_id, true),
+                            GroupEventFactory::WithTopic(GroupEventFactory::MemberJoined(*updated_group, *updated_member,
+                                                            command.actor_user_id, true), event_topic_),
                             command.actor_user_id, command.client_operation_id, kInviteOperation,
                             fingerprint, *updated_group, epoch,
                             "member invite, outbox event, and idempotency record committed");
@@ -897,8 +897,8 @@ GroupRepositoryMutationResult GroupRepositoryAdapter::KickMember(const KickMembe
         return error;
     }
     return FinalizeMutation(&connection, repository_, outbox_,
-                            GroupEventFactory::MemberKicked(*updated_group, *updated_member,
-                                                            command.actor_user_id),
+                            GroupEventFactory::WithTopic(GroupEventFactory::MemberKicked(*updated_group, *updated_member,
+                                                            command.actor_user_id), event_topic_),
                             command.actor_user_id, command.client_operation_id, kKickOperation,
                             fingerprint, *updated_group, pair.target->membership_epoch,
                             "member kick, outbox event, and idempotency record committed");
@@ -983,8 +983,8 @@ GroupRepositoryMutationResult GroupRepositoryAdapter::SetMemberRole(const SetMem
         return error;
     }
     return FinalizeMutation(&connection, repository_, outbox_,
-                            GroupEventFactory::MemberRoleChanged(*updated_group, *updated_member,
-                                                                 command.actor_user_id),
+                            GroupEventFactory::WithTopic(GroupEventFactory::MemberRoleChanged(*updated_group, *updated_member,
+                                                                 command.actor_user_id), event_topic_),
                             command.actor_user_id, command.client_operation_id, kSetRoleOperation,
                             fingerprint, *updated_group, pair.target->membership_epoch,
                             "member role change, outbox event, and idempotency record committed");
@@ -1068,8 +1068,8 @@ GroupRepositoryMutationResult GroupRepositoryAdapter::SetMemberMute(const SetMem
         return error;
     }
     return FinalizeMutation(&connection, repository_, outbox_,
-                            GroupEventFactory::MemberMuteChanged(*updated_group, *updated_member,
-                                                                 command.actor_user_id),
+                            GroupEventFactory::WithTopic(GroupEventFactory::MemberMuteChanged(*updated_group, *updated_member,
+                                                                 command.actor_user_id), event_topic_),
                             command.actor_user_id, command.client_operation_id, kSetMuteOperation,
                             fingerprint, *updated_group, pair.target->membership_epoch,
                             "member mute change, outbox event, and idempotency record committed");
@@ -1157,8 +1157,8 @@ GroupRepositoryMutationResult GroupRepositoryAdapter::TransferOwnership(
         return error;
     }
     return FinalizeMutation(&connection, repository_, outbox_,
-                            GroupEventFactory::OwnershipTransferred(*updated_group, *new_owner,
-                                                                    command.actor_user_id),
+                            GroupEventFactory::WithTopic(GroupEventFactory::OwnershipTransferred(*updated_group, *new_owner,
+                                                                    command.actor_user_id), event_topic_),
                             command.actor_user_id, command.client_operation_id, kTransferOperation,
                             fingerprint, *updated_group, new_owner->membership_epoch,
                             "ownership transfer, outbox event, and idempotency record committed");

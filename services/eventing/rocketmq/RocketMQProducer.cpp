@@ -1,13 +1,19 @@
 #include "services/eventing/rocketmq/RocketMQProducer.h"
+#include "services/eventing/rocketmq/OptionalWireSendBatch.h"
 
 #include "common/logging/LogMacros.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
 #include <vector>
+
+#if defined(__linux__)
+#include <dlfcn.h>
+#endif
 
 #include <rocketmq/Configuration.h>
 #include <rocketmq/CredentialsProvider.h>
@@ -54,11 +60,13 @@ namespace {
 
 class RocketMQProducer::Impl final {
 public:
-    explicit Impl(const RocketMQProducerOptions& options)
-        : producer(BuildProducer(options)) {
+    Impl(const RocketMQProducerOptions& options,
+         const ::ROCKETMQ_NAMESPACE::TinyIMXBatchSendApiV1* api)
+        : producer(BuildProducer(options)), batch_api(api) {
     }
 
     ::ROCKETMQ_NAMESPACE::Producer producer;
+    const ::ROCKETMQ_NAMESPACE::TinyIMXBatchSendApiV1* batch_api;
 };
 
 RocketMQProducer::RocketMQProducer(RocketMQProducerOptions options)
@@ -79,8 +87,29 @@ bool RocketMQProducer::Start() {
         return false;
     }
 
+    const auto mode = detail::ParseWireSendMode(
+        std::getenv("TINYIMX_ROCKETMQ_WIRE_SEND_BATCH_ENABLE")
+    );
+    if (mode == detail::WireSendMode::Invalid) {
+        last_error_ = "RocketMQ wire send batch flag must be 0 or 1";
+        return false;
+    }
+    const ::ROCKETMQ_NAMESPACE::TinyIMXBatchSendApiV1* api = nullptr;
+    if (mode == detail::WireSendMode::Enabled) {
+#if defined(__linux__)
+        using Getter = const ::ROCKETMQ_NAMESPACE::TinyIMXBatchSendApiV1* (*)() noexcept;
+        const auto getter = reinterpret_cast<Getter>(
+            dlsym(RTLD_DEFAULT, "tinyimx_rocketmq_batch_send_api_v1")
+        );
+        if (getter) api = getter();
+#endif
+        if (!detail::CompatibleWireSendApi(api)) {
+            last_error_ = "RocketMQ bounded batch send capability is unavailable or incompatible";
+            return false;
+        }
+    }
     try {
-        impl_ = std::make_unique<Impl>(options_);
+        impl_ = std::make_unique<Impl>(options_, api);
         last_error_.clear();
         LOG_INFO(
             "RocketMQ producer started"
@@ -88,6 +117,7 @@ bool RocketMQProducer::Start() {
             << ", topic=" << options_.topic
             << ", request_timeout_ms=" << options_.request_timeout_ms
             << ", tls=" << options_.tls
+            << ", wire_send_batch=" << (api != nullptr)
         );
         return true;
     } catch (const std::exception& e) {
@@ -102,7 +132,23 @@ bool RocketMQProducer::Start() {
 }
 
 void RocketMQProducer::Stop() noexcept {
+    const auto* api = impl_ ? impl_->batch_api : nullptr;
     impl_.reset();
+    if (api) {
+        try {
+            ::ROCKETMQ_NAMESPACE::TinyIMXBatchSendStatsV1 stats{};
+            api->read_stats(&stats);
+            LOG_WARN("RocketMQ bounded batch send process stopped"
+                     << ", calls=" << stats.api_calls
+                     << ", rpc_submissions=" << stats.rpc_submissions
+                     << ", submitted_entries=" << stats.submitted_entries
+                     << ", rpc_terminals=" << stats.rpc_terminals
+                     << ", malformed_responses=" << stats.malformed_responses
+                     << ", synchronous_timeouts=" << stats.synchronous_timeouts);
+        } catch (...) {
+            // Diagnostics cannot turn a normal producer shutdown into a crash.
+        }
+    }
 }
 
 bool RocketMQProducer::IsStarted() const noexcept {
@@ -111,6 +157,93 @@ bool RocketMQProducer::IsStarted() const noexcept {
 
 const std::string& RocketMQProducer::LastError() const noexcept {
     return last_error_;
+}
+
+std::size_t RocketMQProducer::MaxBatchMessages() const noexcept {
+    return impl_ && impl_->batch_api ? 32 : 1;
+}
+
+std::vector<PublishResult> RocketMQProducer::PublishBatch(
+    const std::vector<PublishMessage>& messages
+) {
+    if (messages.size() > 32) {
+        throw std::invalid_argument("RocketMQ publication batch exceeds 32 messages");
+    }
+    if (!impl_ || !impl_->batch_api) {
+        return EventPublisher::PublishBatch(messages);
+    }
+    std::vector<PublishResult> results(messages.size());
+    const auto valid = [&](const PublishMessage& message) {
+        return message.topic == options_.topic && !message.event_id.empty() &&
+               !message.message_key.empty() && !message.body.empty();
+    };
+    const auto maximum_body = impl_->batch_api->maximum_body_bytes;
+    std::size_t position = 0;
+    while (position < messages.size()) {
+        const auto start = position;
+        if (!valid(messages[start])) {
+            results[start].status = PublishStatus::kPermanentFailure;
+            results[start].message = "RocketMQ publish rejected invalid message metadata";
+            ++position;
+            continue;
+        }
+        // A valid oversized single event keeps the original send path. This
+        // decision happens before any batch RPC, never after an ambiguous send.
+        if (messages[start].body.size() > maximum_body) {
+            results[start] = Publish(messages[start]);
+            ++position;
+            continue;
+        }
+        std::size_t bytes = 0;
+        while (position < messages.size() && valid(messages[position]) &&
+               messages[position].tag == messages[start].tag &&
+               messages[position].body.size() <= maximum_body - bytes) {
+            bytes += messages[position].body.size();
+            ++position;
+        }
+        // Fix this group before allocations/submission so exceptions cannot
+        // skip an input or cause an infinite preparation loop.
+        const auto count = position - start;
+        try {
+            std::vector<::ROCKETMQ_NAMESPACE::MessageConstSharedPtr> handles;
+            handles.reserve(count);
+            for (std::size_t i = start; i < position; ++i) {
+                const auto& message = messages[i];
+                auto handle = ::ROCKETMQ_NAMESPACE::Message::newBuilder()
+                    .withTopic(message.topic).withTag(message.tag)
+                    .withKeys(std::vector<std::string>{message.message_key})
+                    .withBody(message.body).build();
+                handles.emplace_back(std::move(handle));
+            }
+            std::vector<std::error_code> errors;
+            std::vector<std::string> ids;
+            const int code = impl_->batch_api->send_batch(
+                &impl_->producer, &handles, &errors, &ids
+            );
+            if (code != 0 || errors.size() != count || ids.size() != count) {
+                continue;  // Entire ambiguous group stays retryable.
+            }
+            bool malformed = false;
+            for (std::size_t i = 0; i < count; ++i) {
+                if (!errors[i] && ids[i] != handles[i]->id()) malformed = true;
+            }
+            if (malformed) continue;
+            for (std::size_t i = 0; i < count; ++i) {
+                auto& result = results[start + i];
+                if (!errors[i]) {
+                    result.status = PublishStatus::kPublished;
+                    result.broker_message_id = std::move(ids[i]);
+                    result.message = "RocketMQ batch entry published";
+                } else {
+                    result.message = "RocketMQ batch entry failed/ambiguous: " + errors[i].message();
+                }
+            }
+        } catch (...) {
+            // Already confirmed earlier groups remain confirmed. Every input
+            // in this uncertain group is retried through its original event ID.
+        }
+    }
+    return results;
 }
 
 PublishResult RocketMQProducer::Publish(

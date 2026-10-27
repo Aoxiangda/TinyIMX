@@ -68,6 +68,13 @@ public:
     }
     PermissionBoundaryTrace(const PermissionBoundaryTrace&)=delete;
     PermissionBoundaryTrace& operator=(const PermissionBoundaryTrace&)=delete;
+    static PermissionBoundaryTrace Async(int side,std::uint64_t from,std::uint64_t to,
+        std::string_view rid,std::string_view caller) noexcept {
+        // Completion may run on a different thread. A cross-thread CPU-clock
+        // subtraction is invalid; keep the correlated wall span and report -1.
+        return PermissionBoundaryTrace(side,from,to,rid,caller,false,AsyncLog,SteadyMicros,
+            []() noexcept -> std::int64_t {return -1;});
+    }
     ~PermissionBoundaryTrace() noexcept {
         if (!enabled_) return;
         s_.total_us=now_()-s_.started_us;s_.cpu_us=CpuDelta(cpu_start_,cpu_());
@@ -87,6 +94,18 @@ public:
     };
 private:
     void Start() noexcept {s_.started_us=now_();cpu_start_=cpu_();s_.tid=CurrentThreadId();}
+    static void AsyncLog(const Snapshot& s) noexcept {
+        static PermissionTraceRateGate gate;
+        if(!gate.Allow(s.started_us))return;
+        try {
+            LOG_WARN("permission_boundary_async_wall_phase side="<<s.side
+                <<" from="<<s.identity.from<<" to="<<s.identity.to
+                <<" rid_hash="<<s.identity.rid_hash<<" caller_hash="<<s.identity.caller_hash
+                <<" start_tid="<<s.tid<<" started_us="<<s.started_us<<" total_us="<<s.total_us
+                <<" cpu_us="<<s.cpu_us<<" dispatch_us="<<s.marks[2]
+                <<" callback_us="<<s.marks[3]<<" rpc_span_finished_us="<<s.marks[4]<<" status="<<s.status);
+        }catch(...){/* Diagnostics cannot change a business result. */}
+    }
     static void Log(const Snapshot& s) noexcept {
         static PermissionTraceRateGate gates[3];
         if (s.side<1 || s.side>3 || !gates[s.side-1].Allow(s.started_us)) return;

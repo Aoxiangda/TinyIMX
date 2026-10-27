@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -95,6 +96,8 @@ struct MySqlConfig {
     std::string user{"root"};
     std::string password{""};
     int pool_size{4};
+    // Optional same-machine transport. Empty preserves host/port behavior.
+    std::string unix_socket;
 };
 
 struct RedisConfig {
@@ -120,6 +123,8 @@ struct OutboxRelayConfig {
     bool enable{false};
     std::string instance_id{"outbox-relay-1"};
     std::size_t batch_size{32};
+    // Opt in after deployment-specific validation. One preserves legacy writes.
+    std::size_t publish_batch_size{1};
     std::size_t worker_threads{4};
     std::size_t max_inflight{128};
     int poll_interval_ms{100};
@@ -140,6 +145,7 @@ struct UnreadProjectionConfig {
     std::string consumer_group{"tinyimx-unread-projector-v1"};
     int consumer_request_timeout_ms{30000};
     std::size_t batch_size{16};
+    std::size_t worker_threads{1};
     int invisible_duration_ms{30000};
     int await_duration_ms{5000};
     int receive_error_backoff_ms{500};

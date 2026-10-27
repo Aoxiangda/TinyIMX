@@ -4,6 +4,7 @@
 #include "common/logging/Logger.h"
 #include "common/observability/ProcessTelemetry.h"
 #include "services/group/application/GroupApplicationService.h"
+#include "services/group/application/GroupEventFactory.h"
 #include "services/group/application/GroupPermissionPolicy.h"
 #include "services/group/repository/GroupRepositoryAdapter.h"
 #include "services/group/server/GroupServiceServer.h"
@@ -81,6 +82,10 @@ int main(int argc, char* argv[]) {
         std::cerr << "load config failed: " << config.LastError() << '\n';
         return 1;
     }
+    if (!tinyimx::group::GroupEventFactory::IsValidTopic(config.RocketMQ().message_topic)) {
+        std::cerr << "invalid GroupService event topic\n";
+        return 1;
+    }
     if (!tinyimx::Logger::Instance().Init(config.Logger())) {
         std::cerr << "logger init failed\n";
         return 1;
@@ -116,7 +121,8 @@ int main(int argc, char* argv[]) {
         &repository,
         &mysql_pool,
         &outbox_repository,
-        &permission_policy
+        &permission_policy,
+        config.RocketMQ().message_topic
     );
     tinyimx::group::GroupApplicationService application_service(&repository_adapter);
     tinyimx::group::GroupServiceImpl service_impl(&application_service);

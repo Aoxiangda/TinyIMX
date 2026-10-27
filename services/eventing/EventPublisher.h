@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
+#include <vector>
 
 namespace tinyimx::eventing {
 
@@ -38,6 +40,15 @@ public:
     [[nodiscard]] virtual PublishResult Publish(
         const PublishMessage& message
     ) = 0;
+
+    // Existing implementations stay single-message publishers. A batch-capable
+    // transport returns one result for each input; ambiguous entries retry.
+    [[nodiscard]] virtual std::size_t MaxBatchMessages() const noexcept {
+        return 1;
+    }
+    [[nodiscard]] virtual std::vector<PublishResult> PublishBatch(
+        const std::vector<PublishMessage>& messages
+    );
 
 protected:
     EventPublisher() = default;

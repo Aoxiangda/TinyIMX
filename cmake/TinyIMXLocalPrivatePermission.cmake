@@ -1,0 +1,32 @@
+add_library(tinyimx_local_private_permission
+    services/rpc/LocalPrivateChatPermissionClient.cpp)
+target_include_directories(tinyimx_local_private_permission PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(tinyimx_local_private_permission PUBLIC cxx_std_20)
+target_link_libraries(tinyimx_local_private_permission PUBLIC tinyimx_social_core tinyimx_concurrency)
+target_link_libraries(gateway_demo PRIVATE tinyimx_local_private_permission)
+
+add_executable(local_private_permission_tests tests/social/local_private_permission_test.cpp)
+target_link_libraries(local_private_permission_tests PRIVATE tinyimx_local_private_permission)
+add_test(NAME local_private_permission_tests COMMAND local_private_permission_tests)
+add_executable(local_private_permission_async_tests tests/social/local_private_permission_async_test.cpp)
+target_link_libraries(local_private_permission_async_tests PRIVATE tinyimx_local_private_permission)
+add_test(NAME local_private_permission_async_tests COMMAND local_private_permission_async_tests)
+add_executable(async_local_permission_executor_tests tests/gateway/async_local_permission_executor_test.cpp)
+target_link_libraries(async_local_permission_executor_tests PRIVATE tinyimx_gateway tinyimx_local_private_permission)
+add_test(NAME async_local_permission_executor_tests COMMAND async_local_permission_executor_tests)
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    add_executable(local_private_permission_sanitizer_tests
+        tests/social/local_private_permission_test.cpp
+        services/rpc/LocalPrivateChatPermissionClient.cpp)
+    target_include_directories(local_private_permission_sanitizer_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_features(local_private_permission_sanitizer_tests PRIVATE cxx_std_20)
+    target_compile_options(local_private_permission_sanitizer_tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(local_private_permission_sanitizer_tests PRIVATE -fsanitize=address,undefined)
+    target_link_libraries(local_private_permission_sanitizer_tests PRIVATE tinyimx_social_core tinyimx_concurrency)
+    add_test(NAME local_private_permission_sanitizer_tests COMMAND local_private_permission_sanitizer_tests)
+endif()
+
+# Authoritative real-MySQL checks require an explicit owned fixture config.
+add_executable(local_private_permission_sql_tests EXCLUDE_FROM_ALL tests/social/local_private_permission_sql_test.cpp)
+target_link_libraries(local_private_permission_sql_tests PRIVATE tinyimx_local_private_permission tinyimx_config tinyimx_social_grpc tinyimx_rpc_client)

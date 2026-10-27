@@ -1,6 +1,7 @@
 #pragma once
 
 #include "services/rpc/RpcCallOptions.h"
+#include "common/protocol/CommittedUnreadSnapshot.h"
 
 #include <cstdint>
 #include <optional>
@@ -63,6 +64,7 @@ struct PersistPrivateMessageRpcResponse {
     std::uint64_t message_id{0};
     MessageRpcRecord record;
     std::string message;
+    std::optional<CommittedUnreadSnapshot> committed_unread;
 
     [[nodiscard]] bool Accepted() const noexcept {
         return outcome == PersistPrivateMessageRpcOutcome::kCreated ||

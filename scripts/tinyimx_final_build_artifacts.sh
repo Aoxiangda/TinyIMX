@@ -41,6 +41,7 @@ tar -C "$ROOT" -czf "$OUT/tinyimx-m21-final-deploy-config.tar.gz" \
   common/db/schema.sql \
   db/migrations/009_create_file_domain.sql \
   db/migrations/010_create_file_upload_chunks.sql \
+  db/migrations/016_remove_business_foreign_keys.sql \
   scripts/m21_production_preflight.sh \
   scripts/m21_render_production_configs.py \
   scripts/m21_generate_dev_tls.sh \

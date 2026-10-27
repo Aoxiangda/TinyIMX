@@ -1,4 +1,4 @@
-USE tinyimx;
+-- Apply to the schema explicitly selected by the caller.
 
 -- M18-A1: File metadata is durable business truth. Large file bytes do not
 -- enter the chat-message/MySQL payload path; storage_key is server-generated.
@@ -30,12 +30,6 @@ CREATE TABLE IF NOT EXISTS im_files (
     UNIQUE KEY uk_im_files_storage_key (storage_backend, storage_key),
     KEY idx_im_files_owner_status (owner_user_id, status, file_id),
     KEY idx_im_files_status_id (status, file_id),
-
-    CONSTRAINT fk_im_files_owner
-        FOREIGN KEY (owner_user_id)
-        REFERENCES im_users(user_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
 
     CONSTRAINT chk_im_files_total_size CHECK (total_size > 0),
     CONSTRAINT chk_im_files_status CHECK (status IN (1, 2, 3, 4, 5, 6, 7)),
@@ -72,18 +66,6 @@ CREATE TABLE IF NOT EXISTS im_file_upload_sessions (
     UNIQUE KEY uk_im_file_upload_file (file_id),
     KEY idx_im_file_upload_owner_status (owner_user_id, status, upload_id),
     KEY idx_im_file_upload_expiry (status, expires_at, upload_id),
-
-    CONSTRAINT fk_im_file_upload_file
-        FOREIGN KEY (file_id)
-        REFERENCES im_files(file_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
-
-    CONSTRAINT fk_im_file_upload_owner
-        FOREIGN KEY (owner_user_id)
-        REFERENCES im_users(user_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
 
     CONSTRAINT chk_im_file_upload_total_size CHECK (total_size > 0),
     CONSTRAINT chk_im_file_upload_chunk_size CHECK (chunk_size > 0),

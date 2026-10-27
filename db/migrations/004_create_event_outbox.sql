@@ -1,4 +1,4 @@
-USE tinyimx;
+-- Apply to the schema explicitly selected by the caller.
 
 CREATE TABLE IF NOT EXISTS im_event_outbox (
     outbox_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

@@ -860,6 +860,58 @@ GetUnreadCountResult UnreadCountCache::GetTotalUnread(
     );
 }
 
+PrivateUnreadSnapshot UnreadCountCache::GetPrivateAndTotalUnread(
+    std::uint64_t receiver_user_id, std::uint64_t sender_user_id
+) {
+    PrivateUnreadSnapshot out;
+    const auto fail = [&](GetUnreadCountStatus status, const std::string& error) {
+        out.private_unread.status = out.total_unread.status = status;
+        out.private_unread.error_message = out.total_unread.error_message = error;
+    };
+    if (!receiver_user_id || !sender_user_id || receiver_user_id == sender_user_id) {
+        fail(GetUnreadCountStatus::kInvalidArgument, "unread pair failed: invalid user pair");
+        return out;
+    }
+    if (!pool_) {
+        fail(GetUnreadCountStatus::kRedisError, "unread pair failed: redis pool is null");
+        return out;
+    }
+    auto connection = pool_->Acquire(); // Preserve existing connection health checks.
+    if (!connection) {
+        fail(GetUnreadCountStatus::kRedisError, "unread pair failed: acquire redis connection failed");
+        return out;
+    }
+    // GET within Lua preserves WRONGTYPE, unlike MGET which treats it as nil.
+    // Returning bulk strings also avoids rounding counts above 2^53.
+    const auto values = connection->EvalStringArray(kReadPrivateUnreadBatchScript,
+        {BuildPrivateKey(receiver_user_id, sender_user_id), BuildTotalKey(receiver_user_id)}, {});
+    if (!values || values->size() != 4) {
+        fail(GetUnreadCountStatus::kRedisError,
+             values ? "unread pair failed: unexpected result cardinality" : connection->LastError());
+        return out;
+    }
+    for (const auto index : {0, 2}) {
+        const auto& tag = (*values)[index];
+        if (tag != "value" && tag != "missing" && tag != "error") {
+            fail(GetUnreadCountStatus::kRedisError, "unread pair failed: invalid result tag");
+            return out;
+        }
+    }
+    const auto parse = [&](std::size_t index, const char* action) {
+        GetUnreadCountResult result;
+        const auto& tag = (*values)[index];
+        if (tag == "missing") result.status = GetUnreadCountStatus::kNotFound;
+        else if (tag == "error") {
+            result.status = GetUnreadCountStatus::kRedisError;
+            result.error_message = "redis get failed: invalid reply type";
+        } else result = ParseStoredUnreadCount((*values)[index + 1], action);
+        return result;
+    };
+    out.private_unread = parse(0, "get private unread");
+    out.total_unread = parse(2, "get total unread");
+    return out;
+}
+
 
 std::string UnreadCountCache::BuildProjectionKey(
     std::uint64_t message_id

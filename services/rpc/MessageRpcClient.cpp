@@ -1,3 +1,4 @@
+#include <atomic>
 #include "common/db/GroupGetBoundaryTrace.h"
 #include "services/rpc/MessageRpcClient.h"
 
@@ -214,6 +215,119 @@ bool ValidConversationForActor(
          conversation.last_from_user_id == conversation.peer_user_id);
 }
 
+PersistPrivateMessageRpcCallResult ParsePersistPrivateMessageResponse(const PersistPrivateMessageRpcRequest& request,
+    const RpcStatus& transport_status,const tinyimx::message::v1::PersistPrivateMessageResponse& proto_response) {
+    if (!transport_status.ok()) {
+        const RpcStatus mapped = transport_status;
+        return PersistPrivateMessageRpcCallResult::Failure(
+            mapped.code,
+            mapped.message,
+            true
+        );
+    }
+
+    PersistPrivateMessageRpcResponse output;
+    switch (proto_response.result()) {
+        case tinyimx::message::v1::PERSIST_PRIVATE_MESSAGE_RESULT_CREATED:
+            output.outcome = PersistPrivateMessageRpcOutcome::kCreated;
+            break;
+        case tinyimx::message::v1::PERSIST_PRIVATE_MESSAGE_RESULT_REUSED:
+            output.outcome = PersistPrivateMessageRpcOutcome::kReused;
+            break;
+        case tinyimx::message::v1::PERSIST_PRIVATE_MESSAGE_RESULT_IDEMPOTENCY_CONFLICT:
+            output.outcome = PersistPrivateMessageRpcOutcome::kIdempotencyConflict;
+            break;
+        case tinyimx::message::v1::PERSIST_PRIVATE_MESSAGE_RESULT_UNSPECIFIED:
+        default:
+            return PersistPrivateMessageRpcCallResult::Failure(
+                RpcErrorCode::kDataLoss,
+                "MessageService returned unspecified persistence result",
+                true
+            );
+    }
+
+    output.message_id = proto_response.message_id();
+    output.message = proto_response.message();
+
+    const auto record = ToRpcRecord(proto_response.record());
+    if (!record.has_value() ||
+        output.message_id == 0 ||
+        record->message_id != output.message_id ||
+        record->from_user_id != request.from_user_id ||
+        record->client_message_id != request.client_message_id) {
+        return PersistPrivateMessageRpcCallResult::Failure(
+            RpcErrorCode::kDataLoss,
+            "MessageService returned invalid persistence identity",
+            true
+        );
+    }
+
+    output.record = *record;
+
+    if (output.Accepted()) {
+        if (record->to_user_id != request.to_user_id ||
+            record->message_type != request.message_type ||
+            record->content != request.content ||
+            (output.Created() &&
+             record->delivery_state != MessageDeliveryState::kPending)) {
+            return PersistPrivateMessageRpcCallResult::Failure(
+                RpcErrorCode::kDataLoss,
+                "MessageService returned inconsistent accepted persistence record",
+                true
+            );
+        }
+    } else {
+        const bool immutable_identity_differs =
+            record->to_user_id != request.to_user_id ||
+            record->message_type != request.message_type ||
+            record->content != request.content;
+        if (!immutable_identity_differs) {
+            return PersistPrivateMessageRpcCallResult::Failure(
+                RpcErrorCode::kDataLoss,
+                "MessageService returned false idempotency conflict",
+                true
+            );
+        }
+    }
+
+    if (proto_response.has_committed_unread()) {
+        const auto& source = proto_response.committed_unread();
+        CommittedUnreadSnapshot snapshot{source.message_id(), source.receiver_user_id(),
+            source.peer_user_id(), source.private_unread(), source.total_unread()};
+        if (!output.Created() ||
+            !snapshot.ValidFor(output.message_id, request.to_user_id, request.from_user_id)) {
+            return PersistPrivateMessageRpcCallResult::Failure(RpcErrorCode::kDataLoss,
+                "MessageService returned invalid committed unread snapshot", true);
+        }
+        output.committed_unread = snapshot;
+    }
+    return PersistPrivateMessageRpcCallResult::Success(std::move(output));
+}
+
+RpcResult<GetPrivateMessageRpcResponse> ParseGetPrivateMessageResponse(const GetPrivateMessageRpcRequest& request,
+    const RpcStatus& transport_status,const tinyimx::message::v1::GetPrivateMessageResponse& proto_response) {
+    if (!transport_status.ok()) {
+        const RpcStatus mapped = transport_status;
+        return RpcResult<GetPrivateMessageRpcResponse>::Failure(
+            mapped.code, mapped.message
+        );
+    }
+
+    auto record = ToRpcRecord(proto_response.record());
+    if (!record.has_value() || record->message_id != request.message_id ||
+        record->from_user_id == 0 || record->to_user_id == 0 ||
+        record->message_type < 1 || record->message_type > 3) {
+        return RpcResult<GetPrivateMessageRpcResponse>::Failure(
+            RpcErrorCode::kDataLoss,
+            "MessageService returned invalid private message record"
+        );
+    }
+
+    GetPrivateMessageRpcResponse output;
+    output.record = std::move(*record);
+    return RpcResult<GetPrivateMessageRpcResponse>::Success(std::move(output));
+}
+
 }  // namespace
 
 MessageRpcClient::MessageRpcClient(
@@ -297,80 +411,7 @@ MessageRpcClient::PersistPrivateMessage(
         &proto_response
     );
 
-    if (!grpc_status.ok()) {
-        const RpcStatus mapped = MapGrpcStatus(grpc_status);
-        return PersistPrivateMessageRpcCallResult::Failure(
-            mapped.code,
-            mapped.message,
-            true
-        );
-    }
-
-    PersistPrivateMessageRpcResponse output;
-    switch (proto_response.result()) {
-        case tinyimx::message::v1::PERSIST_PRIVATE_MESSAGE_RESULT_CREATED:
-            output.outcome = PersistPrivateMessageRpcOutcome::kCreated;
-            break;
-        case tinyimx::message::v1::PERSIST_PRIVATE_MESSAGE_RESULT_REUSED:
-            output.outcome = PersistPrivateMessageRpcOutcome::kReused;
-            break;
-        case tinyimx::message::v1::PERSIST_PRIVATE_MESSAGE_RESULT_IDEMPOTENCY_CONFLICT:
-            output.outcome = PersistPrivateMessageRpcOutcome::kIdempotencyConflict;
-            break;
-        case tinyimx::message::v1::PERSIST_PRIVATE_MESSAGE_RESULT_UNSPECIFIED:
-        default:
-            return PersistPrivateMessageRpcCallResult::Failure(
-                RpcErrorCode::kDataLoss,
-                "MessageService returned unspecified persistence result",
-                true
-            );
-    }
-
-    output.message_id = proto_response.message_id();
-    output.message = proto_response.message();
-
-    const auto record = ToRpcRecord(proto_response.record());
-    if (!record.has_value() ||
-        output.message_id == 0 ||
-        record->message_id != output.message_id ||
-        record->from_user_id != request.from_user_id ||
-        record->client_message_id != request.client_message_id) {
-        return PersistPrivateMessageRpcCallResult::Failure(
-            RpcErrorCode::kDataLoss,
-            "MessageService returned invalid persistence identity",
-            true
-        );
-    }
-
-    output.record = *record;
-
-    if (output.Accepted()) {
-        if (record->to_user_id != request.to_user_id ||
-            record->message_type != request.message_type ||
-            record->content != request.content ||
-            (output.Created() &&
-             record->delivery_state != MessageDeliveryState::kPending)) {
-            return PersistPrivateMessageRpcCallResult::Failure(
-                RpcErrorCode::kDataLoss,
-                "MessageService returned inconsistent accepted persistence record",
-                true
-            );
-        }
-    } else {
-        const bool immutable_identity_differs =
-            record->to_user_id != request.to_user_id ||
-            record->message_type != request.message_type ||
-            record->content != request.content;
-        if (!immutable_identity_differs) {
-            return PersistPrivateMessageRpcCallResult::Failure(
-                RpcErrorCode::kDataLoss,
-                "MessageService returned false idempotency conflict",
-                true
-            );
-        }
-    }
-
-    return PersistPrivateMessageRpcCallResult::Success(std::move(output));
+    return ParsePersistPrivateMessageResponse(request,MapGrpcStatus(grpc_status),proto_response);
 }
 
 
@@ -880,26 +921,7 @@ MessageRpcClient::GetPrivateMessage(
     const grpc::Status grpc_status = stub->GetPrivateMessage(
         &context, proto_request, &proto_response
     );
-    if (!grpc_status.ok()) {
-        const RpcStatus mapped = MapGrpcStatus(grpc_status);
-        return RpcResult<GetPrivateMessageRpcResponse>::Failure(
-            mapped.code, mapped.message
-        );
-    }
-
-    auto record = ToRpcRecord(proto_response.record());
-    if (!record.has_value() || record->message_id != request.message_id ||
-        record->from_user_id == 0 || record->to_user_id == 0 ||
-        record->message_type < 1 || record->message_type > 3) {
-        return RpcResult<GetPrivateMessageRpcResponse>::Failure(
-            RpcErrorCode::kDataLoss,
-            "MessageService returned invalid private message record"
-        );
-    }
-
-    GetPrivateMessageRpcResponse output;
-    output.record = std::move(*record);
-    return RpcResult<GetPrivateMessageRpcResponse>::Success(std::move(output));
+    return ParseGetPrivateMessageResponse(request,MapGrpcStatus(grpc_status),proto_response);
 }
 
 RpcResult<ListHistoryRpcResponse>
@@ -1670,6 +1692,143 @@ RpcStatus MessageRpcClient::MapGrpcStatus(
     }
 
     return RpcStatus{code, status.error_message()};
+}
+
+
+void MessageRpcClient::PersistPrivateMessageAsync(PersistPrivateMessageRpcRequest request,RpcCallOptions options,
+    std::function<void(PersistPrivateMessageRpcCallResult)> callback)const {
+
+    if (request.from_user_id == 0 ||
+        request.to_user_id == 0 ||
+        request.from_user_id == request.to_user_id ||
+        request.client_message_id.empty() ||
+        request.client_message_id.size() > 64 ||
+        request.message_type < 1 ||
+        request.message_type > 3 ||
+        request.content.empty()) {
+        return callback(PersistPrivateMessageRpcCallResult::Failure(
+            RpcErrorCode::kInvalidArgument,
+            "invalid MessageService PersistPrivateMessage request",
+            false
+        ));
+    }
+
+    if (options.remaining_timeout <= std::chrono::milliseconds::zero()) {
+        return callback(PersistPrivateMessageRpcCallResult::Failure(
+            RpcErrorCode::kDeadlineExceeded,
+            "PersistPrivateMessage remaining RPC budget is exhausted",
+            false
+        ));
+    }
+
+    if (!endpoint_provider_) {
+        return callback(PersistPrivateMessageRpcCallResult::Failure(
+            RpcErrorCode::kUnavailable,
+            "MessageService endpoint provider is not configured",
+            false
+        ));
+    }
+
+    const auto endpoint = endpoint_provider_->Resolve(ServiceKind::kMessage);
+    if (!endpoint.has_value() || endpoint->target.empty()) {
+        return callback(PersistPrivateMessageRpcCallResult::Failure(
+            RpcErrorCode::kUnavailable,
+            "MessageService endpoint is unavailable",
+            false
+        ));
+    }
+
+    auto stub = GetOrCreateStub(*endpoint);
+    if (!stub) {
+        return callback(PersistPrivateMessageRpcCallResult::Failure(
+            RpcErrorCode::kUnavailable,
+            "MessageService gRPC stub could not be created",
+            false
+        ));
+    }
+
+
+    struct Call {
+        PersistPrivateMessageRpcRequest original;
+        tinyimx::message::v1::PersistPrivateMessageRequest request;
+        tinyimx::message::v1::PersistPrivateMessageResponse response;
+        grpc::ClientContext context;
+        std::shared_ptr<MessageStubInterface> stub;
+        std::atomic<bool> completed{false};
+    };
+    auto call=std::make_shared<Call>();call->original=request;call->stub=std::move(stub);
+    FillMeta(options, call->request.mutable_meta());
+    call->request.set_from_user_id(request.from_user_id);
+    call->request.set_to_user_id(request.to_user_id);
+    call->request.set_client_message_id(request.client_message_id);
+    call->request.set_message_type(request.message_type);
+    call->request.set_content(request.content);
+
+
+    call->context.set_deadline(std::chrono::system_clock::now()+options.remaining_timeout);
+    call->stub->async()->PersistPrivateMessage(&call->context,&call->request,&call->response,
+        [call,callback=std::move(callback)](grpc::Status status)mutable {
+            if(call->completed.exchange(true,std::memory_order_acq_rel))return;
+            callback(ParsePersistPrivateMessageResponse(call->original,MapGrpcStatus(status),call->response));
+        });
+}
+
+
+void MessageRpcClient::GetPrivateMessageAsync(GetPrivateMessageRpcRequest request,RpcCallOptions options,
+    std::function<void(RpcResult<GetPrivateMessageRpcResponse>)> callback)const {
+
+    if (request.message_id == 0) {
+        return callback(RpcResult<GetPrivateMessageRpcResponse>::Failure(
+            RpcErrorCode::kInvalidArgument,
+            "invalid MessageService GetPrivateMessage request"
+        ));
+    }
+    if (options.remaining_timeout <= std::chrono::milliseconds::zero()) {
+        return callback(RpcResult<GetPrivateMessageRpcResponse>::Failure(
+            RpcErrorCode::kDeadlineExceeded,
+            "GetPrivateMessage remaining RPC budget is exhausted"
+        ));
+    }
+    if (!endpoint_provider_) {
+        return callback(RpcResult<GetPrivateMessageRpcResponse>::Failure(
+            RpcErrorCode::kUnavailable,
+            "MessageService endpoint provider is not configured"
+        ));
+    }
+    const auto endpoint = endpoint_provider_->Resolve(ServiceKind::kMessage);
+    if (!endpoint.has_value() || endpoint->target.empty()) {
+        return callback(RpcResult<GetPrivateMessageRpcResponse>::Failure(
+            RpcErrorCode::kUnavailable,
+            "MessageService endpoint is unavailable"
+        ));
+    }
+    auto stub = GetOrCreateStub(*endpoint);
+    if (!stub) {
+        return callback(RpcResult<GetPrivateMessageRpcResponse>::Failure(
+            RpcErrorCode::kUnavailable,
+            "MessageService gRPC stub could not be created"
+        ));
+    }
+
+
+    struct Call {
+        GetPrivateMessageRpcRequest original;
+        tinyimx::message::v1::GetPrivateMessageRequest request;
+        tinyimx::message::v1::GetPrivateMessageResponse response;
+        grpc::ClientContext context;
+        std::shared_ptr<MessageStubInterface> stub;
+        std::atomic<bool> completed{false};
+    };
+    auto call=std::make_shared<Call>();call->original=request;call->stub=std::move(stub);
+    FillMeta(options, call->request.mutable_meta());
+    call->request.set_message_id(request.message_id);
+
+    call->context.set_deadline(std::chrono::system_clock::now()+options.remaining_timeout);
+    call->stub->async()->GetPrivateMessage(&call->context,&call->request,&call->response,
+        [call,callback=std::move(callback)](grpc::Status status)mutable {
+            if(call->completed.exchange(true,std::memory_order_acq_rel))return;
+            callback(ParseGetPrivateMessageResponse(call->original,MapGrpcStatus(status),call->response));
+        });
 }
 
 }  // namespace tinyimx::rpc

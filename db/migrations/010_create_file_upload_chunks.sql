@@ -1,4 +1,4 @@
-USE tinyimx;
+-- Apply to the schema explicitly selected by the caller.
 
 -- M18-B1: durable chunk manifest. Progress correctness is defined by one row
 -- per (upload_id, chunk_index), never by a process-local bitmap or one mutable
@@ -30,24 +30,6 @@ CREATE TABLE IF NOT EXISTS im_file_upload_chunks (
     KEY idx_im_file_upload_chunk_owner (owner_user_id, upload_id, chunk_index),
     KEY idx_im_file_upload_chunk_file (file_id, chunk_index),
     KEY idx_im_file_upload_chunk_status (upload_id, status, chunk_index),
-
-    CONSTRAINT fk_im_file_upload_chunk_upload
-        FOREIGN KEY (upload_id)
-        REFERENCES im_file_upload_sessions(upload_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
-
-    CONSTRAINT fk_im_file_upload_chunk_file
-        FOREIGN KEY (file_id)
-        REFERENCES im_files(file_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
-
-    CONSTRAINT fk_im_file_upload_chunk_owner
-        FOREIGN KEY (owner_user_id)
-        REFERENCES im_users(user_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
 
     CONSTRAINT chk_im_file_upload_chunks_size CHECK (chunk_size > 0),
     CONSTRAINT chk_im_file_upload_chunks_checksum_algorithm

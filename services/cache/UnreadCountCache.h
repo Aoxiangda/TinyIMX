@@ -44,6 +44,13 @@ struct GetUnreadCountResult {
     }
 };
 
+// Both values come from one Redis command. Each slot retains its own missing,
+// malformed-value and wrong-type result; a bad peer key cannot hide total.
+struct PrivateUnreadSnapshot {
+    GetUnreadCountResult private_unread;
+    GetUnreadCountResult total_unread;
+};
+
 enum class IncrementUnreadStatus {
     kIncremented = 0,
     kInvalidArgument,
@@ -221,6 +228,11 @@ public:
     GetUnreadCountResult
     GetTotalUnread(
         std::uint64_t receiver_user_id
+    );
+
+    PrivateUnreadSnapshot GetPrivateAndTotalUnread(
+        std::uint64_t receiver_user_id,
+        std::uint64_t sender_user_id
     );
 
     ClearUnreadResult

@@ -17,6 +17,10 @@
 #include "gateway/GatewayPeerTransportManager.h"
 #include "gateway/GroupFanoutCoordinator.h"
 #include "services/rpc/SocialRpcClient.h"
+#include "services/rpc/LocalPrivateChatPermissionClient.h"
+#include "common/db/MySqlConnectionPool.h"
+#include "services/repository/FriendRepository.h"
+#include "services/social/repository/FriendRepositoryAdapter.h"
 #include "services/rpc/UserRpcClient.h"
 #include "services/rpc/MessageRpcClient.h"
 #include "services/rpc/GroupRpcClient.h"
@@ -51,6 +55,21 @@ void HandleSignal(int signal_number) {
 }  // namespace
 
 int main(int argc, char* argv[]) {
+    bool local_permission_enabled = false;
+    if (const char* flag = std::getenv("TINYIMX_GATEWAY_LOCAL_PERMISSION_ENABLE")) {
+        const std::string value(flag);
+        if (value != "0" && value != "1") {
+            std::cerr << "TINYIMX_GATEWAY_LOCAL_PERMISSION_ENABLE must be0 or1\n";
+            return 2;
+        }
+        local_permission_enabled = value == "1";
+    }
+    const char* local_permission_config = std::getenv("TINYIMX_GATEWAY_LOCAL_PERMISSION_CONFIG");
+    if ((local_permission_config && !*local_permission_config) ||
+        (local_permission_enabled && !local_permission_config)) {
+        std::cerr << "local permission requires an explicit nonempty config path\n";
+        return 2;
+    }
     // Optional I/O concurrency setting. Validate before any runtime resources
     // are created; keep the original bounded default when it is absent.
     std::size_t requested_message_workers = 0;
@@ -62,6 +81,19 @@ int main(int argc, char* argv[]) {
             parsed.ptr != value.data() + value.size() ||
             requested_message_workers < 4 || requested_message_workers > 64) {
             std::cerr << "invalid TINYIMX_MESSAGE_WORKER_THREADS; expected integer 4..64\n";
+            return 2;
+        }
+    }
+    std::size_t requested_receiver_ack_workers = 0;
+    if (const char* raw = std::getenv("TINYIMX_RECEIVER_ACK_WORKER_THREADS")) {
+        const std::string value(raw);
+        const auto parsed = std::from_chars(value.data(), value.data() + value.size(),
+                                            requested_receiver_ack_workers);
+        if (value.empty() || parsed.ec != std::errc{} ||
+            parsed.ptr != value.data() + value.size() ||
+            (requested_receiver_ack_workers != 4 && requested_receiver_ack_workers != 8 &&
+             requested_receiver_ack_workers != 16)) {
+            std::cerr << "invalid TINYIMX_RECEIVER_ACK_WORKER_THREADS; expected 4,8,16\n";
             return 2;
         }
     }
@@ -250,6 +282,13 @@ int main(int argc, char* argv[]) {
         std::unique_ptr<tinyimx::EventLoopThread> gateway_peer_loop_thread;
         std::shared_ptr<tinyimx::GatewayPeerTransportManager> gateway_peer_transport_manager;
         std::unique_ptr<tinyimx::GroupFanoutCoordinator> group_fanout_coordinator;
+        // Declare these before executors: exception unwinding must drain
+        // Gateway users first, then local reads, then application/DB owners.
+        std::unique_ptr<tinyimx::MySqlConnectionPool> local_permission_pool;
+        std::unique_ptr<tinyimx::FriendRepository> local_permission_repository;
+        std::unique_ptr<tinyimx::social::FriendRepositoryAdapter> local_permission_adapter;
+        std::unique_ptr<tinyimx::social::FriendApplicationService> local_permission_application;
+        std::unique_ptr<tinyimx::rpc::LocalPrivateChatPermissionClient> local_permission_client;
         std::unique_ptr<tinyimx::BusinessExecutor> business_executor;
         std::unique_ptr<tinyimx::BusinessExecutor> message_executor;
         std::unique_ptr<tinyimx::BusinessExecutor> presence_executor;
@@ -272,6 +311,34 @@ int main(int argc, char* argv[]) {
             group_rpc_client;
         std::unique_ptr<tinyimx::rpc::FileRpcClient>
             file_rpc_client;
+        // Declared after RPC clients so exception unwinding drains this lane
+        // while its dependencies still exist. Explicit normal shutdown below.
+        std::unique_ptr<tinyimx::BusinessExecutor> receiver_ack_executor;
+        if (local_permission_config) {
+            // CONFIG also prepares resources with ENABLE=0 for same-binary
+            // OFF/ON experiments; the absent-default path creates none.
+            tinyimx::Config local_config;
+            if (!local_config.LoadFromFile(local_permission_config) ||
+                !local_config.MySql().enable || local_config.MySql().pool_size < 1 ||
+                local_config.MySql().pool_size > 32) {
+                LOG_ERROR("local permission config requires enabled MySQL pool1..32");
+                return 2;
+            }
+            local_permission_pool = std::make_unique<tinyimx::MySqlConnectionPool>();
+            if (!local_permission_pool->Initialize(local_config.MySql())) {
+                LOG_ERROR("local permission MySQL initialization failed");
+                return 2;
+            }
+            local_permission_repository = std::make_unique<tinyimx::FriendRepository>(local_permission_pool.get());
+            local_permission_adapter = std::make_unique<tinyimx::social::FriendRepositoryAdapter>(local_permission_repository.get());
+            local_permission_application = std::make_unique<tinyimx::social::FriendApplicationService>(local_permission_adapter.get());
+            local_permission_client = std::make_unique<tinyimx::rpc::LocalPrivateChatPermissionClient>(
+                local_permission_application.get(), static_cast<std::size_t>(local_config.MySql().pool_size), 32);
+            LOG_INFO("gateway local permission prepared"
+                << ", enabled=" << local_permission_enabled
+                << ", workers=" << local_config.MySql().pool_size
+                << ", queue_capacity=32, authoritative_sql=true, permission_cache=false");
+        }
         if (config.Redis().enable) {
             redis_pool = std::make_unique<tinyimx::RedisConnectionPool>();
 
@@ -627,6 +694,9 @@ if (redis_pool) {
             listen_address,
             options
         );
+
+        if (local_permission_enabled)
+            gateway.SetPrivateChatPermissionPort(local_permission_client.get());
 
         gateway.SetBusinessExecutor(
             business_executor.get()
@@ -1090,12 +1160,16 @@ if (redis_pool) {
                     business_options.worker_threads * 2
                 )
             );
-        message_options.max_pending_tasks = business_options.max_pending_tasks;
+        const std::size_t receiver_ack_pending_budget = requested_receiver_ack_workers == 0
+            ? 0 : business_options.max_pending_tasks / 4;
+        message_options.max_pending_tasks = business_options.max_pending_tasks - receiver_ack_pending_budget;
         message_options.stripe_count = business_options.stripe_count;
         message_options.per_stripe_queue_capacity =
-            business_options.per_stripe_queue_capacity;
+            std::min(business_options.per_stripe_queue_capacity, message_options.max_pending_tasks);
         message_options.default_deadline = business_options.default_deadline;
         message_options.shutdown_timeout = business_options.shutdown_timeout;
+        const char* exact_keys=std::getenv("TINYIMX_MESSAGE_EXACT_KEY_ENABLE");
+        message_options.isolate_ordering_keys=exact_keys && std::string(exact_keys)=="1";
 
         message_executor = std::make_unique<tinyimx::BusinessExecutor>(
             message_options
@@ -1123,6 +1197,33 @@ if (redis_pool) {
         );
 
         gateway.SetMessageExecutor(message_executor.get());
+
+        if (requested_receiver_ack_workers != 0) {
+            auto ack_options = message_options;
+            // Keep the receiver-ACK bulkhead unchanged in this single-variable
+            // experiment; only the message/peer forwarding executor opts in.
+            ack_options.isolate_ordering_keys=false;
+            ack_options.name = "gateway-receiver-ack-runtime";
+            ack_options.worker_threads = requested_receiver_ack_workers;
+            ack_options.max_pending_tasks = receiver_ack_pending_budget;
+            ack_options.per_stripe_queue_capacity =
+                std::min(business_options.per_stripe_queue_capacity, receiver_ack_pending_budget);
+            receiver_ack_executor = std::make_unique<tinyimx::BusinessExecutor>(ack_options);
+            if (!receiver_ack_executor->Start()) {
+                gateway.Stop();
+                message_executor->ShutdownGraceful();
+                business_executor->ShutdownGraceful();
+                if (redis_pool) redis_pool->Shutdown();
+                tinyimx::Logger::Instance().Shutdown();
+                return 1;
+            }
+            gateway.SetReceiverAckExecutor(receiver_ack_executor.get());
+            LOG_WARN("gateway receiver ack runtime started"
+                << ", workers=" << ack_options.worker_threads
+                << ", max_pending=" << ack_options.max_pending_tasks
+                << ", message_max_pending=" << message_options.max_pending_tasks
+                << ", total_message_ack_budget=" << business_options.max_pending_tasks);
+        }
 
         // Presence/online-status maintenance has a dedicated bulkhead. During a
         // Gateway failover thousands of clients can reconnect and authenticate at
@@ -1168,6 +1269,7 @@ if (redis_pool) {
             LOG_ERROR("gateway presence runtime start failed");
             gateway.Stop();
             if (message_executor) message_executor->ShutdownGraceful();
+                if (receiver_ack_executor) receiver_ack_executor->ShutdownGraceful();
             business_executor->ShutdownGraceful();
             if (redis_pool) {
                 redis_pool->Shutdown();
@@ -1196,6 +1298,7 @@ if (redis_pool) {
             gateway.Stop();
             presence_executor->ShutdownGraceful();
             if (message_executor) message_executor->ShutdownGraceful();
+                if (receiver_ack_executor) receiver_ack_executor->ShutdownGraceful();
             business_executor->ShutdownGraceful();
             if (redis_pool) redis_pool->Shutdown();
             tinyimx::Logger::Instance().Shutdown();
@@ -1234,6 +1337,7 @@ if (redis_pool) {
             gateway.Stop();
             if (presence_executor) presence_executor->ShutdownGraceful();
             if (message_executor) message_executor->ShutdownGraceful();
+                if (receiver_ack_executor) receiver_ack_executor->ShutdownGraceful();
             business_executor->ShutdownGraceful();
             if (redis_pool) {
                 redis_pool->Shutdown();
@@ -1264,6 +1368,7 @@ if (redis_pool) {
                 gateway.Stop();
                 if (presence_executor) presence_executor->ShutdownGraceful();
                 if (message_executor) message_executor->ShutdownGraceful();
+                if (receiver_ack_executor) receiver_ack_executor->ShutdownGraceful();
                 if (business_executor) business_executor->ShutdownGraceful();
                 if (replay_executor) replay_executor->ShutdownGraceful();
 if (redis_pool) redis_pool->Shutdown();
@@ -1313,6 +1418,7 @@ if (redis_pool) redis_pool->Shutdown();
                 gateway.Stop();
                 if (presence_executor) presence_executor->ShutdownGraceful();
                 if (message_executor) message_executor->ShutdownGraceful();
+                if (receiver_ack_executor) receiver_ack_executor->ShutdownGraceful();
                 if (business_executor) business_executor->ShutdownGraceful();
                 if (replay_executor) replay_executor->ShutdownGraceful();
 if (redis_pool) redis_pool->Shutdown();
@@ -1449,10 +1555,30 @@ if (redis_pool) redis_pool->Shutdown();
                 << after_stats.average_execution_ms
                 << ", max_execution_ms="
                 << after_stats.max_execution_ms
+                << ", async_started=" << after_stats.async_started_total
+                << ", async_finished=" << after_stats.async_finished_total
+                << ", async_pending=" << after_stats.current_async_tasks
+                << ", continuations=" << after_stats.continuation_run_total
                 << ", accepted_unaccounted=" << accepted_unaccounted
             );
         }
 
+
+        if (receiver_ack_executor) {
+            const bool within_budget = receiver_ack_executor->ShutdownGraceful();
+            const auto stats = receiver_ack_executor->GetStats();
+            LOG_WARN("gateway receiver ack runtime drained"
+                << ", within_budget=" << within_budget
+                << ", accepted=" << stats.accepted_total
+                << ", completed=" << stats.completed_total
+                << ", rejected_overload=" << stats.rejected_overload_total
+                << ", rejected_hot_key=" << stats.rejected_hot_key_total
+                << ", peak_pending=" << stats.peak_pending_tasks
+                << ", peak_active=" << stats.peak_active_tasks
+                << ", avg_queue_wait_ms=" << stats.average_queue_wait_ms
+                << ", avg_execution_ms=" << stats.average_execution_ms
+                << ", pending=" << stats.current_pending_tasks);
+        }
 
         if (presence_executor) {
             const auto before_stats = presence_executor->GetStats();
@@ -1679,6 +1805,22 @@ if (redis_pool) redis_pool->Shutdown();
         }
 
         gateway.Stop();
+        if (local_permission_client) {
+            local_permission_client->Drain();
+            const auto stats=local_permission_client->Stats();
+            LOG_INFO("gateway local permission drained"
+                << ", submitted=" << stats.submitted << ", executed=" << stats.executed
+                << ", rejected=" << stats.rejected
+                << ", expired_before=" << stats.expired_before_execution
+                << ", expired_after=" << stats.expired_after_execution);
+            const auto async_stats=local_permission_client->AsyncStats();
+            if(async_stats.started)LOG_WARN("gateway local permission async drained"
+                << ", started=" << async_stats.started << ", finished=" << async_stats.finished
+                << ", pending_callbacks=" << async_stats.pending
+                << ", peak_pending=" << async_stats.peak_pending
+                << ", deadline_completions=" << async_stats.deadline_completions);
+        }
+        if (local_permission_pool) local_permission_pool->Shutdown();
 if (redis_pool) {
             redis_pool->Shutdown();
         }

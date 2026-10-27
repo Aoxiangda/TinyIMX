@@ -10,6 +10,7 @@ grep -Fq '#include "common/observability/ProcessTelemetry.h"' examples/gateway_d
 grep -Fq '"tinyimx-gateway"' examples/gateway_demo.cpp
 grep -Fq 'gateway_demo' cmake/TinyIMXObservability.cmake
 python3 -m py_compile scripts/m21_render_production_configs.py
+python3 -m unittest discover -s tests/config -p test_m21_unread_writer_ownership.py
 export TINYIMX_MYSQL_PASSWORD=contract_mysql_password
 export TINYIMX_MYSQL_ROOT_PASSWORD=contract_mysql_root_password
 export TINYIMX_REDIS_PASSWORD=contract_redis_password

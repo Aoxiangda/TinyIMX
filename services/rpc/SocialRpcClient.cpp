@@ -6,6 +6,7 @@
 #include <grpcpp/grpcpp.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -352,6 +353,12 @@ SocialRpcClient::CheckPrivateChatPermission(
     observability::FinishGrpcClientSpan(
         &rpc_span, grpc_status, "tinyimx.social.v1.SocialService", "CheckPrivateChatPermission");
     trace.Mark(5);
+    return ParsePermissionResponse(grpc_status,proto_response);
+}
+
+RpcResult<CheckPrivateChatPermissionRpcResponse> SocialRpcClient::ParsePermissionResponse(
+    const grpc::Status& grpc_status,
+    const tinyimx::social::v1::CheckPrivateChatPermissionResponse& proto_response) {
     if (!grpc_status.ok()) {
         const auto mapped = MapGrpcStatus(grpc_status);
         return QueryFailure<CheckPrivateChatPermissionRpcResponse>(mapped.code, mapped.message);
@@ -365,6 +372,47 @@ SocialRpcClient::CheckPrivateChatPermission(
     response.outcome = *outcome;
     response.message = proto_response.message();
     return RpcResult<CheckPrivateChatPermissionRpcResponse>::Success(std::move(response));
+}
+
+void SocialRpcClient::CheckPrivateChatPermissionAsync(CheckPrivateChatPermissionRpcRequest request,
+    RpcCallOptions options,
+    std::function<void(RpcResult<CheckPrivateChatPermissionRpcResponse>)> callback) const {
+    if(!callback)return;
+    if(request.from_user_id==0||request.to_user_id==0||request.from_user_id==request.to_user_id)
+        return callback(QueryFailure<CheckPrivateChatPermissionRpcResponse>(RpcErrorCode::kInvalidArgument,"invalid CheckPrivateChatPermission request"));
+    if(options.remaining_timeout<=std::chrono::milliseconds::zero())
+        return callback(QueryFailure<CheckPrivateChatPermissionRpcResponse>(RpcErrorCode::kDeadlineExceeded,"CheckPrivateChatPermission remaining RPC budget is exhausted"));
+    if(!endpoint_provider_)
+        return callback(QueryFailure<CheckPrivateChatPermissionRpcResponse>(RpcErrorCode::kUnavailable,"SocialService endpoint provider is not configured"));
+    const auto endpoint=endpoint_provider_->Resolve(ServiceKind::kSocial);
+    if(!endpoint||endpoint->target.empty())
+        return callback(QueryFailure<CheckPrivateChatPermissionRpcResponse>(RpcErrorCode::kUnavailable,"SocialService endpoint is unavailable"));
+    auto stub=GetOrCreateStub(*endpoint);
+    if(!stub)return callback(QueryFailure<CheckPrivateChatPermissionRpcResponse>(RpcErrorCode::kUnavailable,"SocialService gRPC stub could not be created"));
+    struct Call {
+        tinyimx::social::v1::CheckPrivateChatPermissionRequest request;
+        tinyimx::social::v1::CheckPrivateChatPermissionResponse response;
+        grpc::ClientContext context;
+        std::shared_ptr<SocialStubInterface> stub;
+        observability::TraceSpan span;
+        diagnostics::PermissionBoundaryTrace boundary;
+        std::atomic<bool> completed{false};
+        Call(const CheckPrivateChatPermissionRpcRequest& request,const RpcCallOptions& options)
+            :boundary(diagnostics::PermissionBoundaryTrace::Async(1,request.from_user_id,request.to_user_id,
+                options.request_id,options.caller_instance)){}
+    };
+    auto call=std::make_shared<Call>(request,options);call->stub=std::move(stub);
+    FillMeta(options,call->request.mutable_meta());call->request.set_from_user_id(request.from_user_id);call->request.set_to_user_id(request.to_user_id);
+    call->context.set_deadline(std::chrono::system_clock::now()+options.remaining_timeout);
+    call->span=observability::StartGrpcClientSpan("tinyimx.social.v1.SocialService","CheckPrivateChatPermission",&call->context);
+    call->boundary.Mark(3);
+    call->stub->async()->CheckPrivateChatPermission(&call->context,&call->request,&call->response,
+        [call,callback=std::move(callback)](grpc::Status status)mutable {
+            if(call->completed.exchange(true,std::memory_order_acq_rel))return;
+            call->boundary.Mark(4);call->boundary.Result(static_cast<int>(status.error_code()));
+            observability::FinishGrpcClientSpan(&call->span,status,"tinyimx.social.v1.SocialService","CheckPrivateChatPermission");
+            call->boundary.Mark(5);callback(ParsePermissionResponse(status,call->response));
+        });
 }
 
 CreateFriendRequestRpcCallResult SocialRpcClient::CreateFriendRequest(

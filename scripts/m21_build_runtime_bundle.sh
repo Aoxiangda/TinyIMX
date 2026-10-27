@@ -26,7 +26,7 @@ TARGETS=(
   desktop_file_server
 )
 
-for cmd in cmake ldd cp find grep; do
+for cmd in cmake ldd cp find grep python3; do
   command -v "$cmd" >/dev/null 2>&1 || {
     echo "ERROR: required command missing: $cmd"
     exit 10
@@ -40,6 +40,12 @@ rocketmq_sdk_ready() {
   [[ -f "$ROCKETMQ_META" ]] || return 1
   [[ -f "$ROCKETMQ_PREFIX/include/rocketmq/Producer.h" ]] || return 1
   [[ -f "$ROCKETMQ_PREFIX/include/rocketmq/SimpleConsumer.h" ]] || return 1
+
+  python3 "$ROOT/scripts/verify_rocketmq_sync_send_toolchain.py" \
+    --prefix "$ROCKETMQ_PREFIX" \
+    --fragment "$ROOT/patches/rocketmq_sync_send_wait/SafeSendWait.inc" \
+    --renderer "$ROOT/scripts/apply_rocketmq_sync_send_wait_patch.py" \
+    >/dev/null 2>&1 || return 1
 
   find "$ROCKETMQ_PREFIX/lib" "$ROCKETMQ_PREFIX/lib64" \
     -maxdepth 1 \( -type f -o -type l \) \

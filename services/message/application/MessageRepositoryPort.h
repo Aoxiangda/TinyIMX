@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -44,6 +45,16 @@ public:
         std::uint32_t message_type,
         const std::string& content
     ) = 0;
+
+    // Compatibility repositories preserve their original per-item semantics.
+    // The concrete SQL adapter overrides this with one bounded atomic commit.
+    [[nodiscard]] virtual std::vector<MessageRepositoryPersistResult> PersistPrivateMessages(
+        const std::vector<PrivateMessagePersistInput>& inputs) {
+        std::vector<MessageRepositoryPersistResult> out;out.reserve(inputs.size());
+        for(const auto& in:inputs)out.push_back(PersistPrivateMessage(
+            in.from_user_id,in.to_user_id,in.client_message_id,in.message_type,in.content));
+        return out;
+    }
 
 
     [[nodiscard]] virtual MessageRepositoryGroupGetResult FindGroupMessageByClientMessageId(
@@ -146,6 +157,14 @@ public:
         result.status = MessageApplicationStatus::kFailedPrecondition;
         result.message = "group delivery batch completion is unavailable";
         return result;
+    }
+
+    // Optional atomic owner-checked pending->confirmed fast path. nullopt means
+    // no row changed: preserve the original lookup and exact rejection/idempotent
+    // result. A storage failure must be returned, never hidden by replay.
+    [[nodiscard]] virtual std::optional<MessageRepositoryMutationResult>
+    TryConfirmReceiverOwnedIfPending(std::uint64_t, std::uint64_t) {
+        return std::nullopt;
     }
 };
 

@@ -91,7 +91,7 @@ int main(int argc,char* argv[]) {
     tinyimx::GroupRepository repo(&pool);
     tinyimx::outbox::OutboxRepository outbox(&pool);
     tinyimx::group::GroupPermissionPolicy permission;
-    tinyimx::group::GroupRepositoryAdapter adapter(&repo,&pool,&outbox,&permission);
+    tinyimx::group::GroupRepositoryAdapter adapter(&repo,&pool,&outbox,&permission,config.RocketMQ().message_topic);
 
     std::cout<<"========== TinyIMX M17-A2 Membership Repository Integration ==========\n";
     const std::uint64_t gid=CreateOpenGroup(&adapter,10,UniqueId("m17a2-main-"));
@@ -235,6 +235,12 @@ int main(int argc,char* argv[]) {
                "fresh read observes join-after-snapshot member after snapshot closes");
     }
 
+    for(const auto id:{gid,capacity_gid,snapshot_gid}) {
+        const auto predicate="aggregate_type='group' AND aggregate_id='"+std::to_string(id)+"'";
+        const auto total=CountRows(&pool,"im_event_outbox",predicate);
+        Expect(total>0&&CountRows(&pool,"im_event_outbox",predicate+" AND topic='"+config.RocketMQ().message_topic+"'")==total,
+               "all successful membership transitions retain configured topic inside atomic Outbox");
+    }
     CleanupGroup(&pool,gid); CleanupGroup(&pool,capacity_gid); CleanupGroup(&pool,snapshot_gid);
     pool.Shutdown(); tinyimx::Logger::Instance().Shutdown();
     std::cout<<"========================================================================\n";

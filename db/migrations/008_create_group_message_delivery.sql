@@ -1,4 +1,4 @@
-USE tinyimx;
+-- Apply to the schema explicitly selected by the caller.
 
 -- M17-B2: one durable fanout identity per (group message, recipient).
 CREATE TABLE IF NOT EXISTS im_group_message_deliveries (
@@ -40,24 +40,6 @@ CREATE TABLE IF NOT EXISTS im_group_message_deliveries (
         message_id,
         recipient_user_id
     ),
-
-    CONSTRAINT fk_im_group_delivery_message
-        FOREIGN KEY (message_id)
-        REFERENCES im_group_messages(message_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
-
-    CONSTRAINT fk_im_group_delivery_group
-        FOREIGN KEY (group_id)
-        REFERENCES im_groups(group_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
-
-    CONSTRAINT fk_im_group_delivery_recipient
-        FOREIGN KEY (recipient_user_id)
-        REFERENCES im_users(user_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
 
     CONSTRAINT chk_im_group_delivery_status
         CHECK (delivery_status IN (1, 2, 3))

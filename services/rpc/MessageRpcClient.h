@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -34,6 +35,10 @@ public:
         const PersistPrivateMessageRpcRequest& request,
         const RpcCallOptions& options
     ) const;
+    void PersistPrivateMessageAsync(PersistPrivateMessageRpcRequest,RpcCallOptions,
+        std::function<void(PersistPrivateMessageRpcCallResult)>) const;
+    void GetPrivateMessageAsync(GetPrivateMessageRpcRequest,RpcCallOptions,
+        std::function<void(RpcResult<GetPrivateMessageRpcResponse>)>) const;
 
     [[nodiscard]] PersistGroupMessageRpcCallResult PersistGroupMessage(
         const PersistGroupMessageRpcRequest& request,

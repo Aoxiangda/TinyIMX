@@ -1,0 +1,375 @@
+{
+  "title": "TinyIMX 50K 用户容量与消息吞吐实测",
+  "date": "2026-10-27",
+  "final_scope": "Two completed 50K points selected by user; no further load or maximum-capacity search.",
+  "environment": {
+    "server_vCPU": 8,
+    "server_memory_GiB": 16,
+    "server": "Ubuntu VMware guest",
+    "generator": "Native Windows TIMX client on the same physical host",
+    "deployment": "All server applications and dependencies in one guest",
+    "Gateway_placement": "Balanced across two Gateways; each private-message pair local to one Gateway",
+    "payload_pattern": "repeat",
+    "private_storage": "Native atomic synchronous WAL",
+    "MQ": "RocketMQ LOCAL, SYNC_FLUSH",
+    "publication_workers": 8,
+    "publication_max_held": 64,
+    "publication_progress_batch": 16,
+    "wire_SEND_batch": false,
+    "SQL": "Accounts, relations, groups, files and logical references"
+  },
+  "metric_definitions": {
+    "business_QPS": "Completed private messages per second; do not add ACK, receive confirmation, heartbeat, RPC or MQ operations.",
+    "ACK": "Client enqueue to receipt of durable ACK.",
+    "delivery": "Scheduled send time to receiver validation.",
+    "payload_goodput": "Delivered message body bytes / seconds. Excludes framing, transport, RPC, MQ and heartbeat bytes.",
+    "timing": "Full 300-second offer, including first-minute cost; final drain included in separately named completed-QPS."
+  },
+  "server_product_sha256": {
+    "gateway_demo": "04425bbd946f9b7a5189367e8a286bdc60f9a40c6e8ef015b029a40b44aafbbb",
+    "user_service_demo": "e63bb500b3d3a28b4b0724eb715bfb917f21d3b34db1cb1a49a139170c06fd19",
+    "social_service_demo": "43ff44b1abaf545e3b37610d0d083d7fd8312f4773566950d16a35fb7ab89771",
+    "message_service_demo": "fc7f1cb0a2d216fd18d2ae146a98c7a2c1691a31a2270a9596ed3c68d742c752",
+    "group_service_demo": "0e5181b2d68be3f7b01f5f2bbff7e6398dc1fa66b5ce687593cec88f6e5e21e9",
+    "file_service_demo": "7b4cc6bb15f34ca81676e922a27c537f62f6927c94c89a5df8571ea7b515bcd7",
+    "outbox_relay_demo": "733b28c5f9375540d7b430cbf12a504aa785387a0bb5de7a650eef89aaf6f6eb",
+    "unread_projector_demo": "6739a2f62baf0f3f7d512de264d9c0011461a8a7d07cf9dadce0e12210559d12",
+    "tinyimx_mcp_server": "60220e2a83c052b9c7daa10f600db21f1a08a9979b8a59e6ff9796e3ac64c47b"
+  },
+  "rocketmq_sdk_sha256": "55f9fd2663e97c249e1f249a0a3247ea73482360e392f5198e0739ac1f9f9649",
+  "points": [
+    {
+      "case": "perf1751-p33-wire-users50k",
+      "classification": "CLEAN_FORMAL_COMPLETE_BUSINESS_POINT",
+      "users": 50000,
+      "users_receiving": 50000,
+      "seconds": 300,
+      "payload_bytes": 128,
+      "planned": 300000,
+      "complete": 300000,
+      "offered_message_QPS": 1000,
+      "completed_over_offer_and_drain_QPS": 999.9775291716161,
+      "offer_and_drain_seconds": 300.0067414,
+      "delivered_inside_offer_QPS": 999.98,
+      "payload_at_offered_rate_Bps": 128000,
+      "payload_at_offered_rate_KBps": 128.0,
+      "payload_at_offered_rate_MiBps": 0.1220703125,
+      "payload_at_offered_rate_Mbitps": 1.024,
+      "actual_payload_inside_offer_Bps": 127997.44,
+      "actual_payload_over_offer_and_drain_Bps": 127997.12373396686,
+      "total_completed_payload_bytes": 38400000,
+      "latency": {
+        "ACK": {
+          "n": 300000,
+          "mean_ms": 9.258225414333333,
+          "p50_ms": 6.7715,
+          "p99_ms": 48.5729,
+          "max_ms": 208.9387
+        },
+        "delivery": {
+          "n": 300000,
+          "mean_ms": 9.612313956333333,
+          "p50_ms": 7.1031,
+          "p99_ms": 49.5958,
+          "max_ms": 203.8568
+        },
+        "client_queue": {
+          "n": 300000,
+          "mean_ms": 0.018539426666666668,
+          "p50_ms": 0.0147,
+          "p99_ms": 0.0791,
+          "max_ms": 5.0798
+        },
+        "client_plan": {
+          "n": 300000,
+          "mean_ms": 0.4486559353333333,
+          "p50_ms": 0.3205,
+          "p99_ms": 2.8169,
+          "max_ms": 40.6042
+        }
+      },
+      "VM_average_busy_cores": 5.606122772378998,
+      "VM_CPU_percent_of_8": 70.07653465473747,
+      "CPU_sample_covered_seconds": 298.528887607,
+      "host_minimum_available_GiB": 6.5980682373046875,
+      "guest_swap_in_pages": 0,
+      "guest_swap_out_pages": 0,
+      "failures": {
+        "negative_ack": 0,
+        "invalid": 0,
+        "timeouts": 0,
+        "skipped_busy_or_window": 0,
+        "duplicate_deliveries": 0,
+        "not_scheduled_after_abort": 0
+      },
+      "pending_events": 0,
+      "receiver_pending": 0,
+      "first_projection_exact": true,
+      "all_rows_independently_verified": true,
+      "original_data_and_services_restored": true,
+      "client_revision": "R1788_EXCLUSIVE_RESERVED_50K",
+      "per_minute": [
+        {
+          "minute": 1,
+          "ACK": {
+            "n": 60000,
+            "mean_ms": 17.753515913333334,
+            "p50_ms": 13.6499,
+            "p99_ms": 84.8413,
+            "max_ms": 208.9387
+          },
+          "delivery": {
+            "n": 60000,
+            "mean_ms": 18.09893743,
+            "p50_ms": 13.9588,
+            "p99_ms": 85.1617,
+            "max_ms": 203.8568
+          },
+          "VM_average_busy_cores": 5.865311308767471
+        },
+        {
+          "minute": 2,
+          "ACK": {
+            "n": 60000,
+            "mean_ms": 7.111911748333333,
+            "p50_ms": 5.9672,
+            "p99_ms": 28.6892,
+            "max_ms": 99.2864
+          },
+          "delivery": {
+            "n": 60000,
+            "mean_ms": 7.482008475,
+            "p50_ms": 6.3241,
+            "p99_ms": 29.8023,
+            "max_ms": 117.4192
+          },
+          "VM_average_busy_cores": 5.5336710304146655
+        },
+        {
+          "minute": 3,
+          "ACK": {
+            "n": 60000,
+            "mean_ms": 6.95628038,
+            "p50_ms": 5.999,
+            "p99_ms": 25.4704,
+            "max_ms": 75.7638
+          },
+          "delivery": {
+            "n": 60000,
+            "mean_ms": 7.349134916666666,
+            "p50_ms": 6.3681,
+            "p99_ms": 26.9521,
+            "max_ms": 75.9913
+          },
+          "VM_average_busy_cores": 5.544624549437741
+        },
+        {
+          "minute": 4,
+          "ACK": {
+            "n": 60000,
+            "mean_ms": 7.216950976666666,
+            "p50_ms": 6.0007,
+            "p99_ms": 30.7263,
+            "max_ms": 117.7187
+          },
+          "delivery": {
+            "n": 60000,
+            "mean_ms": 7.567473573333333,
+            "p50_ms": 6.3372,
+            "p99_ms": 32.2181,
+            "max_ms": 118.9455
+          },
+          "VM_average_busy_cores": 5.553341817703076
+        },
+        {
+          "minute": 5,
+          "ACK": {
+            "n": 60000,
+            "mean_ms": 7.252468053333334,
+            "p50_ms": 6.1669,
+            "p99_ms": 27.1996,
+            "max_ms": 112.988
+          },
+          "delivery": {
+            "n": 60000,
+            "mean_ms": 7.564015386666667,
+            "p50_ms": 6.4729,
+            "p99_ms": 27.7593,
+            "max_ms": 116.0217
+          },
+          "VM_average_busy_cores": 5.546582489368232
+        }
+      ],
+      "source_analysis_sha256": "fc1135278e739d683fc1b288e205873a1d557ad70170612ff61227e3a593bca5",
+      "source_oracle_sha256": "34c40a361c77fa96b1f5cbe85cf553633f639312191b254e89deaed78fde70bd"
+    },
+    {
+      "case": "perf1751-p54-wire-users50k",
+      "classification": "CLEAN_FORMAL_COMPLETE_BUSINESS_POINT",
+      "users": 50000,
+      "users_receiving": 50000,
+      "seconds": 300,
+      "payload_bytes": 128,
+      "planned": 375000,
+      "complete": 375000,
+      "offered_message_QPS": 1250,
+      "completed_over_offer_and_drain_QPS": 1249.9463510526664,
+      "offer_and_drain_seconds": 300.0128763,
+      "delivered_inside_offer_QPS": 1249.9333333333334,
+      "payload_at_offered_rate_Bps": 160000,
+      "payload_at_offered_rate_KBps": 160.0,
+      "payload_at_offered_rate_MiBps": 0.152587890625,
+      "payload_at_offered_rate_Mbitps": 1.28,
+      "actual_payload_inside_offer_Bps": 159991.46666666667,
+      "actual_payload_over_offer_and_drain_Bps": 159993.1329347413,
+      "total_completed_payload_bytes": 48000000,
+      "latency": {
+        "ACK": {
+          "n": 375000,
+          "mean_ms": 13.290312722133333,
+          "p50_ms": 9.8701,
+          "p99_ms": 60.553,
+          "max_ms": 194.8332
+        },
+        "delivery": {
+          "n": 375000,
+          "mean_ms": 13.725744636533333,
+          "p50_ms": 10.2958,
+          "p99_ms": 61.891,
+          "max_ms": 206.5215
+        },
+        "client_queue": {
+          "n": 375000,
+          "mean_ms": 0.021471761066666668,
+          "p50_ms": 0.0143,
+          "p99_ms": 0.1187,
+          "max_ms": 3.7723
+        },
+        "client_plan": {
+          "n": 375000,
+          "mean_ms": 0.5237368090666666,
+          "p50_ms": 0.3336,
+          "p99_ms": 3.4279,
+          "max_ms": 92.7914
+        }
+      },
+      "VM_average_busy_cores": 5.7186433875175595,
+      "VM_CPU_percent_of_8": 71.48304234396949,
+      "CPU_sample_covered_seconds": 299.533307051,
+      "host_minimum_available_GiB": 6.365726470947266,
+      "guest_swap_in_pages": 0,
+      "guest_swap_out_pages": 0,
+      "failures": {
+        "negative_ack": 0,
+        "invalid": 0,
+        "timeouts": 0,
+        "skipped_busy_or_window": 0,
+        "duplicate_deliveries": 0,
+        "not_scheduled_after_abort": 0
+      },
+      "pending_events": 0,
+      "receiver_pending": 0,
+      "first_projection_exact": true,
+      "all_rows_independently_verified": true,
+      "original_data_and_services_restored": true,
+      "client_revision": "R1795_SHARED_HEARTBEAT_50K",
+      "per_minute": [
+        {
+          "minute": 1,
+          "ACK": {
+            "n": 75000,
+            "mean_ms": 22.787557316,
+            "p50_ms": 17.9863,
+            "p99_ms": 88.1792,
+            "max_ms": 194.8332
+          },
+          "delivery": {
+            "n": 75000,
+            "mean_ms": 23.187601433333334,
+            "p50_ms": 18.4114,
+            "p99_ms": 89.1991,
+            "max_ms": 206.5215
+          },
+          "VM_average_busy_cores": 5.919534532916711
+        },
+        {
+          "minute": 2,
+          "ACK": {
+            "n": 75000,
+            "mean_ms": 10.331789964,
+            "p50_ms": 8.5334,
+            "p99_ms": 38.5638,
+            "max_ms": 108.9098
+          },
+          "delivery": {
+            "n": 75000,
+            "mean_ms": 10.768512433333333,
+            "p50_ms": 8.95,
+            "p99_ms": 38.9516,
+            "max_ms": 107.3532
+          },
+          "VM_average_busy_cores": 5.625854300066835
+        },
+        {
+          "minute": 3,
+          "ACK": {
+            "n": 75000,
+            "mean_ms": 11.067433684,
+            "p50_ms": 9.1876,
+            "p99_ms": 42.0938,
+            "max_ms": 129.8454
+          },
+          "delivery": {
+            "n": 75000,
+            "mean_ms": 11.536783904,
+            "p50_ms": 9.5965,
+            "p99_ms": 43.429,
+            "max_ms": 187.8059
+          },
+          "VM_average_busy_cores": 5.687531538647184
+        },
+        {
+          "minute": 4,
+          "ACK": {
+            "n": 75000,
+            "mean_ms": 11.805701546666667,
+            "p50_ms": 9.5192,
+            "p99_ms": 47.3489,
+            "max_ms": 184.4381
+          },
+          "delivery": {
+            "n": 75000,
+            "mean_ms": 12.266177905333333,
+            "p50_ms": 9.9199,
+            "p99_ms": 48.3393,
+            "max_ms": 189.4521
+          },
+          "VM_average_busy_cores": 5.6231362129164015
+        },
+        {
+          "minute": 5,
+          "ACK": {
+            "n": 75000,
+            "mean_ms": 10.4590811,
+            "p50_ms": 8.7942,
+            "p99_ms": 38.8842,
+            "max_ms": 91.8434
+          },
+          "delivery": {
+            "n": 75000,
+            "mean_ms": 10.869647506666666,
+            "p50_ms": 9.1721,
+            "p99_ms": 39.8704,
+            "max_ms": 107.122
+          },
+          "VM_average_busy_cores": 5.739351722055684
+        }
+      ],
+      "source_analysis_sha256": "cae980855d6bc6409e36eb2e824a969904095cd7fcd847351b69896e53fd6e92",
+      "source_oracle_sha256": "ab4f505552e04718c01938f8ede62d7588a830585e25de7cf6e733879f35b53b"
+    }
+  ],
+  "maximum_capacity_claim": false,
+  "independent_machine_comparison": false,
+  "client_difference": "P33 used one heartbeat goroutine per actor; P54 used shared due scheduling and 64 bounded reply workers. Message send/ACK/delivery/timing loop unchanged. These two rates are descriptive points, not a single-factor performance experiment."
+}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tinyimx/message/v1/message_service.grpc.pb.h"
+#include <vector>
 
 namespace tinyimx::rpc { class GroupRpcClient; }
 
@@ -8,7 +9,7 @@ namespace tinyimx::message {
 
 class MessageApplicationService;
 
-class MessageServiceImpl final
+class MessageServiceImpl
     : public tinyimx::message::v1::MessageService::Service {
 public:
     grpc::Status ListPendingRecipientsAfter(
@@ -17,7 +18,7 @@ public:
         tinyimx::message::v1::ListPendingRecipientsAfterResponse*) override;
     grpc::Status ListGroupHistory(grpc::ServerContext*, const tinyimx::message::v1::ListGroupHistoryRequest*, tinyimx::message::v1::ListGroupHistoryResponse*) override;
     explicit MessageServiceImpl(
-        MessageApplicationService* application_service,
+        MessageApplicationService* application_service = nullptr,
         tinyimx::rpc::GroupRpcClient* group_rpc_client = nullptr
     );
 
@@ -122,6 +123,26 @@ public:
         const tinyimx::message::v1::MarkDialogReadRequest* request,
         tinyimx::message::v1::MessageMutationResponse* response
     ) override;
+
+protected:
+    struct PrivatePersistCallView {
+        grpc::ServerContextBase* context;
+        const v1::PersistPrivateMessageRequest* request;
+        v1::PersistPrivateMessageResponse* response;
+    };
+    std::vector<grpc::Status> PersistPrivateMessageBatchCore(
+        const std::vector<PrivatePersistCallView>& calls);
+    void ConfigureDependencies(MessageApplicationService* application,
+                               tinyimx::rpc::GroupRpcClient* group) noexcept {
+        application_service_ = application;
+        group_rpc_client_ = group;
+    }
+    grpc::Status PersistPrivateMessageCore(grpc::ServerContextBase*,
+        const v1::PersistPrivateMessageRequest*, v1::PersistPrivateMessageResponse*);
+    grpc::Status GetPrivateMessageCore(grpc::ServerContextBase*,
+        const v1::GetPrivateMessageRequest*, v1::GetPrivateMessageResponse*);
+    grpc::Status ConfirmReceiverCore(grpc::ServerContextBase*,
+        const v1::ConfirmReceiverRequest*, v1::MessageMutationResponse*);
 
 private:
     MessageApplicationService* application_service_{nullptr};  // non-owning

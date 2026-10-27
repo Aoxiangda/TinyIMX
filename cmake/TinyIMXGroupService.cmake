@@ -140,3 +140,30 @@ target_link_libraries(group_service_integration_tests PRIVATE
   gRPC::grpc++
 )
 add_test(NAME group_service_integration_tests COMMAND group_service_integration_tests)
+
+add_executable(group_event_topic_tests tests/group/group_event_topic_test.cpp)
+target_compile_features(group_event_topic_tests PRIVATE cxx_std_20)
+target_link_libraries(group_event_topic_tests PRIVATE tinyimx_group_core)
+add_test(NAME group_event_topic_tests COMMAND group_event_topic_tests)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  foreach(group_sanitizer IN ITEMS group_event_topic group_repository_integration group_membership_repository_integration)
+    if(group_sanitizer STREQUAL "group_event_topic")
+      set(group_test_source tests/group/group_event_topic_test.cpp)
+    else()
+      set(group_test_source tests/group/${group_sanitizer}_test.cpp)
+    endif()
+    add_executable(${group_sanitizer}_sanitizer_tests EXCLUDE_FROM_ALL
+      ${group_test_source}
+      services/group/application/GroupApplicationService.cpp
+      services/group/application/GroupPermissionPolicy.cpp
+      services/group/application/GroupEventFactory.cpp
+      services/group/repository/GroupRepositoryAdapter.cpp
+      services/group/repository/GroupMembershipRepositoryAdapter.cpp)
+    target_compile_features(${group_sanitizer}_sanitizer_tests PRIVATE cxx_std_20)
+    target_include_directories(${group_sanitizer}_sanitizer_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_options(${group_sanitizer}_sanitizer_tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie)
+    target_link_options(${group_sanitizer}_sanitizer_tests PRIVATE -fsanitize=address,undefined -no-pie)
+    target_link_libraries(${group_sanitizer}_sanitizer_tests PRIVATE tinyimx_config tinyimx_logging tinyimx_db tinyimx_repository tinyimx_outbox OpenSSL::Crypto)
+  endforeach()
+endif()

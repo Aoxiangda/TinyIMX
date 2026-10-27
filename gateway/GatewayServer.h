@@ -1,4 +1,5 @@
 #pragma once
+#include "gateway/business/BusinessCoroutine.h"
 
 #include "common/net/InetAddress.h"
 #include "common/net/TcpConnection.h"
@@ -20,6 +21,7 @@
 #include <string>
 #include <chrono>
 #include <vector>
+#include <utility>
 
 namespace tinyimx {
 
@@ -36,6 +38,7 @@ struct BusinessRequestContext;
 
 namespace rpc {
 class SocialRpcClient;
+class PrivateChatPermissionPort;
 class UserRpcClient;
 class MessageRpcClient;
 class GroupRpcClient;
@@ -221,6 +224,10 @@ public:
     // waits cannot consume Login/control-plane workers. Non-owning.
     void SetMessageExecutor(BusinessExecutor* message_executor);
 
+    // Optional bounded lane for private receiver acknowledgements. Bootstrap
+    // owns/drains it before RPC dependencies. Null preserves the shared path.
+    void SetReceiverAckExecutor(BusinessExecutor* receiver_ack_executor);
+
     // Presence/online-status maintenance is isolated from Login/control work.
     // Heartbeat refresh and disconnect cleanup are Redis-heavy but must not be
     // dropped merely because a reconnect/auth storm saturates foreground work.
@@ -235,6 +242,9 @@ public:
     // with latency-sensitive Login/Chat work. Non-owning, bootstrap-owned.
     void SetReplayExecutor(BusinessExecutor* replay_executor);
     void SetSocialRpcClient(rpc::SocialRpcClient* social_rpc_client);
+    // Non-owning optional local composition; set before Start and drain all
+    // Gateway work before destroying it. Null retains the Social RPC path.
+    void SetPrivateChatPermissionPort(rpc::PrivateChatPermissionPort* permission);
     void SetUserRpcClient(rpc::UserRpcClient* user_rpc_client);
     void SetMessageRpcClient(rpc::MessageRpcClient* message_rpc_client);
     void SetGroupRpcClient(rpc::GroupRpcClient* group_rpc_client);
@@ -289,6 +299,7 @@ private:
         const Packet& packet,
         const BusinessRequestContext& business_request
     );
+    BusinessCoroutine ExecuteChatMessageCoroutine(TcpConnectionPtr,Packet,BusinessRequestContext,bool);
 
     /*
     * Receiver Client -> Gateway
@@ -339,6 +350,7 @@ private:
         const Packet& packet,
         const BusinessRequestContext& business_request
     );
+    BusinessCoroutine ExecuteGatewayForwardChatCoroutine(TcpConnectionPtr,Packet,BusinessRequestContext,bool);
 
     void HandleReadRequest(const TcpConnectionPtr& connection,
                            const Packet& packet);
@@ -667,6 +679,7 @@ private:
     bool HasMessageExecutor() const;
     bool HasPresenceExecutor() const;
     BusinessExecutor* MessageExecutor() const;
+    BusinessExecutor* ReceiverAckExecutor() const;
     BusinessExecutor* PresenceExecutor() const;
     bool HasSocialRpcClient() const;
     bool HasUserRpcClient() const;
@@ -687,6 +700,9 @@ private:
     void SetUserOfflineIfMatch(UserId user_id, const TcpConnectionPtr& connection);
 
     std::int64_t GetTotalUnread(UserId user_id);
+
+    std::pair<std::int64_t, std::int64_t> GetPrivateAndTotalUnread(
+        UserId receiver_user_id, UserId sender_user_id);
 
     std::int64_t GetPrivateUnread(UserId receiver_user_id,
                                   UserId sender_user_id);
@@ -777,6 +793,7 @@ private:
     // Optional isolated executor for latency-sensitive private-message work.
     // Falls back to business_executor_ for tests/legacy bootstrap paths.
     BusinessExecutor* message_executor_{nullptr};
+    BusinessExecutor* receiver_ack_executor_{nullptr};
 
     // Optional isolated executor for Redis presence maintenance. Heartbeat
     // refresh and disconnect cleanup use this bulkhead so a reconnect/login
@@ -800,6 +817,7 @@ private:
     * BusinessExecutor has fully drained accepted work.
     */
     rpc::SocialRpcClient* social_rpc_client_{nullptr};
+    rpc::PrivateChatPermissionPort* private_chat_permission_{nullptr};
 
     /*
     * M14-B2 internal UserService RPC dependency. Non-owning.

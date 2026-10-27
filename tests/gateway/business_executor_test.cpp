@@ -1,4 +1,5 @@
 #include "gateway/business/BusinessExecutor.h"
+#include "common/logging/Logger.h"
 
 #include <atomic>
 #include <chrono>
@@ -301,7 +302,9 @@ bool TestGlobalOverloadNonBlocking() {
         return false;
     }
 
-    return true;
+    const auto stats=executor.GetStats();
+    return stats.rejected_overload_total==1&&stats.rejected_pending_budget_total==1&&
+        stats.rejected_pool_submission_total==0&&stats.rejected_key_allocation_total==0;
 }
 
 
@@ -1848,6 +1851,9 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--expect-fair-handoff")
         expect_fair_handoff = true;
     else if (argc != 1) return 2;
+    tinyimx::LoggerConfig logger;logger.level="warn";logger.file="overload-unit.log";
+    logger.console=true;logger.async=false;
+    if(!tinyimx::Logger::Instance().Init(logger))return 2;
     std::cout << "stripe_handoff_contract="
               << (expect_fair_handoff ? "fair_handoff" : "original_drain") << '\n';
     const TestCase tests[] = {

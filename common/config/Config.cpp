@@ -410,6 +410,7 @@ bool Config::ApplyJsonConfig(const std::string& json_content) {
             ReadIfExists(section, "user", &mysql_.user);
             ReadIfExists(section, "password", &mysql_.password);
             ReadIfExists(section, "pool_size", &mysql_.pool_size);
+            ReadIfExists(section, "unix_socket", &mysql_.unix_socket);
         }
 
         if (root.contains("redis")) {
@@ -438,6 +439,7 @@ bool Config::ApplyJsonConfig(const std::string& json_content) {
             ReadIfExists(section, "enable", &outbox_relay_.enable);
             ReadIfExists(section, "instance_id", &outbox_relay_.instance_id);
             ReadIfExists(section, "batch_size", &outbox_relay_.batch_size);
+            ReadIfExists(section, "publish_batch_size", &outbox_relay_.publish_batch_size);
             ReadIfExists(section, "worker_threads", &outbox_relay_.worker_threads);
             ReadIfExists(section, "max_inflight", &outbox_relay_.max_inflight);
             ReadIfExists(section, "poll_interval_ms", &outbox_relay_.poll_interval_ms);
@@ -463,6 +465,7 @@ bool Config::ApplyJsonConfig(const std::string& json_content) {
                 &unread_projection_.consumer_request_timeout_ms
             );
             ReadIfExists(section, "batch_size", &unread_projection_.batch_size);
+            ReadIfExists(section, "worker_threads", &unread_projection_.worker_threads);
             ReadIfExists(section, "invisible_duration_ms", &unread_projection_.invisible_duration_ms);
             ReadIfExists(section, "await_duration_ms", &unread_projection_.await_duration_ms);
             ReadIfExists(section, "receive_error_backoff_ms", &unread_projection_.receive_error_backoff_ms);
@@ -806,6 +809,11 @@ bool Config::Validate() {
     }
 
     if (mysql_.enable) {
+        if (!mysql_.unix_socket.empty() &&
+            (mysql_.unix_socket.front()!='/' || mysql_.unix_socket.size()>107 ||
+             mysql_.unix_socket.find('\0')!=std::string::npos)) {
+            return SetError("mysql.unix_socket must be an absolute socket path of at most107 bytes without NUL");
+        }
         if (mysql_.host.empty()) {
             return SetError("mysql.host cannot be empty when mysql.enable=true");
         }
@@ -875,6 +883,10 @@ bool Config::Validate() {
         if (outbox_relay_.batch_size == 0 || outbox_relay_.batch_size > 1024) {
             return SetError("outbox_relay.batch_size must be in range 1-1024");
         }
+        if (outbox_relay_.publish_batch_size == 0 || outbox_relay_.publish_batch_size > 64 ||
+            outbox_relay_.publish_batch_size > outbox_relay_.max_inflight) {
+            return SetError("outbox_relay.publish_batch_size must be in range 1-64 and at most max_inflight");
+        }
         if (outbox_relay_.worker_threads == 0 || outbox_relay_.worker_threads > 64) {
             return SetError("outbox_relay.worker_threads must be in range 1-64");
         }
@@ -920,6 +932,10 @@ bool Config::Validate() {
         }
         if (unread_projection_.batch_size == 0 || unread_projection_.batch_size > 256) {
             return SetError("unread_projection.batch_size must be in range 1-256");
+        }
+        if (unread_projection_.worker_threads == 0 || unread_projection_.worker_threads > 16 ||
+            unread_projection_.worker_threads * unread_projection_.batch_size > 1024) {
+            return SetError("unread_projection.worker_threads must be 1-16 and held events <=1024");
         }
         /*
          * RocketMQ SimpleConsumer requires an invisibility window of

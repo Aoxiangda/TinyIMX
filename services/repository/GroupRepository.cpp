@@ -1,3 +1,4 @@
+#include "common/db/LogicalReferences.h"
 #include "services/repository/GroupRepository.h"
 
 #include "common/db/MySqlConnection.h"
@@ -433,6 +434,11 @@ GroupMutationStorageResult GroupRepository::InsertGroupOnConnection(
         return result;
     }
 
+    if (!db::ReferencesExist(connection, {db::LogicalReference::User(owner_user_id)})) {
+        result.status = GroupRepositoryStatus::kStorageError;
+        result.message = "logical reference missing or storage unavailable";
+        return result;
+    }
     const std::string sql =
         "INSERT INTO im_groups (name, description, avatar_url, owner_user_id, status, "
         "join_policy, max_members, version, member_version) VALUES ('" +
@@ -463,6 +469,12 @@ GroupMutationStorageResult GroupRepository::InsertOwnerMemberOnConnection(
         result.message = "invalid InsertOwnerMemberOnConnection arguments";
         return result;
     }
+    GroupMutationStorageResult result;
+    if (!db::ReferencesExist(connection, {db::LogicalReference::Group(group_id),db::LogicalReference::User(owner_user_id)})) {
+        result.status = GroupRepositoryStatus::kStorageError;
+        result.message = "logical reference missing or storage unavailable";
+        return result;
+    }
     const std::string sql =
         "INSERT INTO im_group_members (group_id, user_id, role, status, membership_epoch) VALUES (" +
         std::to_string(group_id) + ", " + std::to_string(owner_user_id) + ", 1, 1, 1)";
@@ -481,6 +493,12 @@ GroupMutationStorageResult GroupRepository::InsertMembershipHistoryOnConnection(
         GroupMutationStorageResult result;
         result.status = GroupRepositoryStatus::kInvalidArgument;
         result.message = "invalid InsertMembershipHistoryOnConnection arguments";
+        return result;
+    }
+    GroupMutationStorageResult result;
+    if (!db::ReferencesExist(connection, {db::LogicalReference::Group(group_id),db::LogicalReference::User(user_id)})) {
+        result.status = GroupRepositoryStatus::kStorageError;
+        result.message = "logical reference missing or storage unavailable";
         return result;
     }
     const std::string sql =
@@ -558,6 +576,11 @@ GroupMutationStorageResult GroupRepository::DisbandGroupOnConnection(
         result.message = "invalid DisbandGroupOnConnection arguments";
         return result;
     }
+    if (!db::ReferencesExist(connection, {db::LogicalReference::User(actor_user_id)})) {
+        result.status = GroupRepositoryStatus::kStorageError;
+        result.message = "logical reference missing or storage unavailable";
+        return result;
+    }
     const std::string sql =
         "UPDATE im_groups SET status = 2, version = " + std::to_string(new_version) +
         ", member_version = " + std::to_string(new_member_version) +
@@ -584,6 +607,11 @@ GroupMutationStorageResult GroupRepository::InsertOperationOnConnection(
         return result;
     }
 
+    if (!db::ReferencesExist(connection, {db::LogicalReference::Group(operation.group_id),db::LogicalReference::User(operation.actor_user_id)})) {
+        result.status = GroupRepositoryStatus::kStorageError;
+        result.message = "logical reference missing or storage unavailable";
+        return result;
+    }
     std::string membership_epoch_sql = "NULL";
     if (operation.result_membership_epoch != 0) {
         membership_epoch_sql = std::to_string(operation.result_membership_epoch);
@@ -693,6 +721,11 @@ GroupMutationStorageResult GroupRepository::InsertMemberOnConnection(
         result.message = "invalid InsertMemberOnConnection arguments";
         return result;
     }
+    if (!db::ReferencesExist(connection, {db::LogicalReference::Group(group_id),db::LogicalReference::User(user_id)})) {
+        result.status = GroupRepositoryStatus::kStorageError;
+        result.message = "logical reference missing or storage unavailable";
+        return result;
+    }
     const std::string sql =
         "INSERT INTO im_group_members "
         "(group_id, user_id, role, status, membership_epoch, muted_until, joined_at, left_at) VALUES (" +
@@ -716,6 +749,11 @@ GroupMutationStorageResult GroupRepository::ReactivateMemberOnConnection(
         membership_epoch == 0 || role < 1 || role > 3) {
         result.status = GroupRepositoryStatus::kInvalidArgument;
         result.message = "invalid ReactivateMemberOnConnection arguments";
+        return result;
+    }
+    if (!db::ReferencesExist(connection, {db::LogicalReference::Group(group_id),db::LogicalReference::User(user_id)})) {
+        result.status = GroupRepositoryStatus::kStorageError;
+        result.message = "logical reference missing or storage unavailable";
         return result;
     }
     const std::string sql =
@@ -742,6 +780,11 @@ GroupMutationStorageResult GroupRepository::CloseMembershipHistoryOnConnection(
         end_reason < 1 || end_reason > 3 || ended_by_user_id == 0) {
         result.status = GroupRepositoryStatus::kInvalidArgument;
         result.message = "invalid CloseMembershipHistoryOnConnection arguments";
+        return result;
+    }
+    if (!db::ReferencesExist(connection, {db::LogicalReference::User(ended_by_user_id)})) {
+        result.status = GroupRepositoryStatus::kStorageError;
+        result.message = "logical reference missing or storage unavailable";
         return result;
     }
     const std::string sql =
@@ -863,6 +906,11 @@ GroupMutationStorageResult GroupRepository::UpdateGroupOwnerAndVersionsOnConnect
         new_version == 0 || new_member_version == 0) {
         result.status = GroupRepositoryStatus::kInvalidArgument;
         result.message = "invalid UpdateGroupOwnerAndVersionsOnConnection arguments";
+        return result;
+    }
+    if (!db::ReferencesExist(connection, {db::LogicalReference::User(new_owner_user_id)})) {
+        result.status = GroupRepositoryStatus::kStorageError;
+        result.message = "logical reference missing or storage unavailable";
         return result;
     }
     const std::string sql =

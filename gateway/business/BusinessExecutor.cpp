@@ -4,6 +4,8 @@
 
 #include <chrono>
 #include <exception>
+#include <limits>
+#include <unordered_map>
 #include <utility>
 
 namespace tinyimx {
@@ -14,8 +16,16 @@ struct BusinessExecutor::TaskState {
     BusinessTimePoint enqueued_at{
         BusinessClock::now()
     };
+    std::optional<std::size_t> async_stripe;
+    std::optional<BusinessOrderingKey> async_key;
+    std::atomic<bool> async_finished{false};
 };
 
+struct BusinessExecutor::KeyLane {
+    // Accessed only with the owning Stripe::mutex held. Presence in lanes
+    // includes a queued/running/suspended drainer; it is the ordering fence.
+    std::deque<std::shared_ptr<TaskState>> queue;
+};
 
 struct BusinessExecutor::Stripe {
     std::mutex mutex;
@@ -31,6 +41,8 @@ struct BusinessExecutor::Stripe {
      * 所以绝对不能再启动第二个Worker并发处理同Stripe。
      */
     bool running{false};
+    std::unordered_map<BusinessOrderingKey,KeyLane> lanes;
+    std::size_t isolated_pending{0};
 };
 
 
@@ -92,6 +104,9 @@ bool BusinessExecutor::Start() {
 
     if (
         options_.worker_threads == 0 ||
+        options_.max_pending_tasks > std::numeric_limits<std::size_t>::max()/4 ||
+        options_.stripe_count > std::numeric_limits<std::size_t>::max()/4 ||
+        options_.worker_threads > std::numeric_limits<std::size_t>::max()/4 ||
         options_.max_pending_tasks == 0 ||
         options_.stripe_count == 0 ||
         options_.per_stripe_queue_capacity == 0 ||
@@ -134,7 +149,7 @@ bool BusinessExecutor::Start() {
         options_.worker_threads;
 
     pool_options.queue_capacity =
-        options_.max_pending_tasks;
+        options_.max_pending_tasks * 2 + options_.stripe_count + options_.worker_threads;
 
     /*
      * BusinessExecutor只通过TrySubmit提交。
@@ -176,6 +191,7 @@ bool BusinessExecutor::Start() {
         << options_.stripe_count
         << ", per_stripe_capacity="
         << options_.per_stripe_queue_capacity
+        << ", isolate_ordering_keys=" << options_.isolate_ordering_keys
         << ", default_deadline_ms="
         << options_.default_deadline.count()
         << ", shutdown_timeout_ms="
@@ -217,12 +233,7 @@ bool BusinessExecutor::ShutdownGraceful() {
      * Business Runtime的kMustRun语义要求：
      * accepted durable responsibility必须安全完成。
      */
-    if (pool_) {
-        pool_->Shutdown(
-            ShutdownMode::kGraceful,
-            options_.shutdown_timeout
-        );
-    }
+    // Keep workers available for accepted RPC continuations until logical drain.
 
     bool within_budget =
         BusinessClock::now() <= deadline;
@@ -235,7 +246,8 @@ bool BusinessExecutor::ShutdownGraceful() {
                 ) == 0 &&
                 pending_completions_.load(
                     std::memory_order_acquire
-                ) == 0;
+                ) == 0 && pending_async_tasks_.load(std::memory_order_acquire)==0 &&
+                pending_internal_jobs_.load(std::memory_order_acquire)==0;
         };
 
     {
@@ -288,6 +300,7 @@ bool BusinessExecutor::ShutdownGraceful() {
         within_budget = false;
     }
 
+    if(pool_)pool_->Shutdown(ShutdownMode::kGraceful,options_.shutdown_timeout);
     pool_.reset();
 
     LOG_INFO(
@@ -302,6 +315,16 @@ bool BusinessExecutor::ShutdownGraceful() {
            ).count()
     );
 
+    const auto final_stats=GetStats();
+    if(final_stats.rejected_overload_total) {
+        LOG_WARN("business executor overload summary, name="<<options_.name
+            <<", rejected_overload="<<final_stats.rejected_overload_total
+            <<", pending_budget="<<final_stats.rejected_pending_budget_total
+            <<", pool_submission="<<final_stats.rejected_pool_submission_total
+            <<", key_allocation="<<final_stats.rejected_key_allocation_total
+            <<", peak_pending="<<final_stats.peak_pending_tasks
+            <<", peak_active="<<final_stats.peak_active_tasks);
+    }
     return within_budget;
 }
 
@@ -316,6 +339,13 @@ bool BusinessExecutor::IsAccepting()
 BusinessExecutorStats
 BusinessExecutor::GetStats() const {
     BusinessExecutorStats stats;
+    stats.rejected_pending_budget_total=rejected_pending_budget_total_.load(std::memory_order_relaxed);
+    stats.rejected_pool_submission_total=rejected_pool_submission_total_.load(std::memory_order_relaxed);
+    stats.rejected_key_allocation_total=rejected_key_allocation_total_.load(std::memory_order_relaxed);
+    stats.async_started_total=async_started_total_.load(std::memory_order_relaxed);
+    stats.async_finished_total=async_finished_total_.load(std::memory_order_relaxed);
+    stats.continuation_run_total=continuation_run_total_.load(std::memory_order_relaxed);
+    stats.current_async_tasks=pending_async_tasks_.load(std::memory_order_relaxed);
 
     stats.submitted_total =
         submitted_total_.load(
@@ -496,7 +526,7 @@ BusinessExecutor::Submit(
     /*
      * 没有Work的Task没有任何业务意义。
      */
-    if (!task.work) {
+    if (static_cast<bool>(task.work)==static_cast<bool>(task.async_work)) {
         rejected_invalid_total_.fetch_add(
             1,
             std::memory_order_relaxed
@@ -547,6 +577,9 @@ BusinessExecutor::Submit(
         std::move(task);
 
     state->enqueued_at = now;
+    state->spec.request.executor_submitted_at = now;
+    state->spec.request.executor_enqueued_at = {};
+    state->spec.request.executor_started_at = {};
 
 
     /*
@@ -581,6 +614,7 @@ BusinessExecutor::Submit(
 
 
    if (!ReservePending()) {
+        rejected_pending_budget_total_.fetch_add(1,std::memory_order_relaxed);
         rejected_overload_total_.fetch_add(
             1,
             std::memory_order_relaxed
@@ -692,6 +726,7 @@ BusinessExecutor::SubmitUnordered(
                 kInvalidArgument;
     }
 
+    task->spec.request.executor_enqueued_at = BusinessClock::now();
     const auto push_result =
         pool_->TrySubmit(
             [
@@ -720,6 +755,7 @@ BusinessExecutor::SubmitUnordered(
                 kShuttingDown;
     }
 
+    rejected_pool_submission_total_.fetch_add(1,std::memory_order_relaxed);
     return
         BusinessSubmitStatus::
             kOverloaded;
@@ -731,6 +767,9 @@ BusinessExecutor::SubmitOrdered(
     std::shared_ptr<TaskState> task,
     BusinessOrderingKey key
 ) {
+    if (options_.isolate_ordering_keys) {
+        return SubmitIsolatedKey(std::move(task),key);
+    }
     if (
         !task ||
         stripes_.empty() ||
@@ -786,6 +825,7 @@ BusinessExecutor::SubmitOrdered(
         }
 
 
+        task->spec.request.executor_enqueued_at = BusinessClock::now();
         stripe.queue.push_back(
             std::move(task)
         );
@@ -859,11 +899,101 @@ BusinessExecutor::SubmitOrdered(
     }
 
 
+    rejected_pool_submission_total_.fetch_add(1,std::memory_order_relaxed);
     return
         BusinessSubmitStatus::
             kOverloaded;
 }
 
+
+BusinessSubmitStatus BusinessExecutor::SubmitIsolatedKey(
+    std::shared_ptr<TaskState> task, BusinessOrderingKey key) {
+    if (!task || stripes_.empty() || !pool_) {
+        return BusinessSubmitStatus::kInvalidArgument;
+    }
+    const auto index=static_cast<std::size_t>(key%stripes_.size());
+    auto& stripe=*stripes_[index];
+    bool inserted=false;
+    {
+        std::lock_guard lock(stripe.mutex);
+        // The old aggregate stripe bound is retained, not multiplied per key.
+        if (stripe.isolated_pending>=options_.per_stripe_queue_capacity) {
+            return BusinessSubmitStatus::kHotKeyOverloaded;
+        }
+        try {
+            auto [it,created]=stripe.lanes.try_emplace(key);
+            inserted=created;
+            task->spec.request.executor_enqueued_at = BusinessClock::now();
+            try { it->second.queue.push_back(std::move(task)); }
+            catch (...) {
+                if(created)stripe.lanes.erase(it);
+                throw;
+            }
+        }catch(const std::bad_alloc&) {
+            rejected_key_allocation_total_.fetch_add(1,std::memory_order_relaxed);
+            return BusinessSubmitStatus::kOverloaded;
+        }
+        ++stripe.isolated_pending;
+    }
+    if (!inserted) return BusinessSubmitStatus::kAccepted;
+    const auto pushed=pool_->TrySubmit([this,index,key]{DrainKey(index,key);});
+    if (pushed==TaskPushResult::kOk) return BusinessSubmitStatus::kAccepted;
+    {
+        // Submit still holds admission_mutex_: no later submit can have joined
+        // this new lane. Other keys in this stripe are left completely intact.
+        std::lock_guard lock(stripe.mutex);
+        stripe.lanes.erase(key);
+        --stripe.isolated_pending;
+    }
+    if(pushed!=TaskPushResult::kStopped)rejected_pool_submission_total_.fetch_add(1,std::memory_order_relaxed);
+    return pushed==TaskPushResult::kStopped
+        ? BusinessSubmitStatus::kShuttingDown : BusinessSubmitStatus::kOverloaded;
+}
+
+bool BusinessExecutor::CompleteKeyTask(std::size_t index,BusinessOrderingKey key) {
+    auto& stripe=*stripes_[index];
+    std::lock_guard lock(stripe.mutex);
+    const auto it=stripe.lanes.find(key);
+    if(it==stripe.lanes.end() || stripe.isolated_pending==0)
+        throw std::logic_error("ordered key completion without a reserved lane");
+    --stripe.isolated_pending;
+    if(it->second.queue.empty()) {
+        // Retire an empty lane in the same critical section that releases its
+        // last slot. Do not accumulate empty lanes or queued no-op drainers as
+        // completed async tasks make room for newly admitted keys.
+        stripe.lanes.erase(it);
+        return false;
+    }
+    return true;
+}
+
+void BusinessExecutor::DrainKey(std::size_t index,BusinessOrderingKey key) {
+    auto& stripe=*stripes_[index];
+    while (true) {
+        std::shared_ptr<TaskState> task;
+        {
+            std::lock_guard lock(stripe.mutex);
+            const auto it=stripe.lanes.find(key);
+            if (it==stripe.lanes.end()) return;
+            if (it->second.queue.empty()) {
+                // Empty+erase under the same lock prevents lost wakeups. The
+                // lane map cannot grow beyond the existing pending budgets.
+                stripe.lanes.erase(it);
+                return;
+            }
+            task=std::move(it->second.queue.front());
+            it->second.queue.pop_front();
+        }
+        if (task->spec.async_work) {
+            task->async_stripe=index;
+            task->async_key=key;
+        }
+        if (!ExecuteTask(task)) return; // Async completion retains this lane.
+        // Includes cancelled/expired-before-start tasks. A newly submitted key
+        // can only create a replacement lane after this work has completed.
+        if(!CompleteKeyTask(index,key))return;
+    }
+}
 
 void BusinessExecutor::DrainStripe(
     std::size_t stripe_index
@@ -928,21 +1058,24 @@ void BusinessExecutor::DrainStripe(
          * 如果持mutex执行，
          * Submit同Stripe也会被慢SQL阻塞。
          */
-        ExecuteTask(task);
+        if(task->spec.async_work)task->async_stripe=stripe_index;
+        if(!ExecuteTask(task))return; // logical completion schedules the next drainer
     }
 }
 
 
-void BusinessExecutor::ExecuteTask(
+bool BusinessExecutor::ExecuteTask(
     const std::shared_ptr<TaskState>& task
 ) {
     if (!task) {
-        return;
+        return true;
     }
 
 
     const auto started_at =
         BusinessClock::now();
+
+    task->spec.request.executor_started_at = started_at;
 
     RecordQueueWait(
         std::chrono::duration_cast<
@@ -988,7 +1121,7 @@ void BusinessExecutor::ExecuteTask(
 
             DispatchDeadlineTerminal(task);
 
-            return;
+            return true;
         }
 
 
@@ -1004,7 +1137,7 @@ void BusinessExecutor::ExecuteTask(
 
             ReleasePending();
 
-            return;
+            return true;
         }
     }
 
@@ -1023,6 +1156,35 @@ void BusinessExecutor::ExecuteTask(
 
     const auto execution_begin =
         BusinessClock::now();
+
+    if(task->spec.async_work) {
+        pending_async_tasks_.fetch_add(1,std::memory_order_acq_rel);
+        async_started_total_.fetch_add(1,std::memory_order_relaxed);
+        try {
+            task->spec.async_work(context,
+                [this,task](Completion fn) {
+                    if(task->async_finished.load(std::memory_order_acquire))return;
+                    PostInternal([this,task,fn=std::move(fn)]()mutable {
+                        if(task->async_finished.load(std::memory_order_acquire))return;
+                        continuation_run_total_.fetch_add(1,std::memory_order_relaxed);
+                        const auto active=current_active_tasks_.fetch_add(1,std::memory_order_acq_rel)+1;
+                        UpdatePeak(peak_active_tasks_,active);
+                        const auto begin=BusinessClock::now();
+                        try{fn();}catch(...){
+                            current_active_tasks_.fetch_sub(1,std::memory_order_acq_rel);throw;
+                        }
+                        current_active_tasks_.fetch_sub(1,std::memory_order_acq_rel);
+                        RecordExecution(std::chrono::duration_cast<std::chrono::nanoseconds>(BusinessClock::now()-begin));
+                    });
+                },
+                [this,task](Completion completed,std::exception_ptr error) {
+                    FinishAsync(task,std::move(completed),error);
+                });
+        }catch(...){FinishAsync(task,{},std::current_exception());}
+        current_active_tasks_.fetch_sub(1,std::memory_order_acq_rel);
+        RecordExecution(std::chrono::duration_cast<std::chrono::nanoseconds>(BusinessClock::now()-execution_begin));
+        return false; // caller releases its OS thread; task still owns the stripe
+    }
 
     Completion completion;
 
@@ -1093,7 +1255,7 @@ void BusinessExecutor::ExecuteTask(
 
     if (!work_succeeded) {
         ReleasePending();
-        return;
+        return true;
     }
 
 
@@ -1108,7 +1270,7 @@ void BusinessExecutor::ExecuteTask(
 
         ReleasePending();
 
-        return;
+        return true;
     }
 
 
@@ -1116,8 +1278,52 @@ void BusinessExecutor::ExecuteTask(
         task,
         std::move(completion)
     );
+    return true;
 }
 
+
+
+void BusinessExecutor::PostInternal(Completion fn) {
+    // External pending remains bounded. Each accepted async task has at most
+    // one queued resume plus one drainer; reserved internal slots cannot be
+    // consumed by new external admission. Never block an RPC reaction thread.
+    pending_internal_jobs_.fetch_add(1,std::memory_order_acq_rel);
+    const auto result=pool_->TrySubmit([this,fn=std::move(fn)]()mutable {
+        try {fn();}catch(...){worker_exception_total_.fetch_add(1,std::memory_order_relaxed);}
+        pending_internal_jobs_.fetch_sub(1,std::memory_order_acq_rel);
+        {std::lock_guard lock(drain_mutex_);drain_cv_.notify_all();}
+    });
+    if(result!=TaskPushResult::kOk) {
+        pending_internal_jobs_.fetch_sub(1,std::memory_order_acq_rel);
+        {std::lock_guard lock(drain_mutex_);drain_cv_.notify_all();}
+        throw std::logic_error("accepted continuation reserve invariant violated");
+    }
+}
+
+void BusinessExecutor::FinishAsync(const std::shared_ptr<TaskState>& task,
+                                 Completion completion,std::exception_ptr error) {
+    if(task->async_finished.exchange(true,std::memory_order_acq_rel))return;
+    async_finished_total_.fetch_add(1,std::memory_order_relaxed);
+    if(error) {
+        worker_exception_total_.fetch_add(1,std::memory_order_relaxed);
+        ReleasePending();
+    }else if(completion) {
+        DispatchCompletion(task,std::move(completion));
+    }else {
+        completed_total_.fetch_add(1,std::memory_order_relaxed);
+        ReleasePending();
+    }
+    // pending_async_tasks protects this scheduling tail against shutdown,
+    // including an inline completion on the original starter worker.
+    if(task->async_stripe) {
+        if(task->async_key) {
+            if(CompleteKeyTask(*task->async_stripe,*task->async_key))
+                PostInternal([this,index=*task->async_stripe,key=*task->async_key]{DrainKey(index,key);});
+        }else PostInternal([this,index=*task->async_stripe]{DrainStripe(index);});
+    }
+    pending_async_tasks_.fetch_sub(1,std::memory_order_acq_rel);
+    {std::lock_guard lock(drain_mutex_);drain_cv_.notify_all();}
+}
 
 bool BusinessExecutor::CompletionStillValid(
     const std::shared_ptr<TaskState>& task
@@ -1643,6 +1849,7 @@ void BusinessExecutor::ReleasePending() {
 }
 
 void BusinessExecutor::NotifyDrainProgress() {
+    std::lock_guard lock(drain_mutex_);
     drain_cv_.notify_all();
 }
 

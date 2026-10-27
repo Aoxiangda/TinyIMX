@@ -38,6 +38,11 @@ MessageServiceServer::MessageServiceServer(
 MessageServiceServer::~MessageServiceServer() {
     Shutdown();
 }
+bool MessageServiceServer::SetAuxiliaryService(grpc::Service* service) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if(!service||service==service_||server_||auxiliary_service_)return false;
+    auxiliary_service_=service;return true;
+}
 
 bool MessageServiceServer::Start(
     const std::string& listen_target
@@ -66,6 +71,7 @@ bool MessageServiceServer::Start(
         &selected_port
     );
     builder.RegisterService(service_);
+    if(auxiliary_service_)builder.RegisterService(auxiliary_service_);
 
     auto server = builder.BuildAndStart();
 

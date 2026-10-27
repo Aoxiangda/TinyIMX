@@ -1,4 +1,4 @@
-USE tinyimx;
+-- Apply to the schema explicitly selected by the caller.
 
 CREATE TABLE IF NOT EXISTS im_friend_requests (
     request_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -36,16 +36,6 @@ CREATE TABLE IF NOT EXISTS im_friend_requests (
         created_at,
         request_id
     ),
-
-    CONSTRAINT fk_im_friend_requests_from_user
-        FOREIGN KEY (from_user_id)
-        REFERENCES im_users(user_id)
-        ON DELETE CASCADE,
-
-    CONSTRAINT fk_im_friend_requests_to_user
-        FOREIGN KEY (to_user_id)
-        REFERENCES im_users(user_id)
-        ON DELETE CASCADE,
 
     CONSTRAINT chk_im_friend_requests_status
         CHECK (request_status IN (0, 1, 2, 3))

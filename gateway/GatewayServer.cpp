@@ -1,3 +1,4 @@
+#include "services/rpc/RpcAwaitable.h"
 #include "gateway/GatewayServer.h"
 #include "gateway/GroupFanoutWakeup.h"
 #include "gateway/GroupDeliveryOrdering.h"
@@ -13,6 +14,7 @@
 #include "services/rpc/GroupRpcClient.h"
 #include "services/rpc/FileRpcClient.h"
 #include "services/rpc/SocialRpcClient.h"
+#include "services/rpc/PrivateChatPermissionPort.h"
 #include "services/cache/OnlineStatusCache.h"
 #include "services/cache/UnreadCountCache.h"
 #include "gateway/GatewayRouteResolver.h"
@@ -54,12 +56,12 @@ bool ConversationUnreadBatchEnabled() noexcept {
 
 // Bounded numeric-only diagnostic. Does not change admission, deadline or retry.
 void LogChatPhaseSnapshot(const tinyimx::ChatRequestPhaseTrace::Snapshot& x) noexcept {
-    static tinyimx::ChatPhaseLogLimiter limiter;
+    static tinyimx::ChatPhasePriorityLogLimiter limiter;
     const auto second = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(
             tinyimx::BusinessClock::now().time_since_epoch()).count());
-    if (!limiter.Admit(second)) return;
-    const auto suppressed = limiter.TakeSuppressed();
+    if (!limiter.Admit(second, x.sampled_fast)) return;
+    const auto suppressed = limiter.TakeSuppressed(x.sampled_fast);
     try {
         LOG_WARN("gateway private chat phase sample"
             << ", path=" << x.path
@@ -77,6 +79,11 @@ void LogChatPhaseSnapshot(const tinyimx::ChatRequestPhaseTrace::Snapshot& x) noe
             << ", unread_started_us=" << x.phase_started_us[3]
             << ", unread_finished_us=" << x.phase_finished_us[3]
             << ", dispatch_age_us=" << x.dispatch_age_us
+            << ", executor_submit_us=" << x.executor_submit_us
+            << ", executor_enqueue_us=" << x.executor_enqueue_us
+            << ", executor_start_us=" << x.executor_start_us
+            << ", executor_admission_us=" << x.executor_admission_us
+            << ", executor_queue_wait_us=" << x.executor_queue_wait_us
             << ", entry_budget_us=" << x.entry_budget_us
             << ", has_deadline=" << x.has_deadline
             << ", work_us=" << x.work_us
@@ -89,6 +96,9 @@ void LogChatPhaseSnapshot(const tinyimx::ChatRequestPhaseTrace::Snapshot& x) noe
             << ", peer_validate_us=" << x.duration_us[4]
             << ", peer_validate_budget_us=" << x.start_budget_us[4]
             << ", failed=" << x.failed
+            << ", sampled_fast=" << x.sampled_fast
+            << ", ack_handoff_us=" << x.ack_handoff_us
+            << ", ack_handoff_ok=" << x.ack_handoff_ok
             << ", suppressed_samples=" << suppressed);
     } catch (...) {
         // Never let diagnostic failure change a durable request's lifecycle.
@@ -456,6 +466,15 @@ std::uint64_t MixBusinessOrderingKey(
     return value ^ (value >> 31U);
 }
 
+bool GatewayAsyncMessageRpcEnabled() noexcept {
+    static const bool on=[] {const char* v=std::getenv("TINYIMX_GATEWAY_ASYNC_MESSAGE_RPC_ENABLE");
+        return v && v[0]=='1' && v[1]=='\0';}();return on;
+}
+bool GatewayAsyncPermissionRpcEnabled() noexcept {
+    static const bool on=[] {const char* v=std::getenv("TINYIMX_GATEWAY_ASYNC_PERMISSION_RPC_ENABLE");
+        return v&&v[0]=='1'&&v[1]=='\0';}();return on;
+}
+
 tinyimx::BusinessOrderingKey
 MakeUserPairOrderingKey(
     tinyimx::UserId lhs,
@@ -571,9 +590,10 @@ SubmitMustRunConnectionBusinessTask(
     tinyimx::BusinessTimePoint received_at,
     std::string operation,
     std::optional<tinyimx::BusinessOrderingKey> ordering_key,
-    tinyimx::BusinessExecutor::Work work
+    tinyimx::BusinessExecutor::Work work,
+    tinyimx::BusinessExecutor::AsyncWork async_work = {}
 ) {
-    if (executor == nullptr || !connection || !work) {
+    if (executor == nullptr || !connection || (!work && !async_work)) {
         return tinyimx::BusinessSubmitStatus::kInvalidArgument;
     }
 
@@ -585,6 +605,7 @@ SubmitMustRunConnectionBusinessTask(
     task.cancellation_policy =
         tinyimx::BusinessCancellationPolicy::kMustRun;
     task.work = std::move(work);
+    task.async_work=std::move(async_work);
 
     return executor->Submit(std::move(task));
 }
@@ -617,7 +638,8 @@ SubmitSessionBusinessTask(
     std::string operation,
     tinyimx::BusinessCancellationPolicy policy,
     std::optional<tinyimx::BusinessOrderingKey> ordering_key,
-    tinyimx::BusinessExecutor::Work work
+    tinyimx::BusinessExecutor::Work work,
+    tinyimx::BusinessExecutor::AsyncWork async_work = {}
 ) {
     if (
         executor == nullptr ||
@@ -625,7 +647,7 @@ SubmitSessionBusinessTask(
         !connection ||
         !session.Valid() ||
         session.connection != connection ||
-        !work
+        (!work && !async_work)
     ) {
         return
             tinyimx::BusinessSubmitStatus::
@@ -711,6 +733,7 @@ SubmitSessionBusinessTask(
 
     task.work =
         std::move(work);
+    task.async_work=std::move(async_work);
 
     return
         executor->Submit(
@@ -1879,6 +1902,27 @@ std::int64_t GatewayServer::GetTotalUnread(
     return result.count;
 }
 
+std::pair<std::int64_t, std::int64_t> GatewayServer::GetPrivateAndTotalUnread(
+    UserId receiver_user_id, UserId sender_user_id
+) {
+    static const bool enabled = [] {
+        const char* value = std::getenv("TINYIMX_GATEWAY_UNREAD_PAIR_READ_ENABLE");
+        return value && value[0] == '1' && value[1] == '\0';
+    }();
+    if (!enabled) return {GetPrivateUnread(receiver_user_id, sender_user_id), GetTotalUnread(receiver_user_id)};
+    if (!HasUnreadCountCache()) return {0, 0};
+    const auto snapshot = unread_count_cache_->GetPrivateAndTotalUnread(receiver_user_id, sender_user_id);
+    const auto value = [&](const GetUnreadCountResult& result, const char* slot) {
+        if (result.Completed()) return result.count;
+        LOG_WARN("gateway get unread pair failed, receiver=" << receiver_user_id
+                 << ", sender=" << sender_user_id << ", slot=" << slot
+                 << ", status=" << GetUnreadCountStatusToString(result.status)
+                 << ", error=" << result.error_message);
+        return std::int64_t{0};
+    };
+    return {value(snapshot.private_unread, "private"), value(snapshot.total_unread, "total")};
+}
+
 std::int64_t GatewayServer::GetPrivateUnread(
     UserId receiver_user_id,
     UserId sender_user_id
@@ -2011,6 +2055,12 @@ void GatewayServer::EnsureUnreadProjection(
     }
 
     if (!unread_projection_write_enabled_) {
+        if (private_unread != nullptr && total_unread != nullptr) {
+            const auto counts = GetPrivateAndTotalUnread(receiver_user_id, sender_user_id);
+            *private_unread = counts.first;
+            *total_unread = counts.second;
+            return;
+        }
         if (private_unread != nullptr) {
             *private_unread = GetPrivateUnread(receiver_user_id, sender_user_id);
         }
@@ -2230,6 +2280,10 @@ void GatewayServer::SetSocialRpcClient(
     );
 }
 
+void GatewayServer::SetPrivateChatPermissionPort(rpc::PrivateChatPermissionPort* permission) {
+    private_chat_permission_ = permission;
+}
+
 
 bool GatewayServer::HasSocialRpcClient() const {
     return social_rpc_client_ != nullptr;
@@ -2240,6 +2294,10 @@ bool GatewayServer::HasBusinessExecutor() const {
     return business_executor_ != nullptr;
 }
 
+
+void GatewayServer::SetReceiverAckExecutor(BusinessExecutor* executor) {
+    receiver_ack_executor_ = executor;
+}
 
 bool GatewayServer::HasMessageExecutor() const {
     return message_executor_ != nullptr || business_executor_ != nullptr;
@@ -2253,6 +2311,10 @@ bool GatewayServer::HasPresenceExecutor() const {
 
 BusinessExecutor* GatewayServer::MessageExecutor() const {
     return message_executor_ != nullptr ? message_executor_ : business_executor_;
+}
+
+BusinessExecutor* GatewayServer::ReceiverAckExecutor() const {
+    return receiver_ack_executor_ != nullptr ? receiver_ack_executor_ : MessageExecutor();
 }
 
 
@@ -4501,7 +4563,7 @@ void GatewayServer::HandleReceiverChatDeliveryAck(
         return;
     }
 
-    if (!HasMessageExecutor()) {
+    if (ReceiverAckExecutor() == nullptr) {
         LOG_ERROR("gateway cannot dispatch receiver delivery ack: business executor unavailable"
                   << ", message_id=" << ack.message_id);
         return;
@@ -4509,7 +4571,7 @@ void GatewayServer::HandleReceiverChatDeliveryAck(
 
     const BusinessSubmitStatus submit_status =
         SubmitSessionBusinessTask(
-            MessageExecutor(),
+            ReceiverAckExecutor(),
             &session_manager_,
             connection,
             *session,
@@ -5348,21 +5410,18 @@ void GatewayServer::HandleChatMessage(
         return;
     }
 
-    const BusinessSubmitStatus submit_status =
-        SubmitSessionBusinessTask(
-            MessageExecutor(),
-            &session_manager_,
-            connection,
-            *dispatch_session,
-            packet.seq,
-            BusinessClock::now(),
-            "gateway.chat.rpc",
-            BusinessCancellationPolicy::kMustRun,
-            MakeUserPairOrderingKey(
-                dispatch_session->user_id,
-                dispatch_request.to_user_id
-            ),
-            [
+    BusinessExecutor::Work sync_work;
+    BusinessExecutor::AsyncWork async_work;
+    if(GatewayAsyncMessageRpcEnabled()) {
+        async_work=[this,connection,packet,user=dispatch_session->user_id,epoch=dispatch_session->epoch]
+            (const BusinessExecutor::ExecutionContext& context,
+             BusinessExecutor::CompletionDispatcher post,BusinessExecutor::AsyncDone done) {
+            auto task=ExecuteChatMessageCoroutine(connection,packet,context.Request(),true);
+            std::move(task).Start(std::move(post),[connection,user,epoch](auto fn) {
+                ScopedBusinessDispatchContext scope(connection,user,epoch);fn();
+            },[done=std::move(done)](std::exception_ptr error)mutable {done({},error);});
+        };
+    }else sync_work=[
                 this,
                 connection,
                 packet,
@@ -5383,7 +5442,23 @@ void GatewayServer::HandleChatMessage(
                     context.Request()
                 );
                 return {};
-            }
+            };
+
+    const BusinessSubmitStatus submit_status =
+        SubmitSessionBusinessTask(
+            MessageExecutor(),
+            &session_manager_,
+            connection,
+            *dispatch_session,
+            packet.seq,
+            BusinessClock::now(),
+            "gateway.chat.rpc",
+            BusinessCancellationPolicy::kMustRun,
+            MakeUserPairOrderingKey(
+                dispatch_session->user_id,
+                dispatch_request.to_user_id
+            ),
+            std::move(sync_work),std::move(async_work)
         );
 
     if (submit_status == BusinessSubmitStatus::kAccepted) {
@@ -5409,17 +5484,20 @@ void GatewayServer::HandleChatMessage(
     }
 }
 
-void GatewayServer::ExecuteChatMessage(
-    const TcpConnectionPtr& connection,
-    const Packet& packet,
-    const BusinessRequestContext& business_request
-) {
+void GatewayServer::ExecuteChatMessage(const TcpConnectionPtr& connection,const Packet& packet,
+    const BusinessRequestContext& request) {
+    auto task=ExecuteChatMessageCoroutine(connection,packet,request,false);task.RunSync();
+}
+
+BusinessCoroutine GatewayServer::ExecuteChatMessageCoroutine(TcpConnectionPtr connection,Packet packet,
+    BusinessRequestContext business_request,bool async_rpc) {
     ChatRequestPhaseTrace phase_trace(business_request, "chat", &LogChatPhaseSnapshot);
     auto send_client_chat_ack =
     [
         this,
         &connection,
-        &packet
+        &packet,
+        &phase_trace
     ](
         const ClientChatAck& ack_value
     ) -> bool {
@@ -5468,10 +5546,12 @@ void GatewayServer::ExecuteChatMessage(
             std::move(ack_body);
 
 
-        return SendPacket(
+        const bool handed_off = SendPacket(
             connection,
             ack
         );
+        phase_trace.MarkAckHandoff(handed_off);
+        return handed_off;
     };
 
 
@@ -5515,7 +5595,7 @@ void GatewayServer::ExecuteChatMessage(
         );
 
 
-        return;
+        co_return;
     }
     const std::optional<UserId> logged_user_id =
         ResolveBusinessUser(
@@ -5556,7 +5636,7 @@ void GatewayServer::ExecuteChatMessage(
         );
 
 
-        return;
+        co_return;
     }
     const UserId from_user_id = logged_user_id.value();
 
@@ -5609,7 +5689,7 @@ void GatewayServer::ExecuteChatMessage(
         );
 
 
-        return;
+        co_return;
     }
 
     const UserId to_user_id = request.to_user_id;
@@ -5638,10 +5718,10 @@ void GatewayServer::ExecuteChatMessage(
         );
 
 
-        return;
+        co_return;
     }
 
-    if (!HasSocialRpcClient()) {
+    if (!private_chat_permission_ && !HasSocialRpcClient()) {
         Json ack_body;
         ack_body["success"] = false;
         ack_body["delivered"] = false;
@@ -5659,7 +5739,7 @@ void GatewayServer::ExecuteChatMessage(
         LOG_WARN("gateway rejected chat message: relation service unavailable"
                  << ", from=" << from_user_id
                  << ", to=" << to_user_id);
-        return;
+        co_return;
     }
 
     rpc::CheckPrivateChatPermissionRpcRequest permission_request;
@@ -5685,11 +5765,44 @@ void GatewayServer::ExecuteChatMessage(
             ? std::chrono::milliseconds{0}
             : permission_remaining;
 
-    auto permission_result = phase_trace.Measure(
-        ChatRequestPhaseTrace::Phase::Permission, [&] {
-            return social_rpc_client_->CheckPrivateChatPermission(
-                permission_request, permission_call_options);
+    static const bool local_permission_async_enabled=[] {
+        const char* value=std::getenv("TINYIMX_GATEWAY_ASYNC_LOCAL_PERMISSION_ENABLE");
+        return value&&value[0]=='1'&&value[1]=='\0';
+    }();
+    const bool local_permission_async=async_rpc&&local_permission_async_enabled&&
+        private_chat_permission_&&private_chat_permission_->SupportsAsync();
+    const bool permission_async=async_rpc&&GatewayAsyncPermissionRpcEnabled()&&!private_chat_permission_;
+    rpc::RpcResult<rpc::CheckPrivateChatPermissionRpcResponse> permission_result;
+    if(local_permission_async) {
+        // Keep the owning metadata captures outside the co_await expression.
+        // GCC11 otherwise mismanages temporary capturing-lambda lifetimes.
+        rpc::RpcAwaitable<rpc::RpcResult<rpc::CheckPrivateChatPermissionRpcResponse>> pending_permission(
+            true,{},[this,permission_request,permission_call_options,&phase_trace](auto done){
+                const auto started=phase_trace.Begin(ChatRequestPhaseTrace::Phase::Permission);
+                private_chat_permission_->CheckPrivateChatPermissionAsync(permission_request,permission_call_options,
+                    [&phase_trace,started,done=std::move(done)](auto result)mutable{
+                        phase_trace.End(ChatRequestPhaseTrace::Phase::Permission,started);done(std::move(result));
+                    });
+            });
+        permission_result=co_await pending_permission;
+    }else if(permission_async) {
+        rpc::RpcAwaitable<rpc::RpcResult<rpc::CheckPrivateChatPermissionRpcResponse>> pending_permission(
+            true,{},[this,permission_request,permission_call_options,&phase_trace](auto done){
+                const auto started=phase_trace.Begin(ChatRequestPhaseTrace::Phase::Permission);
+                social_rpc_client_->CheckPrivateChatPermissionAsync(permission_request,permission_call_options,
+                    [&phase_trace,started,done=std::move(done)](auto result)mutable{
+                        phase_trace.End(ChatRequestPhaseTrace::Phase::Permission,started);done(std::move(result));
+                    });
+            });
+        permission_result=co_await pending_permission;
+    }else {
+        // Preserve the original default path without allocating an awaiter or
+        // copying RPC metadata when the new experiment is disabled.
+        permission_result=phase_trace.Measure(ChatRequestPhaseTrace::Phase::Permission,[&]{
+            if(private_chat_permission_)return private_chat_permission_->CheckPrivateChatPermission(permission_request,permission_call_options);
+            return social_rpc_client_->CheckPrivateChatPermission(permission_request,permission_call_options);
         });
+    }
 
     if (!permission_result.ok()) {
         phase_trace.Fail();
@@ -5718,7 +5831,7 @@ void GatewayServer::ExecuteChatMessage(
                  << ", to=" << to_user_id
                  << ", reason=" << ack_body["reason"].get<std::string>()
                  << ", message=" << permission_result.status.message);
-        return;
+        co_return;
     }
 
     const auto& permission_response = permission_result.value.value();
@@ -5750,7 +5863,7 @@ void GatewayServer::ExecuteChatMessage(
                  << rpc::ChatPermissionRpcOutcomeToReason(
                         permission_response.outcome)
                  << ", message=" << permission_response.message);
-        return;
+        co_return;
     }
     Json server_body{
         {
@@ -5772,13 +5885,13 @@ void GatewayServer::ExecuteChatMessage(
             server_body.dump();
 
     const auto persist_message_via_service =
-        [&]() -> rpc::PersistPrivateMessageRpcCallResult {
+        [&]() -> rpc::RpcAwaitable<rpc::PersistPrivateMessageRpcCallResult> {
             if (!HasMessageRpcClient()) {
-                return rpc::PersistPrivateMessageRpcCallResult::Failure(
+                return rpc::RpcAwaitable<rpc::PersistPrivateMessageRpcCallResult>(rpc::PersistPrivateMessageRpcCallResult::Failure(
                     rpc::RpcErrorCode::kUnavailable,
                     "MessageService RPC client is unavailable",
                     false
-                );
+                ));
             }
 
             rpc::PersistPrivateMessageRpcRequest rpc_request;
@@ -5815,9 +5928,20 @@ void GatewayServer::ExecuteChatMessage(
                     ? std::chrono::milliseconds{0}
                     : remaining;
 
-            return phase_trace.Measure(ChatRequestPhaseTrace::Phase::Persist, [&] {
-                return message_rpc_client_->PersistPrivateMessage(rpc_request, call_options);
-            });
+            return rpc::RpcAwaitable<rpc::PersistPrivateMessageRpcCallResult>(async_rpc,
+                [this,rpc_request,call_options,&phase_trace] {
+                    return phase_trace.Measure(ChatRequestPhaseTrace::Phase::Persist,[&] {
+                        return message_rpc_client_->PersistPrivateMessage(rpc_request,call_options);
+                    });
+                },
+                [this,rpc_request,call_options,&phase_trace](auto done) {
+                    const auto started=phase_trace.Begin(ChatRequestPhaseTrace::Phase::Persist);
+                    message_rpc_client_->PersistPrivateMessageAsync(rpc_request,call_options,
+                        [&phase_trace,started,done=std::move(done)](auto result)mutable {
+                            phase_trace.End(ChatRequestPhaseTrace::Phase::Persist,started);
+                            done(std::move(result));
+                        });
+                });
         };
 
     const auto persistence_failure_reason =
@@ -5886,7 +6010,7 @@ void GatewayServer::ExecuteChatMessage(
                     ack
                 );
 
-                return;
+                co_return;
             }
 
 
@@ -5915,7 +6039,7 @@ void GatewayServer::ExecuteChatMessage(
             bool client_request_reused = false;
 
             const auto persist_call =
-                persist_message_via_service();
+                co_await persist_message_via_service();
 
             if (!persist_call.ok()) {
                 phase_trace.Fail();
@@ -5943,7 +6067,7 @@ void GatewayServer::ExecuteChatMessage(
                     << ", reason=" << ack.reason
                     << ", message=" << persist_call.status.message
                 );
-                return;
+                co_return;
             }
 
             const auto& persist_result = *persist_call.value;
@@ -5968,7 +6092,7 @@ void GatewayServer::ExecuteChatMessage(
                     << ", client_message_id=" << request.client_message_id
                     << ", existing_message_id=" << persist_result.message_id
                 );
-                return;
+                co_return;
             }
 
             server_message_id = persist_result.message_id;
@@ -6047,7 +6171,7 @@ void GatewayServer::ExecuteChatMessage(
                     ack
                 );
 
-                return;
+                co_return;
             }
 
 
@@ -6079,7 +6203,7 @@ void GatewayServer::ExecuteChatMessage(
                 send_client_chat_ack(invalid_ack);
                 LOG_ERROR("gateway remote durable acceptance identity invalid"
                     << ", message_id=" << server_message_id);
-                return;
+                co_return;
             }
 
             const auto acceptance_dispatch = DispatchRemoteDurableAcceptance(
@@ -6130,7 +6254,7 @@ void GatewayServer::ExecuteChatMessage(
                     << ", to=" << to_user_id);
             }
 
-            return;
+            co_return;
         }
         /*
         * OnlineStatus 还存在，
@@ -6243,7 +6367,7 @@ void GatewayServer::ExecuteChatMessage(
      * 因此这里不再静默降级到纯内存发送。
      */
     const auto persist_call =
-        persist_message_via_service();
+        co_await persist_message_via_service();
 
     if (!persist_call.ok()) {
         phase_trace.Fail();
@@ -6267,7 +6391,7 @@ void GatewayServer::ExecuteChatMessage(
             << ", reason=" << ack.reason
             << ", message=" << persist_call.status.message
         );
-        return;
+        co_return;
     }
 
     const auto& persist_result = *persist_call.value;
@@ -6290,7 +6414,7 @@ void GatewayServer::ExecuteChatMessage(
             << ", to=" << to_user_id
             << ", existing_message_id=" << persist_result.message_id
         );
-        return;
+        co_return;
     }
 
     server_message_id = persist_result.message_id;
@@ -6338,6 +6462,16 @@ void GatewayServer::ExecuteChatMessage(
 
     phase_trace.SetMessageId(server_message_id);
     phase_trace.Measure(ChatRequestPhaseTrace::Phase::Unread, [&] {
+        // Native Created replies can carry the counters already committed in
+        // the same WAL group. The writer-enabled and uncertain retry paths
+        // still pass through their existing idempotent projection gate.
+        if (CanUseCommittedUnreadSnapshot(unread_projection_write_enabled_,
+            persist_result.Created(),persist_result.committed_unread,
+            server_message_id,to_user_id,from_user_id)) {
+            receiver_private_unread=static_cast<std::int64_t>(persist_result.committed_unread->private_unread);
+            receiver_total_unread=static_cast<std::int64_t>(persist_result.committed_unread->total_unread);
+            return;
+        }
         EnsureUnreadProjection(
             server_message_id, to_user_id, from_user_id,
             should_count_as_unread,
@@ -6387,19 +6521,8 @@ void GatewayServer::ExecuteChatMessage(
         delivered = true;
 
 
-        const std::int64_t
-            receiver_private_unread =
-                GetPrivateUnread(
-                    to_user_id,
-                    from_user_id
-                );
-
-
-        const std::int64_t
-            receiver_total_unread =
-                GetTotalUnread(
-                    to_user_id
-                );
+        const auto [receiver_private_unread, receiver_total_unread] =
+            GetPrivateAndTotalUnread(to_user_id, from_user_id);
 
 
         ClientChatAck ack;
@@ -6457,7 +6580,7 @@ void GatewayServer::ExecuteChatMessage(
         );
 
 
-        return;
+        co_return;
     }
 
 
@@ -6859,7 +6982,7 @@ void GatewayServer::ExecuteChatMessage(
             );
 
 
-            return;
+            co_return;
         }
 
 
@@ -6981,7 +7104,7 @@ void GatewayServer::ExecuteChatMessage(
             );
 
 
-            return;
+            co_return;
         }
     }
 
@@ -7138,6 +7261,7 @@ void GatewayServer::ExecuteChatMessage(
         << ", receiver_total_unread="
         << receiver_total_unread
     );
+    co_return;
 }
 
 
@@ -7181,15 +7305,17 @@ void GatewayServer::HandleGatewayForwardChatRequest(
         return;
     }
 
-    const BusinessSubmitStatus submit_status =
-        SubmitMustRunConnectionBusinessTask(
-            MessageExecutor(),
-            connection,
-            packet.seq,
-            BusinessClock::now(),
-            "gateway.peer_forward_chat",
-            static_cast<BusinessOrderingKey>(dispatch_request.message_id),
-            [this, connection, packet](
+    BusinessExecutor::Work sync_work;
+    BusinessExecutor::AsyncWork async_work;
+    if(GatewayAsyncMessageRpcEnabled()) {
+        async_work=[this,connection,packet](const BusinessExecutor::ExecutionContext& context,
+             BusinessExecutor::CompletionDispatcher post,BusinessExecutor::AsyncDone done) {
+            auto task=ExecuteGatewayForwardChatCoroutine(connection,packet,context.Request(),true);
+            std::move(task).Start(std::move(post),[connection](auto fn) {
+                ScopedBusinessDispatchContext scope(connection,0,0);fn();
+            },[done=std::move(done)](std::exception_ptr error)mutable {done({},error);});
+        };
+    }else sync_work=[this, connection, packet](
                 const BusinessExecutor::ExecutionContext& context
             ) -> BusinessExecutor::Completion {
                 ScopedBusinessDispatchContext dispatch_scope(
@@ -7197,7 +7323,20 @@ void GatewayServer::HandleGatewayForwardChatRequest(
                 ExecuteGatewayForwardChatRequest(
                     connection, packet, context.Request());
                 return {};
-            }
+            };
+
+    const BusinessSubmitStatus submit_status =
+        SubmitMustRunConnectionBusinessTask(
+            MessageExecutor(),
+            connection,
+            packet.seq,
+            BusinessClock::now(),
+            "gateway.peer_forward_chat",
+            // Match the sender conversation fence. MID remains the separate
+            // delivery deduplication identity, not the conversation order key.
+            MakeUserPairOrderingKey(dispatch_request.from_user_id,
+                                    dispatch_request.to_user_id),
+            std::move(sync_work),std::move(async_work)
         );
 
     if (submit_status != BusinessSubmitStatus::kAccepted) {
@@ -7208,11 +7347,13 @@ void GatewayServer::HandleGatewayForwardChatRequest(
     }
 }
 
-void GatewayServer::ExecuteGatewayForwardChatRequest(
-    const TcpConnectionPtr& connection,
-    const Packet& packet,
-    const BusinessRequestContext& business_request
-) {
+void GatewayServer::ExecuteGatewayForwardChatRequest(const TcpConnectionPtr& connection,const Packet& packet,
+    const BusinessRequestContext& request) {
+    auto task=ExecuteGatewayForwardChatCoroutine(connection,packet,request,false);task.RunSync();
+}
+
+BusinessCoroutine GatewayServer::ExecuteGatewayForwardChatCoroutine(TcpConnectionPtr connection,Packet packet,
+    BusinessRequestContext business_request,bool async_rpc) {
     ChatRequestPhaseTrace phase_trace(business_request, "peer", &LogChatPhaseSnapshot);
 
     GatewayForwardChatResponse response;
@@ -7359,7 +7500,7 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
             << error_message
         );
 
-        return;
+        co_return;
     }
 
 
@@ -7405,7 +7546,7 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
             << request.to_user_id
         );
 
-        return;
+        co_return;
     }
 
 
@@ -7432,7 +7573,7 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
             << request.to_user_id
         );
 
-        return;
+        co_return;
     }
 
 
@@ -7480,7 +7621,7 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
             << response.error_message
         );
 
-        return;
+        co_return;
     }
     /*
      * Gateway Peer身份已经真正验证通过。
@@ -7533,7 +7674,7 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
             );
 
 
-            return;
+            co_return;
         }
 
                 /*
@@ -7575,7 +7716,7 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
             );
 
 
-            return;
+            co_return;
         }
 
         if (
@@ -7597,7 +7738,7 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
             send_response(response);
 
 
-            return;
+            co_return;
         }
 
     /*
@@ -7617,7 +7758,7 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
         LOG_ERROR("gateway peer durable validation MessageService unavailable"
                   << ", message_id=" << request.message_id
                   << ", source_gateway=" << request.source_gateway_id);
-        return;
+        co_return;
     }
 
     rpc::GetPrivateMessageRpcRequest get_request;
@@ -7640,10 +7781,25 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
             : remaining;
 
     phase_trace.SetMessageId(request.message_id);
-    const auto persisted_result = phase_trace.Measure(
-        ChatRequestPhaseTrace::Phase::PeerValidate, [&] {
-            return message_rpc_client_->GetPrivateMessage(get_request, get_options);
+    // Construct string-bearing captures in a non-coroutine factory, matching
+    // the persistence path. This avoids GCC 11 temporary-capture relocation.
+    const auto make_peer_lookup = [&] {
+        return rpc::RpcAwaitable<rpc::RpcResult<rpc::GetPrivateMessageRpcResponse>>(async_rpc,
+        [this,get_request,get_options,&phase_trace] {
+            return phase_trace.Measure(ChatRequestPhaseTrace::Phase::PeerValidate,[&] {
+                return message_rpc_client_->GetPrivateMessage(get_request,get_options);
+            });
+        },
+        [this,get_request,get_options,&phase_trace](auto done) {
+            const auto started=phase_trace.Begin(ChatRequestPhaseTrace::Phase::PeerValidate);
+            message_rpc_client_->GetPrivateMessageAsync(get_request,get_options,
+                [&phase_trace,started,done=std::move(done)](auto result)mutable {
+                    phase_trace.End(ChatRequestPhaseTrace::Phase::PeerValidate,started);
+                    done(std::move(result));
+                });
         });
+    };
+    const auto persisted_result = co_await make_peer_lookup();
     if (!persisted_result.ok()) {
         phase_trace.Fail();
         message_delivery_deduplicator_.Abort(request.message_id);
@@ -7663,7 +7819,7 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
                  << ", rpc_code="
                  << static_cast<int>(persisted_result.status.code)
                  << ", error=" << response.error_message);
-        return;
+        co_return;
     }
 
     const rpc::MessageRpcRecord& persisted_message =
@@ -7687,7 +7843,7 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
                  << ", persisted_from=" << persisted_message.from_user_id
                  << ", request_to=" << request.to_user_id
                  << ", persisted_to=" << persisted_message.to_user_id);
-        return;
+        co_return;
     }
 
     const rpc::MessageDeliveryState persisted_state =
@@ -7712,7 +7868,7 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
                  << static_cast<int>(persisted_state)
                  << ", from=" << request.from_user_id
                  << ", to=" << request.to_user_id);
-        return;
+        co_return;
     }
 
     if (persisted_state == rpc::MessageDeliveryState::kFailed) {
@@ -7724,7 +7880,7 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
         LOG_WARN("gateway rejected peer message in failed persisted state"
                  << ", message_id=" << request.message_id
                  << ", source_gateway=" << request.source_gateway_id);
-        return;
+        co_return;
     }
 
     if (persisted_state != rpc::MessageDeliveryState::kPending) {
@@ -7737,7 +7893,7 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
                   << ", message_id=" << request.message_id
                   << ", delivery_state="
                   << static_cast<int>(persisted_state));
-        return;
+        co_return;
     }
 
     /*
@@ -7792,7 +7948,7 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
             << request.to_user_id
         );
 
-        return;
+        co_return;
     }
 
 
@@ -7884,7 +8040,7 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
         );
 
 
-        return;
+        co_return;
     }
 
 
@@ -7981,7 +8137,7 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
         );
 
 
-        return;
+        co_return;
     }
 
 
@@ -8108,6 +8264,7 @@ void GatewayServer::ExecuteGatewayForwardChatRequest(
         << forward_packet.seq
     );
 
+    co_return;
 }
 
 

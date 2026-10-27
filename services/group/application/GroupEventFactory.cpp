@@ -5,6 +5,7 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <stdexcept>
 
 namespace tinyimx::group {
 namespace {
@@ -111,6 +112,26 @@ GroupOutboxEventSpec BuildMemberVersionEvent(
 }
 
 }  // namespace
+
+bool GroupEventFactory::IsValidTopic(std::string_view topic) noexcept {
+    if (topic.empty() || topic.size() > 128) return false;
+    for (const unsigned char c : topic) {
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '-' || c == '_')) return false;
+    }
+    return true;
+}
+
+GroupOutboxEventSpec GroupEventFactory::WithTopic(
+    GroupOutboxEventSpec event,
+    std::string_view topic
+) {
+    if (!IsValidTopic(topic)) {
+        throw std::invalid_argument("group event topic must be 1-128 ASCII letters, digits, '-' or '_'");
+    }
+    event.topic.assign(topic);
+    return event;
+}
 
 GroupOutboxEventSpec GroupEventFactory::GroupCreated(const GroupView& group) {
     return BuildGroupEvent(group, "group.created.v1");

@@ -126,7 +126,7 @@ int main(int argc, char* argv[]) {
     tinyimx::outbox::OutboxRepository outbox(&pool);
     tinyimx::group::GroupPermissionPolicy permission;
     tinyimx::group::GroupRepositoryAdapter adapter(
-        &repository, &pool, &outbox, &permission
+        &repository, &pool, &outbox, &permission, config.RocketMQ().message_topic
     );
 
     std::cout << "========== TinyIMX M17-A1 Group Repository Integration ==========\n";
@@ -168,7 +168,7 @@ int main(int argc, char* argv[]) {
                "CreateGroup commits one durable operation record");
         Expect(CountRows(&pool, "im_event_outbox",
                          "event_id = 'group.created.v1:" + std::to_string(group_id) + ":1'"
-                         " AND topic = 'tinyimx-message-events'"
+                         " AND topic = '" + config.RocketMQ().message_topic + "'"
                          " AND tag = 'group.created.v1'") == 1,
                "CreateGroup commits one relay-compatible group.created outbox event");
     }
@@ -245,7 +245,7 @@ int main(int argc, char* argv[]) {
            "DisbandGroup atomically closes group and advances authority version");
     Expect(CountRows(&pool, "im_event_outbox",
                      "event_id = 'group.disbanded.v1:" + std::to_string(group_id) + ":3'"
-                     " AND topic = 'tinyimx-message-events'"
+                     " AND topic = '" + config.RocketMQ().message_topic + "'"
                      " AND tag = 'group.disbanded.v1'") == 1,
            "DisbandGroup commits one relay-compatible group.disbanded event");
 

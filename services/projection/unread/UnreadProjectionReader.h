@@ -33,7 +33,29 @@ struct UnreadProjectionReadResult {
     std::string message;
 };
 
-class UnreadProjectionReader final {
+class UnreadProjectionSource {
+public:
+    virtual ~UnreadProjectionSource() = default;
+    [[nodiscard]] virtual UnreadProjectionReadResult<DialogUnreadSnapshot>
+    LoadDialogSnapshot(std::uint64_t receiver_user_id, std::uint64_t peer_user_id) = 0;
+    [[nodiscard]] virtual UnreadProjectionReadResult<UserUnreadSnapshot>
+    LoadUserSnapshot(std::uint64_t receiver_user_id) = 0;
+    // Individual outcomes are retained. Existing sources can use this fallback;
+    // the MySQL reader overrides it with one bounded statement/read view.
+    [[nodiscard]] virtual std::vector<UnreadProjectionReadResult<DialogUnreadSnapshot>>
+    LoadDialogSnapshots(
+        const std::vector<std::pair<std::uint64_t, std::uint64_t>>& dialogs
+    ) {
+        if (dialogs.size() > 256) return {};
+        std::vector<UnreadProjectionReadResult<DialogUnreadSnapshot>> results;
+        results.reserve(dialogs.size());
+        for (const auto& [receiver, peer] : dialogs)
+            results.push_back(LoadDialogSnapshot(receiver, peer));
+        return results;
+    }
+};
+
+class UnreadProjectionReader final : public UnreadProjectionSource {
 public:
     explicit UnreadProjectionReader(MySqlConnectionPool* pool);
 
@@ -44,10 +66,15 @@ public:
     LoadDialogSnapshot(
         std::uint64_t receiver_user_id,
         std::uint64_t peer_user_id
-    );
+    ) override;
 
     [[nodiscard]] UnreadProjectionReadResult<UserUnreadSnapshot>
-    LoadUserSnapshot(std::uint64_t receiver_user_id);
+    LoadUserSnapshot(std::uint64_t receiver_user_id) override;
+
+    [[nodiscard]] std::vector<UnreadProjectionReadResult<DialogUnreadSnapshot>>
+    LoadDialogSnapshots(
+        const std::vector<std::pair<std::uint64_t, std::uint64_t>>& dialogs
+    ) override;
 
 private:
     MySqlConnectionPool* pool_{nullptr};  // non-owning

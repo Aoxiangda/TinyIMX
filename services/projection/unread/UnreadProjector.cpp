@@ -22,7 +22,7 @@ bool HasKey(
 
 UnreadProjector::UnreadProjector(
     eventing::EventConsumer* consumer,
-    UnreadProjectionReader* reader,
+    UnreadProjectionSource* reader,
     UnreadCountCache* cache,
     UnreadProjectorOptions options
 )
@@ -52,6 +52,13 @@ bool UnreadProjector::ValidateOptions(std::string* error) const {
     if (options_.batch_size == 0 || options_.batch_size > 256) {
         return fail("unread projector batch_size is invalid");
     }
+    if (options_.batch_snapshot_reads && options_.mode != UnreadProjectorMode::kWriter) {
+        return fail("unread snapshot batching requires authoritative writer mode");
+    }
+    if (options_.worker_threads == 0 || options_.worker_threads > 16 ||
+        options_.batch_size * options_.worker_threads > 1024) {
+        return fail("unread projector workers must be 1-16 and held events <=1024");
+    }
     if (options_.invisible_duration_ms <= 0 ||
         options_.receive_error_backoff_ms <= 0) {
         return fail("unread projector timing configuration is invalid");
@@ -73,9 +80,17 @@ bool UnreadProjector::Start() {
     }
 
     try {
-        thread_ = std::thread(&UnreadProjector::RunLoop, this);
+        threads_.reserve(options_.worker_threads);
+        for (std::size_t i = 0; i < options_.worker_threads; ++i) {
+            threads_.emplace_back(&UnreadProjector::RunLoop, this);
+        }
     } catch (const std::exception& e) {
         running_.store(false);
+        lifecycle_cv_.notify_all();
+        for (auto& thread : threads_) {
+            if (thread.joinable()) thread.join();
+        }
+        threads_.clear();
         last_error_ = std::string("unread projector thread start failed: ") + e.what();
         return false;
     }
@@ -86,6 +101,9 @@ bool UnreadProjector::Start() {
         << (options_.mode == UnreadProjectorMode::kWriter ? "writer" : "shadow")
         << ", topic=" << options_.topic
         << ", batch_size=" << options_.batch_size
+        << ", worker_threads=" << options_.worker_threads
+        << ", parallel_batch_ack=" << options_.parallel_batch_ack
+        << ", batch_snapshot_reads=" << options_.batch_snapshot_reads
     );
     return true;
 }
@@ -93,9 +111,10 @@ bool UnreadProjector::Start() {
 void UnreadProjector::Shutdown() {
     const bool was_running = running_.exchange(false);
     lifecycle_cv_.notify_all();
-    if (thread_.joinable()) {
-        thread_.join();
+    for (auto& thread : threads_) {
+        if (thread.joinable()) thread.join();
     }
+    threads_.clear();
     if (was_running) {
         LOG_INFO("unread projector stopped");
     }
@@ -112,6 +131,8 @@ bool UnreadProjector::RebuildUser(
         return false;
     }
 
+    std::lock_guard<std::mutex> receiver_lock(
+        receiver_mutexes_[receiver_user_id % receiver_mutexes_.size()]);
     const auto snapshot = reader_->LoadUserSnapshot(receiver_user_id);
     if (!snapshot.success) {
         if (error_message != nullptr) {
@@ -174,6 +195,8 @@ UnreadProjectorStats UnreadProjector::Stats() const noexcept {
 
     stats.ack_failure_total =
         ack_failure_total_.load(std::memory_order_relaxed);
+    stats.snapshot_batch_calls = snapshot_batch_calls_.load(std::memory_order_relaxed);
+    stats.snapshot_batch_dialogs = snapshot_batch_dialogs_.load(std::memory_order_relaxed);
 
     return stats;
 }
@@ -269,10 +292,76 @@ UnreadProcessResult UnreadProjector::ProcessEvent(
         };
     }
 
+    std::lock_guard<std::mutex> receiver_lock(
+        receiver_mutexes_[dialog.receiver_user_id % receiver_mutexes_.size()]);
     const auto durable = reader_->LoadDialogSnapshot(
         dialog.receiver_user_id,
         dialog.peer_user_id
     );
+    return ApplyDurableSnapshot(dialog, durable);
+}
+
+std::vector<UnreadProcessResult> UnreadProjector::ProcessBatch(
+    const std::vector<eventing::ConsumedEvent>& events
+) {
+    std::vector<UnreadProcessResult> results(events.size());
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> dialogs;
+    std::vector<std::size_t> indices, stripes;
+    for (std::size_t i = 0; i < events.size(); ++i) {
+        AffectedDialog dialog;
+        std::string error;
+        if (!ExtractAffectedDialog(events[i], &dialog, &error)) {
+            results[i] = {UnreadProcessDisposition::kPermanentMessageFailure, error};
+            continue;
+        }
+        indices.push_back(i);
+        dialogs.emplace_back(dialog.receiver_user_id, dialog.peer_user_id);
+        stripes.push_back(dialog.receiver_user_id % receiver_mutexes_.size());
+    }
+    if (dialogs.empty()) return results;
+    // Hold each receiver stripe once, in a common order across all workers.
+    // The fence includes SQL read and cache apply, also against RebuildUser.
+    std::sort(stripes.begin(), stripes.end());
+    stripes.erase(std::unique(stripes.begin(), stripes.end()), stripes.end());
+    std::vector<std::unique_lock<std::mutex>> locks;
+    locks.reserve(stripes.size());
+    for (auto stripe : stripes) locks.emplace_back(receiver_mutexes_[stripe]);
+    std::vector<UnreadProjectionReadResult<DialogUnreadSnapshot>> snapshots;
+    std::string failure;
+    snapshot_batch_calls_.fetch_add(1, std::memory_order_relaxed);
+    snapshot_batch_dialogs_.fetch_add(dialogs.size(), std::memory_order_relaxed);
+    try {
+        snapshots = reader_->LoadDialogSnapshots(dialogs);
+        if (snapshots.size() != dialogs.size())
+            failure = "unread projection batch returned invalid result count";
+    } catch (const std::exception& e) {
+        failure = std::string("unread projection batch read threw: ") + e.what();
+    } catch (...) {
+        failure = "unread projection batch read threw unknown exception";
+    }
+    for (std::size_t i = 0; i < indices.size(); ++i) {
+        auto& result = results[indices[i]];
+        if (!failure.empty()) {
+            result = {UnreadProcessDisposition::kRetryableDependencyFailure, failure};
+            continue;
+        }
+        try {
+            result = ApplyDurableSnapshot({dialogs[i].first, dialogs[i].second}, snapshots[i]);
+        } catch (const std::exception& e) {
+            result = {UnreadProcessDisposition::kRetryableDependencyFailure,
+                      std::string("unread projection cache apply threw: ") + e.what()};
+        } catch (...) {
+            result = {UnreadProcessDisposition::kRetryableDependencyFailure,
+                      "unread projection cache apply threw unknown exception"};
+        }
+    }
+    return results;
+}
+
+UnreadProcessResult UnreadProjector::ApplyDurableSnapshot(
+    const AffectedDialog& dialog,
+    const UnreadProjectionReadResult<DialogUnreadSnapshot>& durable
+) {
 
     if (!durable.success) {
         /*
@@ -283,6 +372,13 @@ UnreadProcessResult UnreadProjector::ProcessEvent(
             UnreadProcessDisposition::kRetryableDependencyFailure,
             durable.message
         };
+    }
+    if (durable.value.receiver_user_id != dialog.receiver_user_id ||
+        durable.value.peer_user_id != dialog.peer_user_id ||
+        durable.value.private_unread < 0 ||
+        durable.value.total_unread < durable.value.private_unread) {
+        return {UnreadProcessDisposition::kRetryableDependencyFailure,
+                "unread projection snapshot identity/count mismatch"};
     }
 
     if (options_.mode == UnreadProjectorMode::kShadow) {
@@ -422,8 +518,17 @@ void UnreadProjector::RunLoop() {
             continue;
         }
 
-        for (const auto& event : received.events) {
-            if (!running_.load(
+        // Once a batch is accepted, finish all its cache/ACK outcomes even if
+        // shutdown begins during SQL. Before acceptance leave it unacked.
+        const bool batch_snapshots = options_.batch_snapshot_reads;
+        if (batch_snapshots && !running_.load(std::memory_order_acquire)) break;
+        std::vector<UnreadProcessResult> batch_results;
+        if (batch_snapshots) batch_results = ProcessBatch(received.events);
+        std::vector<eventing::ConsumedEvent> ackable;
+        if (options_.parallel_batch_ack) ackable.reserve(received.events.size());
+        for (std::size_t event_index = 0; event_index < received.events.size(); ++event_index) {
+            const auto& event = received.events[event_index];
+            if (!batch_snapshots && !running_.load(
                     std::memory_order_acquire)) {
                 break;
             }
@@ -433,8 +538,16 @@ void UnreadProjector::RunLoop() {
                 std::memory_order_relaxed
             );
 
-            const auto processed =
-                ProcessEvent(event);
+            UnreadProcessResult processed;
+            try {
+                processed = batch_snapshots ? batch_results[event_index] : ProcessEvent(event);
+            } catch (const std::exception& e) {
+                processed = {UnreadProcessDisposition::kRetryableDependencyFailure,
+                             std::string("projection processing threw: ") + e.what()};
+            } catch (...) {
+                processed = {UnreadProcessDisposition::kRetryableDependencyFailure,
+                             "projection processing threw unknown exception"};
+            }
 
             if (!processed.Succeeded()) {
                 /*
@@ -501,8 +614,11 @@ void UnreadProjector::RunLoop() {
              * ACK only after durable read + projection processing has
              * succeeded. C2 crash-window semantics remain unchanged.
              */
-            const auto ack =
-                consumer_->Ack(event);
+            if (options_.parallel_batch_ack) {
+                ackable.push_back(event);
+                continue;
+            }
+            const auto ack = consumer_->Ack(event);
 
             if (!ack.success) {
                 ack_failure_total_.fetch_add(
@@ -518,6 +634,32 @@ void UnreadProjector::RunLoop() {
                     << ", error="
                     << ack.message
                 );
+            }
+        }
+        // Even if Shutdown begins while processing this batch, completed
+        // projections are acknowledged and every submitted callback is joined
+        // before the worker exits. Failed/unprocessed events remain unacked.
+        if (!ackable.empty()) {
+            std::vector<eventing::EventAckResult> results;
+            try {
+                results = consumer_->AckBatch(ackable);
+            } catch (...) {
+                // Unknown ACK outcome is a retry, never a reported success.
+                ack_failure_total_.fetch_add(ackable.size(), std::memory_order_relaxed);
+                LOG_WARN("unread projector ACK batch threw; redelivery remains safe");
+                continue;
+            }
+            if (results.size() != ackable.size()) {
+                ack_failure_total_.fetch_add(ackable.size(), std::memory_order_relaxed);
+                LOG_WARN("unread projector ACK batch returned invalid result count");
+                continue;
+            }
+            for (std::size_t i = 0; i < results.size(); ++i) {
+                if (results[i].success) continue;
+                ack_failure_total_.fetch_add(1, std::memory_order_relaxed);
+                LOG_WARN("unread projector batch ACK failed; duplicate delivery remains safe"
+                         << ", broker_message_id=" << ackable[i].broker_message_id
+                         << ", error=" << results[i].message);
             }
         }
     }

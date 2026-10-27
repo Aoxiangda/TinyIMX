@@ -22,6 +22,14 @@ void Expect(bool condition, const char* label) {
 
 class FakeRepository final : public tinyimx::message::MessageRepositoryPort {
 public:
+    std::optional<tinyimx::message::MessageRepositoryMutationResult> owned_confirm;
+    std::size_t owned_confirm_calls{0}, get_calls{0};
+    std::uint64_t owned_mid{0}, owned_receiver{0};
+    std::optional<tinyimx::message::MessageRepositoryMutationResult>
+    TryConfirmReceiverOwnedIfPending(std::uint64_t mid, std::uint64_t receiver) override {
+        ++owned_confirm_calls; owned_mid=mid; owned_receiver=receiver;
+        return owned_confirm;
+    }
     tinyimx::message::GroupHistoryApplicationResult group_history;
     std::size_t group_history_calls{0},group_history_limit{0};
     tinyimx::message::GroupHistoryApplicationResult ListGroupHistory(std::uint64_t, std::uint64_t, std::uint64_t, std::size_t limit) override {
@@ -156,6 +164,7 @@ public:
     tinyimx::message::MessageRepositoryGetResult GetPrivateMessage(
         std::uint64_t message_id
     ) override {
+        ++get_calls;
         tinyimx::message::MessageRepositoryGetResult out;
         out.status = get_status;
         if (get_status != tinyimx::message::MessageApplicationStatus::kSucceeded) {
@@ -488,6 +497,29 @@ void TestConfirmReceiverBatch() {
            "ConfirmReceiverBatch");
 }
 
+void TestOwnedReceiverFastPathContract() {
+    using namespace tinyimx::message;
+    FakeRepository repository;
+    MessageApplicationService app(&repository);
+    Expect(!app.ConfirmReceiver(0,2).Succeeded() && !app.ConfirmReceiver(1,0).Succeeded() &&
+           repository.owned_confirm_calls==0, "OwnedConfirm.InvalidIdentityNeverCallsStorage");
+    repository.owned_confirm=MessageRepositoryMutationResult{MessageApplicationStatus::kSucceeded,1,"durable"};
+    auto first=app.ConfirmReceiver(81,92);
+    Expect(first.Succeeded() && first.affected_rows==1 && repository.get_calls==0 &&
+           repository.confirm_calls==0 && repository.owned_mid==81 && repository.owned_receiver==92,
+           "OwnedConfirm.AtomicSuccessAvoidsLookupAndSecondMutation");
+    repository.owned_confirm=MessageRepositoryMutationResult{MessageApplicationStatus::kStorageError,0,"uncertain"};
+    auto failed=app.ConfirmReceiver(81,92);
+    Expect(failed.status==MessageApplicationStatus::kStorageError && failed.message=="uncertain" &&
+           repository.get_calls==0 && repository.confirm_calls==0,
+           "OwnedConfirm.StorageFailureIsNotHiddenOrReplayed");
+    repository.owned_confirm.reset();
+    repository.messages.emplace(81,FakeRepository::MakeMessage(81,11,92,MessageDeliveryState::kRead));
+    Expect(app.ConfirmReceiver(81,99).status==MessageApplicationStatus::kPermissionDenied &&
+           app.ConfirmReceiver(81,92).Succeeded() && repository.confirm_calls==0 && repository.get_calls==2,
+           "OwnedConfirm.NoChangePreservesOwnershipAndReadClassification");
+}
+
 void TestConfirmReceiverRejectionsDoNotMutate() {
     using namespace tinyimx::message;
     FakeRepository repository;
@@ -653,6 +685,7 @@ int main() {
     TestPendingReadFoundation();
     TestPendingPageByteBudget();
     TestConfirmReceiverMonotonicOwnership();
+    TestOwnedReceiverFastPathContract();
     TestConfirmReceiverRejectionsDoNotMutate();
     TestConfirmReceiverBatch();
     TestMarkDialogRead();

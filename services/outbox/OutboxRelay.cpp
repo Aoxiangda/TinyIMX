@@ -61,6 +61,10 @@ bool OutboxRelay::ValidateOptions(std::string* error) const {
     if (options_.worker_threads == 0 || options_.worker_threads > kMaxWorkers) {
         return fail("outbox relay worker_threads is invalid");
     }
+    if (options_.publish_batch_size == 0 || options_.publish_batch_size > 64 ||
+        options_.publish_batch_size > options_.max_inflight) {
+        return fail("outbox relay publish_batch_size is invalid");
+    }
     if (options_.max_inflight < options_.worker_threads ||
         options_.max_inflight < options_.batch_size ||
         options_.max_inflight > kMaxInflight) {
@@ -348,7 +352,14 @@ void OutboxRelay::PollLoop() {
             inflight_count = inflight_.size();
         }
 
-        if (inflight_count < options_.max_inflight) {
+        // Refill a complete bounded batch. Under backlog, successful claims
+        // must not be throttled by the idle poll interval. Keep the existing
+        // backoff for an empty/error result, and wait for worker progress when
+        // there is less than one batch of free capacity.
+        const bool capacity_limited =
+            inflight_count > options_.max_inflight - options_.batch_size;
+        bool claimed_records = false;
+        if (!capacity_limited) {
             const std::size_t available = options_.max_inflight - inflight_count;
             const std::size_t limit = std::min(options_.batch_size, available);
             const std::string claim_token = NextClaimToken();
@@ -366,6 +377,7 @@ void OutboxRelay::PollLoop() {
                     << ", error=" << claim.message
                 );
             } else if (!claim.records.empty()) {
+                claimed_records = true;
                 {
                     std::lock_guard<std::mutex> inflight_lock(inflight_mutex_);
                     for (const auto& record : claim.records) {
@@ -407,11 +419,20 @@ void OutboxRelay::PollLoop() {
                 std::chrono::milliseconds(options_.cleanup_interval_ms);
         }
 
+        if (claimed_records) {
+            continue;
+        }
         std::unique_lock<std::mutex> lifecycle_lock(lifecycle_mutex_);
         lifecycle_cv_.wait_for(
             lifecycle_lock,
             std::chrono::milliseconds(options_.poll_interval_ms),
-            [&] { return !running_.load(std::memory_order_acquire); }
+            [&] {
+                if (!running_.load(std::memory_order_acquire)) return true;
+                if (!capacity_limited) return false;
+                std::lock_guard<std::mutex> inflight_lock(inflight_mutex_);
+                return inflight_.size() <=
+                    options_.max_inflight - options_.batch_size;
+            }
         );
     }
 }
@@ -465,7 +486,8 @@ void OutboxRelay::RenewLoop() {
 
 void OutboxRelay::WorkerLoop(std::size_t worker_index) {
     while (true) {
-        QueueItem item;
+        std::vector<QueueItem> items;
+        items.reserve(options_.publish_batch_size);
         {
             std::unique_lock<std::mutex> lock(queue_mutex_);
             queue_cv_.wait(
@@ -483,22 +505,46 @@ void OutboxRelay::WorkerLoop(std::size_t worker_index) {
                 continue;
             }
 
-            item = std::move(queue_.front());
-            queue_.pop_front();
+            // Take only already-queued work; never wait to fill a publish batch.
+            while (!queue_.empty() && items.size() < options_.publish_batch_size) {
+                items.push_back(std::move(queue_.front()));
+                queue_.pop_front();
+            }
         }
 
-        LOG_DEBUG(
-            "outbox relay worker processing"
-            << ", worker=" << worker_index
-            << ", outbox_id=" << item.record.outbox_id
-            << ", event_id=" << item.record.event_id
-        );
-        ProcessRecord(item.record);
-        FinishRecord(item.record.outbox_id);
+        std::vector<OutboxRecord> published;
+        published.reserve(items.size());
+        for (const auto& item : items) {
+            LOG_DEBUG("outbox relay worker processing" << ", worker=" << worker_index
+                << ", outbox_id=" << item.record.outbox_id << ", event_id=" << item.record.event_id);
+            if (ProcessRecord(item.record)) published.push_back(item.record);
+        }
+        if (!published.empty()) {
+            const auto marked = store_->MarkPublishedBatch(published);
+            if (marked.affected_rows <= published.size() &&
+                marked.ownership_lost_rows <= published.size() - marked.affected_rows) {
+                published_total_.fetch_add(marked.affected_rows, std::memory_order_relaxed);
+                ownership_lost_total_.fetch_add(marked.ownership_lost_rows, std::memory_order_relaxed);
+                const auto failed = published.size() - marked.affected_rows - marked.ownership_lost_rows;
+                publish_failure_total_.fetch_add(failed, std::memory_order_relaxed);
+                if (marked.success && failed == 0) {
+                    LOG_INFO("outbox relay publication batch completed"
+                        << ", published=" << marked.affected_rows
+                        << ", ownership_lost=" << marked.ownership_lost_rows);
+                } else {
+                    LOG_ERROR("outbox relay broker success but batch mark incomplete; durable leases allow replay"
+                        << ", batch=" << published.size() << ", failed=" << failed << ", error=" << marked.message);
+                }
+            } else {
+                publish_failure_total_.fetch_add(published.size(), std::memory_order_relaxed);
+                LOG_ERROR("outbox relay batch store returned invalid outcome counts");
+            }
+        }
+        for (const auto& item : items) FinishRecord(item.record.outbox_id);
     }
 }
 
-void OutboxRelay::ProcessRecord(const OutboxRecord& record) {
+bool OutboxRelay::ProcessRecord(const OutboxRecord& record) {
     std::string validation_error;
     if (!ValidateRecord(record, &validation_error)) {
         const auto quarantined = store_->MarkQuarantined(
@@ -518,7 +564,7 @@ void OutboxRelay::ProcessRecord(const OutboxRecord& record) {
         } else if (quarantined.ownership_lost) {
             ownership_lost_total_.fetch_add(1, std::memory_order_relaxed);
         }
-        return;
+        return false;
     }
 
     eventing::PublishMessage message;
@@ -530,35 +576,10 @@ void OutboxRelay::ProcessRecord(const OutboxRecord& record) {
 
     const auto published = publisher_->Publish(message);
     if (published.status == eventing::PublishStatus::kPublished) {
-        const auto marked = store_->MarkPublished(
-            record.outbox_id,
-            record.locked_by
-        );
-        if (marked.success) {
-            published_total_.fetch_add(1, std::memory_order_relaxed);
-            LOG_INFO(
-                "outbox relay published event"
-                << ", outbox_id=" << record.outbox_id
-                << ", event_id=" << record.event_id
-                << ", broker_message_id=" << published.broker_message_id
-            );
-        } else if (marked.ownership_lost) {
-            ownership_lost_total_.fetch_add(1, std::memory_order_relaxed);
-            LOG_WARN(
-                "outbox relay broker success became ambiguous after ownership loss"
-                << ", outbox_id=" << record.outbox_id
-                << ", event_id=" << record.event_id
-            );
-        } else {
-            publish_failure_total_.fetch_add(1, std::memory_order_relaxed);
-            LOG_ERROR(
-                "outbox relay broker success but database mark failed; event may be republished"
-                << ", outbox_id=" << record.outbox_id
-                << ", event_id=" << record.event_id
-                << ", error=" << marked.message
-            );
-        }
-        return;
+        // Mark only broker-confirmed events, retaining every lease until the
+        // bounded owner-fenced database batch has completed. A crash here may
+        // replay these events; existing consumers must remain idempotent.
+        return true;
     }
 
     publish_failure_total_.fetch_add(1, std::memory_order_relaxed);
@@ -575,7 +596,7 @@ void OutboxRelay::ProcessRecord(const OutboxRecord& record) {
         } else if (quarantined.ownership_lost) {
             ownership_lost_total_.fetch_add(1, std::memory_order_relaxed);
         }
-        return;
+        return false;
     }
 
     const std::uint32_t next_attempt =
@@ -606,14 +627,25 @@ void OutboxRelay::ProcessRecord(const OutboxRecord& record) {
     } else if (retry.ownership_lost) {
         ownership_lost_total_.fetch_add(1, std::memory_order_relaxed);
     }
+    return false;
 }
 
 void OutboxRelay::FinishRecord(std::uint64_t outbox_id) {
+    bool refill_ready = false;
     {
         std::lock_guard<std::mutex> lock(inflight_mutex_);
+        const auto threshold = options_.max_inflight - options_.batch_size;
+        const auto before = inflight_.size();
         inflight_.erase(outbox_id);
+        refill_ready = before > threshold && inflight_.size() <= threshold;
     }
     drain_cv_.notify_all();
+    if (refill_ready) {
+        // Pair the notification with the wait mutex so a completed batch
+        // cannot be missed between the predicate check and entering wait.
+        std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+        lifecycle_cv_.notify_all();
+    }
 }
 
 }  // namespace tinyimx::outbox

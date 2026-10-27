@@ -18,5 +18,18 @@ for migration in 009_create_file_domain.sql 010_create_file_upload_chunks.sql; d
     mysql -u"$MYSQL_USER" "$MYSQL_DATABASE" < "$file"
 done
 
+BUSINESS_FK_COUNT="$(docker exec -e MYSQL_PWD="$MYSQL_PASSWORD" "$MYSQL_CONTAINER" \
+  mysql -N -B -u"$MYSQL_USER" "$MYSQL_DATABASE" -e \
+  "SELECT COUNT(*) FROM information_schema.referential_constraints WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME LIKE 'im\\_%';")"
+if [[ "$BUSINESS_FK_COUNT" != 0 ]]; then
+  [[ "${TINYIMX_CONFIRM_QUIESCED:-0}" == 1 ]] || {
+    echo "FIRST_FAILURE=FK_FREE_MIGRATION_REQUIRES_UPDATED_AND_QUIESCED_WRITERS"
+    exit 13
+  }
+  { echo 'SET @tinyimx_confirm_quiesced=1;'; cat "$ROOT/db/migrations/016_remove_business_foreign_keys.sql"; } |
+    docker exec -i -e MYSQL_PWD="$MYSQL_PASSWORD" "$MYSQL_CONTAINER" \
+      mysql -u"$MYSQL_USER" "$MYSQL_DATABASE"
+fi
+
 "$ROOT/scripts/m21_verify_production_schema_complete.sh"
 echo "TINYIMX_FINAL_SCHEMA_APPLY=PASS"

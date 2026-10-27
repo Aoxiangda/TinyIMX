@@ -499,8 +499,8 @@ int main() {
   const auto* message_service =
       message_file == nullptr ? nullptr :
       message_file->FindServiceByName("MessageService");
-  Expect(message_service != nullptr && message_service->method_count() == 17,
-         "MessageService appends read-only recipient discovery after original 16 methods");
+  Expect(message_service != nullptr && message_service->method_count() == 19,
+         "MessageService preserves all19 previously frozen methods");
 
   const char* const expected_message_methods[] = {
       "PersistPrivateMessage",
@@ -520,9 +520,11 @@ int main() {
       "ClaimGroupMessageDeliveriesForRecipient",
       "ResolvePrivateMessage",
       "ListPendingRecipientsAfter",
+      "CompleteGroupMessageDeliveryAttempts",
+      "ListGroupHistory",
   };
   if (message_service != nullptr) {
-    for (int i = 0; i < message_service->method_count() && i < 17; ++i) {
+    for (int i = 0; i < message_service->method_count() && i < 19; ++i) {
       const std::string label =
           std::string("MessageService method frozen: ") +
           expected_message_methods[i];
@@ -530,6 +532,18 @@ int main() {
              label.c_str());
     }
   }
+
+  const auto* unread_service = message_file->FindServiceByName("UnreadSnapshotService");
+  Expect(unread_service != nullptr && unread_service->method_count() == 2 &&
+             unread_service->method(0)->name() == "ReadDialogUnreadSnapshot" &&
+             unread_service->method(1)->name() == "ReadUserUnreadSnapshot",
+         "Separate unread source service is additive with two typed methods");
+  const auto* unread_user = tinyimx::message::v1::ReadUserUnreadSnapshotResponse::descriptor();
+  Expect(FindField(unread_user, "receiver_user_id")->number() == 1 &&
+             FindField(unread_user, "total_unread")->number() == 2 &&
+             FindField(unread_user, "peers")->number() == 3 &&
+             FindField(unread_user, "peers")->is_repeated(),
+         "Complete unread user snapshot fields and repeated peers frozen");
 
   const auto* resolve_descriptor = tinyimx::message::v1::ResolvePrivateMessageRequest::descriptor();
   const auto* discovery_descriptor = tinyimx::message::v1::ListPendingRecipientsAfterRequest::descriptor();

@@ -24,15 +24,15 @@ private:std::atomic<std::uint64_t> state_{0};
 // Numeric diagnostics only. Never changes SQL, retries, deadlines or admission.
 class PrivatePersistenceTrace final {
 public:
-    enum class Phase:std::size_t {Precheck,Acquire,Begin,Insert,IdentityRead,OutboxInsert,Commit,RecoveryRead,Rollback,BeginInsertRead,Count};
+    enum class Phase:std::size_t {Precheck,Acquire,Begin,Insert,IdentityRead,OutboxInsert,Commit,RecoveryRead,Rollback,BeginInsertRead,OutboxCommit,Count};
     static constexpr auto kPhases=static_cast<std::size_t>(Phase::Count);
     struct Snapshot {
         std::uint64_t from=0,to=0,message_id=0;
         std::int64_t started_us=0,total_us=0;
         std::uint64_t tid=0;
         std::int64_t cpu_us=-1;
-        std::array<std::int64_t,kPhases> phase_us{{-1,-1,-1,-1,-1,-1,-1,-1,-1,-1}};
-        std::array<std::int64_t,kPhases> phase_cpu_us{{-1,-1,-1,-1,-1,-1,-1,-1,-1,-1}};
+        std::array<std::int64_t,kPhases> phase_us{{-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1}};
+        std::array<std::int64_t,kPhases> phase_cpu_us{{-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1}};
         int status=0,outcome=0;bool threw=false;
     };
     using Now=std::int64_t(*)() noexcept;
@@ -57,7 +57,7 @@ public:
         if(cpu_enabled_)snapshot_.cpu_us=diagnostics::CpuDelta(cpu_start_,diagnostics::ThreadCpuMicros());
         snapshot_.status=static_cast<int>(result_.status);snapshot_.outcome=static_cast<int>(result_.outcome);snapshot_.message_id=result_.message_id;
         if(sink_&&(snapshot_.threw||result_.status!=MessageApplicationStatus::kSucceeded||snapshot_.total_us>=threshold_||
-                  (cpu_enabled_&&snapshot_.message_id>0&&snapshot_.message_id%64==0)))sink_(snapshot_);
+                  (cpu_enabled_&&diagnostics::MessageTraceSelected(snapshot_.message_id))))sink_(snapshot_);
     }
     template<class Fn>auto Measure(Phase phase,Fn&& fn)->std::invoke_result_t<Fn>{
         static_assert(!std::is_reference_v<std::invoke_result_t<Fn>>,"Own diagnostic phase result");
@@ -76,8 +76,14 @@ private:
         if(cpu_enabled_){const auto delta=diagnostics::CpuDelta(cpu_start,diagnostics::ThreadCpuMicros());auto& c=snapshot_.phase_cpu_us[i];if(delta>=0)c=c<0?delta:c+delta;}
     }
     static void Log(const Snapshot& s) noexcept {
-        if(diagnostics::StorageWaitEnabled()&&s.status==0&&!(s.message_id>0&&s.message_id%64==0))return;
-        static PersistenceLogLimiter limiter;if(!limiter.Admit(static_cast<std::uint64_t>(s.started_us/1000000)))return;
+        if(diagnostics::StorageWaitEnabled()&&s.status==0&&!s.threw&&s.total_us<10000&&
+           !diagnostics::MessageTraceSelected(s.message_id))return;
+        // Completion-time buckets reserve the shared MID cohort even when
+        // those requests are slow; unrelated overload cannot consume its lane.
+        static diagnostics::MessageTraceLogBudget limiter;
+        const bool selected=diagnostics::StorageWaitEnabled()&&
+                            diagnostics::MessageTraceSelected(s.message_id);
+        if(!limiter.Admit(static_cast<std::uint64_t>(SteadyMicros()/1000000),selected))return;
         try {LOG_WARN("private_persist_phase from="<<s.from<<" to="<<s.to<<" mid="<<s.message_id
             <<" started_us="<<s.started_us<<" total_us="<<s.total_us<<" status="<<s.status<<" outcome="<<s.outcome<<" threw="<<s.threw
             <<" tid="<<s.tid<<" cpu_us="<<s.cpu_us
@@ -88,7 +94,8 @@ private:
             <<" acquire_cpu_us="<<s.phase_cpu_us[1]<<" precheck_cpu_us="<<s.phase_cpu_us[0]
             <<" begin_cpu_us="<<s.phase_cpu_us[2]<<" insert_cpu_us="<<s.phase_cpu_us[3]
             <<" identity_read_cpu_us="<<s.phase_cpu_us[4]<<" outbox_insert_cpu_us="<<s.phase_cpu_us[5]
-            <<" commit_cpu_us="<<s.phase_cpu_us[6]);}catch(...){/* Diagnostics cannot fail a durable request. */}
+            <<" commit_cpu_us="<<s.phase_cpu_us[6]
+            <<" outbox_commit_us="<<s.phase_us[10]<<" outbox_commit_cpu_us="<<s.phase_cpu_us[10]);}catch(...){/* Diagnostics cannot fail a durable request. */}
     }
     const MessageRepositoryPersistResult& result_;bool enabled_;Sink sink_;Now now_;std::int64_t threshold_;Snapshot snapshot_;
     bool cpu_enabled_{false};std::int64_t cpu_start_{-1};

@@ -594,8 +594,11 @@ void ThreadPool::RecordTaskFinished(
     }
 }
 
-void ThreadPool::RecordTelemetryTaskEvent(const char* event) {
-    Metrics::Instance().RecordThreadPoolTaskEvent(options_.name, event);
+void ThreadPool::RecordTelemetryTaskEvent(const char* event) noexcept {
+    // Enqueue has already succeeded. Optional metrics must not turn an accepted
+    // task into a caller-visible rejection or cause it to be resubmitted twice.
+    try { Metrics::Instance().RecordThreadPoolTaskEvent(options_.name, event); }
+    catch (...) { }
 }
 
 void ThreadPool::UpdatePeakQueueSize(std::size_t queue_size) {

@@ -69,6 +69,26 @@ if(NOT EXISTS "${_tinyimx_rocketmq_toolchain_meta}")
     "newer M14 gRPC toolchain.")
 endif()
 
+# A version-only legacy cache can still contain the unsafe stack-capturing
+# synchronous sender. Check the controlled build stamp and selected library.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+execute_process(
+  COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_rocketmq_sync_send_toolchain.py"
+    --prefix "${TINYIMX_ROCKETMQ_PREFIX}"
+    --fragment "${CMAKE_CURRENT_SOURCE_DIR}/patches/rocketmq_sync_send_wait/SafeSendWait.inc"
+    --renderer "${CMAKE_CURRENT_SOURCE_DIR}/scripts/apply_rocketmq_sync_send_wait_patch.py"
+    --library "${TINYIMX_ROCKETMQ_LIBRARY}"
+  RESULT_VARIABLE _tinyimx_safe_send_result
+  OUTPUT_VARIABLE _tinyimx_safe_send_output
+  ERROR_VARIABLE _tinyimx_safe_send_error
+)
+if(NOT _tinyimx_safe_send_result EQUAL 0)
+  message(FATAL_ERROR
+    "RocketMQ SDK safe-send build verification failed. Rebuild with "
+    "scripts/bootstrap_rocketmq_cpp_client.sh. ${_tinyimx_safe_send_error}")
+endif()
+
 # Do not import rocketmq-config.cmake into the main TinyIMX CMake graph. The
 # upstream package exports gRPC/Abseil transitively, while TinyIMX already owns
 # a newer gRPC toolchain for M14. M16-B deliberately runs MQ components in
@@ -93,6 +113,7 @@ target_link_libraries(tinyimx_rocketmq_transport PUBLIC
   tinyimx_eventing
   tinyimx_logging
   tinyimx_rocketmq_sdk
+  ${CMAKE_DL_LIBS}
 )
 
 set(_tinyimx_rocketmq_runtime_paths

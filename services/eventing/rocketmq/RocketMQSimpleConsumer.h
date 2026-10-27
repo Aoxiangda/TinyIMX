@@ -2,6 +2,7 @@
 
 #include "services/eventing/EventConsumer.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -21,6 +22,19 @@ struct RocketMQSimpleConsumerOptions {
     std::string access_secret;
 };
 
+// The pinned SDK counts only calls through its optional batch API, across the
+// entire process. These are not totals for legacy ACKs or Broker requests.
+struct RocketMQWireAckStats {
+    bool started{false};
+    bool wire_batch_enabled{false};
+    bool capability_available{false};
+    bool snapshot_available{false};
+    std::uint64_t api_calls{0};
+    std::uint64_t rpc_submissions{0};
+    std::uint64_t submitted_entries{0};
+    std::uint64_t rpc_terminals{0};
+};
+
 class RocketMQSimpleConsumer final : public EventConsumer {
 public:
     explicit RocketMQSimpleConsumer(RocketMQSimpleConsumerOptions options);
@@ -34,6 +48,10 @@ public:
     [[nodiscard]] bool IsStarted() const noexcept;
     [[nodiscard]] const std::string& LastError() const noexcept;
 
+    // Like Receive/Ack, externally sequence this with Start/Stop. For a final
+    // quiescent snapshot, join all users before reading, then call Stop().
+    [[nodiscard]] RocketMQWireAckStats ReadWireAckStats() const noexcept;
+
     [[nodiscard]] EventReceiveResult Receive(
         std::size_t limit,
         int invisible_duration_ms
@@ -41,6 +59,10 @@ public:
 
     [[nodiscard]] EventAckResult Ack(
         const ConsumedEvent& event
+    ) override;
+
+    [[nodiscard]] std::vector<EventAckResult> AckBatch(
+        const std::vector<ConsumedEvent>& events
     ) override;
 
 private:

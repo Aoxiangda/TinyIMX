@@ -20,6 +20,7 @@ public:
     MessageServiceServer& operator=(const MessageServiceServer&) = delete;
 
     bool Start(const std::string& listen_target);
+    bool SetAuxiliaryService(grpc::Service* service);
     // Socket listening precedes dependency and registry readiness.
     [[nodiscard]] bool SetReady(bool ready);
     void Shutdown();
@@ -31,6 +32,7 @@ public:
 
 private:
     grpc::Service* service_{nullptr};  // non-owning
+    grpc::Service* auxiliary_service_{nullptr};  // non-owning, configured before Start
     mutable std::mutex mutex_;
     std::unique_ptr<grpc::Server> server_;
     std::string bound_target_;

@@ -1,4 +1,4 @@
-USE tinyimx;
+-- Apply to the schema explicitly selected by the caller.
 
 -- M17-B1: authoritative durable group-message identity.
 CREATE TABLE IF NOT EXISTS im_group_messages (
@@ -26,18 +26,6 @@ CREATE TABLE IF NOT EXISTS im_group_messages (
         from_user_id,
         message_id
     ),
-
-    CONSTRAINT fk_im_group_messages_group
-        FOREIGN KEY (group_id)
-        REFERENCES im_groups(group_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
-
-    CONSTRAINT fk_im_group_messages_sender
-        FOREIGN KEY (from_user_id)
-        REFERENCES im_users(user_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
 
     CONSTRAINT chk_im_group_messages_type
         CHECK (message_type IN (1, 2, 3)),

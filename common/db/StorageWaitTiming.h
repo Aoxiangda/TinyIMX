@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/logging/LogMacros.h"
+#include "common/observability/MessageTraceSample.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -43,13 +44,13 @@ inline std::int64_t CpuDelta(std::int64_t start, std::int64_t end) noexcept {
 }
 
 // Handler timing excludes gRPC admission before method entry and transport
-// after return. Successful M%64 samples correlate with repository logs.
+// after return. Successful mixed-MID samples correlate with repository logs.
 class StorageOperationTrace final {
 public:
     struct Snapshot {
         std::uint64_t from{0}, to{0}, mid{0}, tid{0};
         std::int64_t started_us{0}, total_us{0}, cpu_us{-1};
-        int kind{0}, status{6}; // kind1=persist handler,2=confirm handler; app status
+        int kind{0}, status{6}; // kind1=persist,2=confirm,3=get handler; app status
     };
     using Now = std::int64_t(*)() noexcept;
     using Sink = void(*)(const Snapshot&) noexcept;
@@ -66,19 +67,15 @@ public:
     ~StorageOperationTrace() noexcept {
         if (!enabled_) return;
         s_.total_us=now_()-s_.started_us; s_.cpu_us=CpuDelta(cpu_start_,cpu_());
-        if (sink_ && (s_.status!=0 || (s_.mid>0 && s_.mid%64==0))) sink_(s_);
+        if (sink_ && (s_.status!=0 || s_.total_us>=10000 || MessageTraceSelected(s_.mid))) sink_(s_);
     }
     void Result(int status, std::uint64_t mid) noexcept { s_.status=status; s_.mid=mid; }
 private:
     static void Log(const Snapshot& s) noexcept {
-        static std::atomic<std::uint64_t> state{0};
-        const auto base=static_cast<std::uint64_t>(s.started_us/1000000)<<8;
-        auto old=state.load(std::memory_order_relaxed);
-        for (;;) {
-            const auto bucket=old&~std::uint64_t{255}; if (base<bucket) return;
-            const auto count=base==bucket?(old&255):0; if (count>=8) return;
-            if (state.compare_exchange_weak(old,base|(count+1),std::memory_order_relaxed)) break;
-        }
+        static MessageTraceLogBudget budgets[3];
+        if (s.kind < 1 || s.kind > 3) return;
+        if (!budgets[s.kind-1].Admit(static_cast<std::uint64_t>(SteadyMicros()/1000000),
+                                     MessageTraceSelected(s.mid))) return;
         try {
             LOG_WARN("storage_rpc_phase kind="<<s.kind<<" from="<<s.from<<" to="<<s.to
                 <<" mid="<<s.mid<<" tid="<<s.tid<<" started_us="<<s.started_us

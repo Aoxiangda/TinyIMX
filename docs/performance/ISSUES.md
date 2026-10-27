@@ -372,7 +372,7 @@
 ### TEST-016：同机发布端口的压测客户端路径
 
 - 自有两个loopback源127.0.0.2/.3通过127.0.0.1:9000登录均成功，但nginx看到的对端都为172.18.0.1。原30k在28230认证后同步reset，与guest临时端口32768..60999范围大小28232接近；这是待验证的入口客户端瓶颈假设，尚不是唯一根因证明。
-- 绑定loopback源访问192.168.220.128:9000超时，原FAIL保留。随后只使用已存在的192.168.220.128、192.168.220.129、192.168.58.129、172.18.0.1、172.17.0.1，每个都成功登录真实nginx containerIP以及实际发布的guest-address:9000。没有增加地址或改变routes/firewall/sysctl。
+- 绑定loopback源访问<LAB_VM>:9000超时，原FAIL保留。随后只使用已存在的<LAB_VM>、192.168.220.129、192.168.58.129、172.18.0.1、172.17.0.1，每个都成功登录真实nginx containerIP以及实际发布的guest-address:9000。没有增加地址或改变routes/firewall/sysctl。
 - coordinator新增显式host/source-ips，override必须是本机现有IPv4，来源唯一且足够每worker一个；记录原CLI和worker源地址。默认旧路径不变，负载速率100用户/s、deadline和门槛不变。先2用户正常hold验证，再30k/50k同条件login-only测量；不把hold成功等同全功能容量。
 - 实际MCP鉴权负向401及授权discover/list9工具通过，但static_user_id=1在真实库不存在，profile业务返回HTTP200/isError=true/not_found。AIagent未运行；实际配置qwen3:8b/host.docker.internal，仅检查配置未调用provider。MCP业务和AI容量不能计为PASS；生产身份修正需要明确合法principal，先用独立合成账号验证完整工具链。
 
@@ -622,7 +622,7 @@ v16 脱敏归档本机 70 文件逐 SHA 通过，archive SHA 488f8ceb9a79614ac08
 
 Windows21:39UTC只读审计：实际运行VMware16.2.4 build20089737、Ubuntu VMX8vCPU/16384MiB，当前vmware.log Monitor Mode=ULM且WHP标记存在，Windows HypervisorPresent=true、VirtualizationBasedSecurityStatus=2。真实VMX SHA726444586dbb79772b4a2127581f11fcd75d9a5087a0c9b033f6a5aed705ad4f。SecurityServicesRunning=[0]，不据此声称HVCI/内存完整性功能正在运行。VMware官方说明ULM使用WHP API： https://blogs.vmware.com/cloud-foundation/2020/05/28/vmware-workstation-now-supports-hyper-v-mode/ ；Microsoft说明状态2表示VBS运行： https://learn.microsoft.com/en-us/windows/security/hardware-security/enable-virtualization-based-protection-of-code-integrity 。此为当前环境因素，没有与CPL0成对比较，不能分配延迟因果百分比或否定软件瓶颈。没有改VBS/启动项/VMX/系统设置、重启或停止任何应用。
 
-虚拟网卡确为e1000，但guest ip route get192.168.220.128 from192.168.220.129结果local/devlo；本地压测及Docker服务链并不以物理虚拟网卡为主要传输路径。因此不盲改网卡。当前有依据的方向是进一步区分原消息组件的SQL同步/网络往返/RPC与线程成本，再选择代码优化；不是把所有高内核时间都归给VMware。主机审计JSON在本机evidence/vmware-host-mode-review-20261005，只有允许的模式/硬件字段，没有完整VMX/log或命令行。
+虚拟网卡确为e1000，但guest ip route get<LAB_VM> from192.168.220.129结果local/devlo；本地压测及Docker服务链并不以物理虚拟网卡为主要传输路径。因此不盲改网卡。当前有依据的方向是进一步区分原消息组件的SQL同步/网络往返/RPC与线程成本，再选择代码优化；不是把所有高内核时间都归给VMware。主机审计JSON在本机evidence/vmware-host-mode-review-20261005，只有允许的模式/硬件字段，没有完整VMX/log或命令行。
 
 v17将保留MCP原版red、89green/corepass、真实验证/汇总trace、自有进程停止审计、源码/镜像/更新和回滚证据，实际secret扫描且不覆盖v16。所有功能极致性能仍未实现，继续迭代。
 

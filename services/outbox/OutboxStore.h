@@ -56,6 +56,26 @@ public:
         std::size_t limit
     ) = 0;
 
+    // Compatibility fallback preserves each store's existing owner fence.
+    // Persistent stores may override with one atomic, bounded update.
+    [[nodiscard]] virtual OutboxBatchMutationResult MarkPublishedBatch(
+        const std::vector<OutboxRecord>& records
+    ) {
+        OutboxBatchMutationResult result;
+        if (records.empty() || records.size() > 64) {
+            result.message = "outbox batch publish failed: invalid batch";
+            return result;
+        }
+        result.success = true;
+        for (const auto& record : records) {
+            const auto one = MarkPublished(record.outbox_id, record.locked_by);
+            if (one.success) result.affected_rows += one.affected_rows;
+            else if (one.ownership_lost) ++result.ownership_lost_rows;
+            else { result.success = false; result.message = one.message; }
+        }
+        return result;
+    }
+
 protected:
     OutboxStore() = default;
 };

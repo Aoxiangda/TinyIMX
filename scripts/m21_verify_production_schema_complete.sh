@@ -7,4 +7,5 @@ TABLES=(im_users im_user_relations im_private_messages im_event_outbox im_groups
 for t in "${TABLES[@]}";do x="$(q "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${MYSQL_DATABASE}' AND table_name='${t}';")";echo "schema_table=$t exists=$x";[[ "$x" == 1 ]]||exit 1;done
 [[ "$(q "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='${MYSQL_DATABASE}' AND table_name='im_file_upload_sessions' AND index_name='uk_im_file_upload_client' AND non_unique=0;")" == 2 ]]
 [[ "$(q "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='${MYSQL_DATABASE}' AND table_name='im_file_upload_chunks' AND index_name='PRIMARY';")" == 2 ]]
+[[ "$(q "SELECT COUNT(*) FROM information_schema.referential_constraints WHERE constraint_schema='${MYSQL_DATABASE}' AND table_name LIKE 'im\\_%';")" == 0 ]]
 echo M21_PRODUCTION_SCHEMA_COMPLETE=PASS

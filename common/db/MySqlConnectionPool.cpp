@@ -274,7 +274,12 @@ MySqlConnectionLease MySqlConnectionPool::Acquire(
     lock.unlock();
 
     trace.PhaseStart();
-    const bool ping_ok = connection->Ping();
+    static const bool bounded_probe_enabled=[] {
+        const char* flag=std::getenv("TINYIMX_MYSQL_BOUNDED_HEALTH_ENABLE");
+        return flag && flag[0]=='1' && flag[1]=='\0';
+    }();
+    const bool reuse=bounded_probe_enabled && connection->MayReuseWithoutPing();
+    const bool ping_ok = reuse || connection->Ping();
     trace.PingDone();
     if (!ping_ok) {
         LOG_WARN("mysql connection ping failed, reconnecting"

@@ -1,5 +1,8 @@
+#include "common/db/LogicalReferences.h"
 #include "common/db/GroupGetBoundaryTrace.h"
+#include "common/db/NativeSqlBatchPolicy.h"
 #include "services/repository/MessageRepository.h"
+#include "common/observability/StorageCallTrace.h"
 #include "common/runtime/BoundedCallerBatch.h"
 #include <atomic>
 #include <chrono>
@@ -465,6 +468,11 @@ SavePrivateMessageResult MessageRepository::SavePrivateMessage(
         return result;
     }
 
+    if (!db::ReferencesExist(connection.operator->(), {db::LogicalReference::User(from_user_id),db::LogicalReference::User(to_user_id)})) {
+        result.status = MessageMutationStatus::kStorageError;
+        result.message = "logical reference missing or storage unavailable";
+        return result;
+    }
     const std::string escaped_content =
         connection->EscapeString(
             content
@@ -570,6 +578,7 @@ MessageRepository::FindPrivateMessageById(
     std::uint64_t message_id
 ) {
     FindPrivateMessageResult result;
+    diagnostics::StorageCallTrace storage_trace(3,message_id);
 
 
     /*
@@ -609,7 +618,7 @@ MessageRepository::FindPrivateMessageById(
 
 
     auto connection =
-        pool_->Acquire();
+        storage_trace.Measure(diagnostics::StorageCallTrace::Acquire,[&]{return pool_->Acquire();});
 
 
     if (!connection) {
@@ -654,10 +663,7 @@ MessageRepository::FindPrivateMessageById(
     MySqlQueryResult query_result;
 
 
-    if (!connection->Query(
-            sql,
-            &query_result
-        )) {
+    if (!storage_trace.Measure(diagnostics::StorageCallTrace::Sql,[&]{return connection->Query(sql,&query_result);})) {
         result.status =
             MessageQueryStatus::
                 kStorageError;
@@ -2387,6 +2393,16 @@ GroupDeliveryMutationResult MessageRepository::InsertGroupMessageDeliveriesOnCon
         result.message = "group message has no recipients";
         return result;
     }
+    std::vector<db::LogicalReference> delivery_references{
+        db::LogicalReference::Group(group_id),
+        db::LogicalReference::GroupMessage(message_id,group_id)};
+    for (auto id : recipient_user_ids)
+        delivery_references.push_back(db::LogicalReference::User(id));
+    if (!db::ReferencesExist(connection,std::move(delivery_references))) {
+        result.status=MessageMutationStatus::kStorageError;
+        result.message="group delivery contains missing or mismatched logical references";
+        return result;
+    }
     constexpr std::size_t kBatchSize = 256;
     std::uint64_t inserted = 0;
     for (std::size_t begin = 0; begin < recipient_user_ids.size(); begin += kBatchSize) {
@@ -2958,6 +2974,11 @@ SaveGroupMessageResult MessageRepository::SaveGroupMessageOnConnection(
         result.message = "group message save failed: invalid durable identity";
         return result;
     }
+    if (!db::ReferencesExist(connection, {db::LogicalReference::Group(group_id),db::LogicalReference::User(from_user_id)})) {
+        result.status = MessageMutationStatus::kStorageError;
+        result.message = "logical reference missing or storage unavailable";
+        return result;
+    }
     const std::string sql =
         "INSERT INTO im_group_messages ("
         "client_message_id, group_id, from_user_id, message_type, content, "
@@ -3073,6 +3094,231 @@ FindGroupMessageResult MessageRepository::FindGroupMessageByClientMessageIdOnCon
     return result;
 }
 
+bool MessageRepository::BuildPrivateMessageCidsBulkQuery(
+    MySqlConnection* connection,
+    const std::vector<std::pair<std::uint64_t,std::string>>& identities,
+    std::string* output) {
+    if (!connection || !connection->IsConnected() || !connection->InTransaction() ||
+        !output || identities.empty() || identities.size() > 64) return false;
+    std::set<std::pair<std::uint64_t,std::string>> unique;
+    std::vector<std::string> predicates;
+    for (const auto& identity : identities) {
+        const auto& [from, cid] = identity;
+        const bool canonical = !cid.empty() && cid.size() <= 64 &&
+            std::all_of(cid.begin(), cid.end(), [](unsigned char c) {
+                return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
+            });
+        if (!from || !canonical || !unique.insert(identity).second) return false;
+        predicates.push_back("(from_user_id=" + std::to_string(from) +
+            " AND client_message_id='" + connection->EscapeString(cid) + "')");
+    }
+    // CASE and WHERE compare the real column to literals, retaining the column's
+    // SQL collation. A C++ exact-string lookup would lose existing case matches.
+    // Distinct canonical input identities cannot overlap under that collation.
+    std::string sql = "SELECT CASE ";
+    for (std::size_t i = 0; i < predicates.size(); ++i)
+        sql += "WHEN " + predicates[i] + " THEN " + std::to_string(i) + " ";
+    sql += "END,message_id,IFNULL(client_message_id,''),from_user_id,to_user_id,"
+           "message_type,content,delivery_status,created_at,IFNULL(delivered_at,''),"
+           "IFNULL(read_at,'') FROM im_private_messages WHERE ";
+    for (std::size_t i = 0; i < predicates.size(); ++i) {
+        if (i) sql += " OR ";
+        sql += predicates[i];
+    }
+    *output = std::move(sql);
+    return true;
+}
+
+std::vector<FindPrivateMessageResult>
+MessageRepository::ParsePrivateMessageCidsBulkRows(
+    const MySqlQueryResult& rows, std::size_t identity_count) {
+    std::vector<FindPrivateMessageResult> results(identity_count);
+    std::vector<bool> seen(identity_count);
+    for (auto& item : results) {
+        item.status = MessageQueryStatus::kSucceeded;
+        item.message = "native CID lookup completed in caller transaction";
+    }
+    for (const auto& row : rows.rows) {
+        if (row.size() != 11) return std::vector<FindPrivateMessageResult>(identity_count);
+        std::size_t consumed = 0, ordinal = 0;
+        try { ordinal = std::stoull(row.front(), &consumed); }
+        catch (...) { return std::vector<FindPrivateMessageResult>(identity_count); }
+        if (consumed != row.front().size() || ordinal >= identity_count || seen[ordinal])
+            return std::vector<FindPrivateMessageResult>(identity_count);
+        MySqlQueryResult record;
+        record.rows.emplace_back(row.begin() + 1, row.end());
+        const auto parsed = BuildMessagesFromResult(record);
+        if (!parsed.Succeeded() || parsed.records.size() != 1)
+            return std::vector<FindPrivateMessageResult>(identity_count);
+        seen[ordinal] = true;
+        results[ordinal].found = true;
+        results[ordinal].record = parsed.records.front();
+    }
+    return results;
+}
+
+std::vector<FindPrivateMessageResult>
+MessageRepository::FindPrivateMessageCidsBulkOnConnection(
+    MySqlConnection* connection,
+    const std::vector<std::pair<std::uint64_t,std::string>>& identities) {
+    std::string sql;
+    if (!BuildPrivateMessageCidsBulkQuery(connection, identities, &sql))
+        return std::vector<FindPrivateMessageResult>(identities.size());
+    MySqlQueryResult rows;
+    if (NativeSqlPacketEnabled()) {
+        std::vector<MySqlTransactionStatementResult> replies;
+        if (!connection->ExecuteTransactionStatementsBoundedRows({{sql,true}}, &replies,64) ||
+            replies.size() != 1) return std::vector<FindPrivateMessageResult>(identities.size());
+        rows = std::move(replies.front().rows);
+    } else if (!connection->Query(sql, &rows)) {
+        return std::vector<FindPrivateMessageResult>(identities.size());
+    }
+    return ParsePrivateMessageCidsBulkRows(rows, identities.size());
+}
+
+ListPrivateMessagesResult MessageRepository::SaveAndFindPrivateMessagesBulkOnConnection(
+    MySqlConnection* connection, const std::vector<PrivateMessageRecord>& inputs) {
+    ListPrivateMessagesResult result;
+    if (!connection || !connection->IsConnected() || !connection->InTransaction() ||
+        inputs.empty() || inputs.size() > 64) return result;
+    std::vector<std::pair<std::uint64_t,std::string>> identities;
+    std::set<std::pair<std::uint64_t,std::string>> unique;
+    std::string sql = "INSERT INTO im_private_messages(client_message_id,from_user_id,"
+                      "to_user_id,message_type,content,delivery_status) VALUES ";
+    for (const auto& in : inputs) {
+        const bool canonical = !in.client_message_id.empty() && in.client_message_id.size() <= 64 &&
+            std::all_of(in.client_message_id.begin(), in.client_message_id.end(), [](unsigned char c) {
+                return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
+            });
+        if (!in.from_user_id || !in.to_user_id || in.from_user_id == in.to_user_id ||
+            !canonical || in.message_type < 1 || in.message_type > 3 || in.delivery_status > 3 ||
+            !unique.emplace(in.from_user_id, in.client_message_id).second) {
+            result.status = MessageQueryStatus::kInvalidArgument;
+            return result;
+        }
+        if (!identities.empty()) sql += ',';
+        sql += "('" + connection->EscapeString(in.client_message_id) + "'," +
+            std::to_string(in.from_user_id) + "," + std::to_string(in.to_user_id) + "," +
+            std::to_string(in.message_type) + ",'" + connection->EscapeString(in.content) +
+            "'," + std::to_string(in.delivery_status) + ')';
+        identities.emplace_back(in.from_user_id, in.client_message_id);
+    }
+    std::vector<db::LogicalReference> actor_references;
+    actor_references.reserve(inputs.size()*2);
+    for (const auto& in : inputs) {
+        actor_references.push_back(db::LogicalReference::User(in.from_user_id));
+        actor_references.push_back(db::LogicalReference::User(in.to_user_id));
+    }
+    if (!db::ReferencesExist(connection,std::move(actor_references))) {
+        result.status=MessageQueryStatus::kStorageError;
+        result.message="private batch contains missing logical user references";
+        return result;
+    }
+    // Large requests keep the existing bounded packet path, rather than adding
+    // a new content-size rejection or an oversized native query.
+    if (sql.size() > 1024 * 1024) return SaveAndFindPrivateMessagesOnConnection(connection, inputs);
+    std::vector<FindPrivateMessageResult> found;
+    if (NativeSqlPacketEnabled()) {
+        std::string lookup;
+        if (!BuildPrivateMessageCidsBulkQuery(connection, identities, &lookup)) return result;
+        std::vector<MySqlTransactionStatementResult> replies;
+        if (!connection->ExecuteTransactionStatementsBoundedRows(
+                {{sql,false},{lookup,true}}, &replies,64) || replies.size() != 2 ||
+            replies[0].affected_rows != inputs.size() || !replies[0].insert_id) return result;
+        found = ParsePrivateMessageCidsBulkRows(replies[1].rows,identities.size());
+    } else {
+        if (!connection->Execute(sql) || connection->AffectedRows() != inputs.size()) return result;
+        found = FindPrivateMessageCidsBulkOnConnection(connection, identities);
+    }
+    for (std::size_t i = 0; i < inputs.size(); ++i) {
+        const auto& in = inputs[i];
+        if (!found[i].Succeeded() || !found[i].Found()) return result;
+        const auto& row = found[i].record;
+        if (row.from_user_id != in.from_user_id || row.to_user_id != in.to_user_id ||
+            row.client_message_id != in.client_message_id || row.message_type != in.message_type ||
+            row.content != in.content || row.delivery_status != in.delivery_status) return result;
+        result.records.push_back(row);
+    }
+    result.status = MessageQueryStatus::kSucceeded;
+    result.message = "native multi-row insert and ordered identity verification completed";
+    return result;
+}
+
+std::vector<FindPrivateMessageResult>
+MessageRepository::FindPrivateMessageCidsOnConnection(
+    MySqlConnection* connection,
+    const std::vector<std::pair<std::uint64_t,std::string>>& identities) {
+    std::vector<FindPrivateMessageResult> results(identities.size());
+    if(!connection||!connection->IsConnected()||!connection->InTransaction()||
+       identities.empty()||identities.size()>64)return results;
+    std::vector<MySqlTransactionStatement> statements;statements.reserve(identities.size());
+    for(const auto& [from,cid]:identities) {
+        if(!from||cid.empty()||cid.size()>64)return results;
+        statements.push_back({
+            "SELECT message_id,IFNULL(client_message_id,''),from_user_id,to_user_id,"
+            "message_type,content,delivery_status,created_at,"
+            "IFNULL(delivered_at,''),IFNULL(read_at,'') FROM im_private_messages "
+            "WHERE from_user_id="+std::to_string(from)+" AND client_message_id='"+
+            connection->EscapeString(cid)+"' LIMIT 2",true});
+    }
+    std::vector<MySqlTransactionStatementResult> replies;
+    if(!connection->ExecuteTransactionStatements(statements,&replies)||replies.size()!=identities.size())return results;
+    for(std::size_t i=0;i<replies.size();++i) {
+        auto& output=results[i];const auto built=BuildMessagesFromResult(replies[i].rows);
+        output.status=built.status;output.message=built.message;
+        if(!built.Succeeded())continue;
+        if(built.records.size()>1){output.status=MessageQueryStatus::kInvalidRecord;continue;}
+        output.found=!built.records.empty();
+        if(output.found)output.record=built.records.front();
+    }
+    return results;
+}
+
+ListPrivateMessagesResult MessageRepository::SaveAndFindPrivateMessagesOnConnection(
+    MySqlConnection* connection,const std::vector<PrivateMessageRecord>& inputs) {
+    ListPrivateMessagesResult result;
+    if(!connection||!connection->IsConnected()||!connection->InTransaction()||inputs.empty()||inputs.size()>64)return result;
+    std::vector<MySqlTransactionStatement> statements;statements.reserve(inputs.size()*2);
+    for(const auto& in:inputs) {
+        if(!in.from_user_id||!in.to_user_id||in.from_user_id==in.to_user_id||in.client_message_id.empty()||
+           in.client_message_id.size()>64||in.message_type<1||in.message_type>3||in.delivery_status>3) {
+            result.status=MessageQueryStatus::kInvalidArgument;return result;
+        }
+        statements.push_back({
+            "INSERT INTO im_private_messages(client_message_id,from_user_id,to_user_id,message_type,content,delivery_status) VALUES('"+
+            connection->EscapeString(in.client_message_id)+"',"+std::to_string(in.from_user_id)+","+
+            std::to_string(in.to_user_id)+","+std::to_string(in.message_type)+",'"+
+            connection->EscapeString(in.content)+"',"+std::to_string(in.delivery_status)+")",false});
+        statements.push_back({
+            "SELECT message_id,IFNULL(client_message_id,''),from_user_id,to_user_id,"
+            "message_type,content,delivery_status,created_at,IFNULL(delivered_at,''),IFNULL(read_at,'') "
+            "FROM im_private_messages WHERE message_id=LAST_INSERT_ID() LIMIT 1",true});
+    }
+    std::vector<db::LogicalReference> actor_references;
+    actor_references.reserve(inputs.size()*2);
+    for (const auto& in : inputs) {
+        actor_references.push_back(db::LogicalReference::User(in.from_user_id));
+        actor_references.push_back(db::LogicalReference::User(in.to_user_id));
+    }
+    if (!db::ReferencesExist(connection,std::move(actor_references))) {
+        result.status=MessageQueryStatus::kStorageError;
+        result.message="private batch contains missing logical user references";
+        return result;
+    }
+    std::vector<MySqlTransactionStatementResult> replies;
+    if(!connection->ExecuteTransactionStatements(statements,&replies)||replies.size()!=statements.size())return result;
+    for(std::size_t i=0;i<inputs.size();++i) {
+        const auto& inserted=replies[i*2];const auto built=BuildMessagesFromResult(replies[i*2+1].rows);
+        if(inserted.affected_rows!=1||!inserted.insert_id||!built.Succeeded()||built.records.size()!=1||
+           built.records.front().message_id!=inserted.insert_id) {
+            result.status=MessageQueryStatus::kInvalidRecord;result.records.clear();return result;
+        }
+        result.records.push_back(built.records.front());
+    }
+    result.status=MessageQueryStatus::kSucceeded;result.message="private message insert/identity statements completed in caller transaction";
+    return result;
+}
+
 SavePrivateMessageResult MessageRepository::SavePrivateMessageOnConnection(
     MySqlConnection* connection,
     std::uint64_t from_user_id,
@@ -3117,6 +3363,11 @@ SavePrivateMessageResult MessageRepository::SavePrivateMessageOnConnection(
         return result;
     }
 
+    if (!db::ReferencesExist(connection, {db::LogicalReference::User(from_user_id),db::LogicalReference::User(to_user_id)})) {
+        result.status = MessageMutationStatus::kStorageError;
+        result.message = "logical reference missing or storage unavailable";
+        return result;
+    }
     const std::string escaped_content = connection->EscapeString(content);
     std::string client_message_sql = "NULL";
     if (!client_message_id.empty()) {
@@ -3199,6 +3450,11 @@ BeginSavePrivateMessageResult MessageRepository::BeginSavePrivateMessageOnConnec
         return result;
     }
 
+    if (!db::ReferencesExist(connection, {db::LogicalReference::User(from_user_id),db::LogicalReference::User(to_user_id)})) {
+        result.save.status = MessageMutationStatus::kStorageError;
+        result.save.message = "logical reference missing or storage unavailable";
+        return result;
+    }
     const std::string escaped_content = connection->EscapeString(content);
     std::string client_message_sql = "NULL";
     if (!client_message_id.empty()) {

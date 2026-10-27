@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -49,9 +50,18 @@ struct BusinessExecutorOptions {
 
     std::chrono::milliseconds
         shutdown_timeout{30000};
+
+    // Experimental: keep FIFO for the full ordering key, while allowing
+    // unrelated keys in the same hash stripe to use different existing workers.
+    // Both global and aggregate per-stripe admission budgets stay unchanged.
+    bool isolate_ordering_keys{false};
 };
 
 struct BusinessExecutorStats {
+    std::uint64_t rejected_pending_budget_total{0}, rejected_pool_submission_total{0},
+        rejected_key_allocation_total{0};
+    std::uint64_t async_started_total{0},async_finished_total{0},continuation_run_total{0};
+    std::size_t current_async_tasks{0};
     std::uint64_t submitted_total{0};
     std::uint64_t accepted_total{0};
     std::uint64_t completed_total{0};
@@ -135,6 +145,11 @@ public:
                 const ExecutionContext&
             )
         >;
+    // Start must return promptly. The accepted task keeps its ordering stripe,
+    // pending budget and dependencies until done is called exactly once.
+    using AsyncDone = std::function<void(Completion,std::exception_ptr)>;
+    using AsyncWork = std::function<void(const ExecutionContext&,
+                                         CompletionDispatcher,AsyncDone)>;
 
     struct TaskSpec {
         BusinessRequestContext request;
@@ -164,6 +179,7 @@ public:
             completion_still_valid;
 
         Work work;
+        AsyncWork async_work;
 
         CompletionDispatcher
             dispatcher;
@@ -249,6 +265,7 @@ public:
 private:
     struct TaskState;
     struct Stripe;
+    struct KeyLane;
 
     BusinessSubmitStatus
     SubmitUnordered(
@@ -261,10 +278,17 @@ private:
         BusinessOrderingKey key
     );
 
-    void ExecuteTask(
+    BusinessSubmitStatus SubmitIsolatedKey(
+        std::shared_ptr<TaskState> task, BusinessOrderingKey key);
+    void DrainKey(std::size_t stripe_index, BusinessOrderingKey key);
+    bool CompleteKeyTask(std::size_t stripe_index, BusinessOrderingKey key);
+
+    bool ExecuteTask(
         const std::shared_ptr<TaskState>&
             task
     );
+    void FinishAsync(const std::shared_ptr<TaskState>&,Completion,std::exception_ptr);
+    void PostInternal(Completion);
 
     void DrainStripe(
         std::size_t stripe_index
@@ -361,6 +385,8 @@ private:
 
     std::atomic<std::uint64_t>
         rejected_overload_total_{0};
+    std::atomic<std::uint64_t> rejected_pending_budget_total_{0}, rejected_pool_submission_total_{0},
+        rejected_key_allocation_total_{0};
 
     std::atomic<std::uint64_t>
         rejected_hot_key_total_{0};
@@ -413,6 +439,9 @@ private:
 
     std::atomic<std::size_t>
         pending_completions_{0};
+    std::atomic<std::size_t> pending_async_tasks_{0};
+    std::atomic<std::size_t> pending_internal_jobs_{0};
+    std::atomic<std::uint64_t> async_started_total_{0},async_finished_total_{0},continuation_run_total_{0};
 
     std::atomic<std::uint64_t>
         total_queue_wait_ns_{0};

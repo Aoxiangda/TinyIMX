@@ -36,6 +36,14 @@ struct OutboxInsertResult {
     std::string message;
 };
 
+struct OutboxInsertCommitResult {
+    bool success{false};
+    bool command_attempted{false};
+    bool use_separate_commands{false};
+    std::uint64_t outbox_id{0};
+    std::string message;
+};
+
 struct OutboxClaimResult {
     bool success{false};
     std::vector<OutboxRecord> records;
@@ -52,6 +60,13 @@ struct OutboxMutationResult {
 struct OutboxCleanupResult {
     bool success{false};
     std::uint64_t deleted_rows{0};
+    std::string message;
+};
+
+struct OutboxBatchMutationResult {
+    bool success{false};
+    std::uint64_t affected_rows{0};
+    std::uint64_t ownership_lost_rows{0};
     std::string message;
 };
 

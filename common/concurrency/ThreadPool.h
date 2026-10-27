@@ -212,7 +212,7 @@ private:
 
     void RecordTaskFinished(bool success,
                             std::chrono::nanoseconds elapsed_time);
-    void RecordTelemetryTaskEvent(const char* event);
+    void RecordTelemetryTaskEvent(const char* event) noexcept;
     void UpdatePeakQueueSize(std::size_t queue_size);
 
     bool CompareExchangeState(ThreadPoolState expected,

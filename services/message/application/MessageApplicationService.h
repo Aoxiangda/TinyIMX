@@ -37,6 +37,9 @@ public:
         const std::string& content
     );
 
+    [[nodiscard]] std::vector<PersistPrivateMessageApplicationResult> PersistPrivateMessages(
+        const std::vector<PrivateMessagePersistInput>& inputs);
+
 
     [[nodiscard]] MessageRepositoryGroupGetResult FindGroupMessageByClientMessageId(
         std::uint64_t from_user_id,

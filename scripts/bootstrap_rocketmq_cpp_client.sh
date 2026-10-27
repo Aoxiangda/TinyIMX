@@ -27,6 +27,9 @@ JOBS="${TINYIMX_BUILD_JOBS:-1}"
 FORCE_REBUILD="${TINYIMX_ROCKETMQ_FORCE_REBUILD:-0}"
 TOOLCHAIN_META="${ROCKETMQ_PREFIX}/.tinyimx-rocketmq-isolated-toolchain"
 GRPC_META="${GRPC_PREFIX}/.tinyimx-grpc-isolated-toolchain"
+SYNC_SEND_FRAGMENT="${ROOT_DIR}/patches/rocketmq_sync_send_wait/SafeSendWait.inc"
+SYNC_SEND_RENDERER="${SCRIPT_DIR}/apply_rocketmq_sync_send_wait_patch.py"
+SYNC_SEND_VERIFIER="${SCRIPT_DIR}/verify_rocketmq_sync_send_toolchain.py"
 
 RUN_ID="$(date +%Y%m%d-%H%M%S)"
 LOG_DIR="${TINYIMX_ROCKETMQ_BOOTSTRAP_LOG_DIR:-${ROOT_DIR}/artifacts/m16-b-bootstrap-${RUN_ID}}"
@@ -35,7 +38,7 @@ mkdir -p "$LOG_DIR"
 log(){ printf '[rocketmq-cpp-bootstrap] %s\n' "$*"; }
 fail(){ log "FAIL: $*"; exit 1; }
 
-for c in git cmake c++ make ldd find tee; do
+for c in git cmake c++ make ldd find tee python3 sha256sum; do
   command -v "$c" >/dev/null 2>&1 || fail "missing command: $c"
 done
 
@@ -185,7 +188,10 @@ if [[ "$FORCE_REBUILD" != "1" && -f "$TOOLCHAIN_META" && \
       -f "$ROCKETMQ_PREFIX/include/rocketmq/SimpleConsumer.h" && \
       -n "$existing_lib" ]]; then
   if grep -Fxq "rocketmq_tag=${ROCKETMQ_TAG}" "$TOOLCHAIN_META" && \
-     grep -Fxq "grpc_tag=${GRPC_TAG}" "$TOOLCHAIN_META"; then
+     grep -Fxq "grpc_tag=${GRPC_TAG}" "$TOOLCHAIN_META" && \
+     python3 "$SYNC_SEND_VERIFIER" --prefix "$ROCKETMQ_PREFIX" \
+       --fragment "$SYNC_SEND_FRAGMENT" --renderer "$SYNC_SEND_RENDERER" \
+       --library "$existing_lib" >"${LOG_DIR}/cached-safe-send-verification.json" 2>&1; then
     verify_isolation "$existing_lib"
     log "PASS cached isolated SDK tag=$ROCKETMQ_TAG grpc=$GRPC_TAG prefix=$ROCKETMQ_PREFIX library=$existing_lib"
     exit 0
@@ -305,6 +311,17 @@ log "isolated dependency gate: ${PROTOC_VERSION}; gRPC package=$GRPC_DIR"
 clone_or_checkout_tag https://github.com/apache/rocketmq-clients.git "$ROCKETMQ_TAG" "$ROCKETMQ_SRC_DIR"
 prepare_rocketmq_required_submodules "$ROCKETMQ_SRC_DIR"
 
+# Keep the upstream Apache license and exact original Git object as authority.
+# Apply the result-ownership repair before compiling, including cache rebuilds.
+# The renderer rejects an unknown source version or unrelated local edits.
+SYNC_SEND_AUTHORITY="${LOG_DIR}/producer-sync-send-authority.cpp"
+git -C "$ROCKETMQ_SRC_DIR" show HEAD:cpp/source/rocketmq/ProducerImpl.cpp >"$SYNC_SEND_AUTHORITY"
+ROCKETMQ_CPP_PHYSICAL="$(cd -- "$ROCKETMQ_SRC_DIR/cpp" && pwd -P)"
+run_logged rocketmq-sync-send-ownership \
+  python3 "$SYNC_SEND_RENDERER" --source "$ROCKETMQ_CPP_PHYSICAL" \
+    --authority "$SYNC_SEND_AUTHORITY" --fragment "$SYNC_SEND_FRAGMENT" \
+    --report "${LOG_DIR}/sync-send-ownership.json"
+
 rm -rf "$ROCKETMQ_BUILD_DIR"
 # Remove only the previous RocketMQ SDK install. Keep the isolated dependency
 # prefix under ${ROCKETMQ_PREFIX}/deps intact so repeat runs stay cheap.
@@ -339,13 +356,21 @@ LIB="$(rocketmq_library)"
 verify_isolation "$LIB"
 
 {
-  printf 'schema=2\n'
+  printf 'schema=3\n'
   printf 'rocketmq_tag=%s\n' "$ROCKETMQ_TAG"
   printf 'grpc_tag=%s\n' "$GRPC_TAG"
   printf 'protobuf=%s\n' "$PROTOC_VERSION"
   printf 'dependency_prefix=%s\n' "$GRPC_PREFIX"
   printf 'linkage=rocketmq-shared-with-static-grpc-family\n'
+  printf 'sync_send_result=owned-v1\n'
+  printf 'sync_send_fragment_sha256=%s\n' "$(sha256sum "$SYNC_SEND_FRAGMENT" | cut -d ' ' -f1)"
+  printf 'sync_send_renderer_sha256=%s\n' "$(sha256sum "$SYNC_SEND_RENDERER" | cut -d ' ' -f1)"
+  printf 'sdk_library_sha256=%s\n' "$(sha256sum "$(readlink -f "$LIB")" | cut -d ' ' -f1)"
 } > "$TOOLCHAIN_META"
+
+python3 "$SYNC_SEND_VERIFIER" --prefix "$ROCKETMQ_PREFIX" \
+  --fragment "$SYNC_SEND_FRAGMENT" --renderer "$SYNC_SEND_RENDERER" \
+  --library "$LIB" >"${LOG_DIR}/installed-safe-send-verification.json"
 
 log "PASS isolated SDK tag=$ROCKETMQ_TAG grpc=$GRPC_TAG protobuf=$PROTOC_VERSION prefix=$ROCKETMQ_PREFIX library=$LIB"
 log "bootstrap logs: $LOG_DIR"

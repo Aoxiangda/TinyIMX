@@ -1,4 +1,4 @@
-USE tinyimx;
+-- Apply to the schema explicitly selected by the caller.
 
 -- M17-A: authoritative group domain. MySQL remains the durable source of truth.
 CREATE TABLE IF NOT EXISTS im_groups (
@@ -25,18 +25,6 @@ CREATE TABLE IF NOT EXISTS im_groups (
     KEY idx_im_groups_owner_status (owner_user_id, status, group_id),
     KEY idx_im_groups_status_id (status, group_id),
 
-    CONSTRAINT fk_im_groups_owner
-        FOREIGN KEY (owner_user_id)
-        REFERENCES im_users(user_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
-
-    CONSTRAINT fk_im_groups_disbanded_by
-        FOREIGN KEY (disbanded_by_user_id)
-        REFERENCES im_users(user_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
-
     CONSTRAINT chk_im_groups_status
         CHECK (status IN (1, 2)),
     CONSTRAINT chk_im_groups_join_policy
@@ -46,7 +34,8 @@ CREATE TABLE IF NOT EXISTS im_groups (
     CONSTRAINT chk_im_groups_version
         CHECK (version >= 1),
     CONSTRAINT chk_im_groups_member_version
-        CHECK (member_version >= 1)
+        CHECK (member_version >= 1),
+    KEY idx_logical_disbanded_by_user_id (disbanded_by_user_id)
 ) ENGINE=InnoDB
   DEFAULT CHARSET=utf8mb4
   COLLATE=utf8mb4_unicode_ci;
@@ -68,18 +57,6 @@ CREATE TABLE IF NOT EXISTS im_group_members (
     PRIMARY KEY (group_id, user_id),
     KEY idx_im_group_members_user_status (user_id, status, group_id),
     KEY idx_im_group_members_group_status_role (group_id, status, role, user_id),
-
-    CONSTRAINT fk_im_group_members_group
-        FOREIGN KEY (group_id)
-        REFERENCES im_groups(group_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
-
-    CONSTRAINT fk_im_group_members_user
-        FOREIGN KEY (user_id)
-        REFERENCES im_users(user_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
 
     CONSTRAINT chk_im_group_members_role
         CHECK (role IN (1, 2, 3)),
@@ -105,30 +82,13 @@ CREATE TABLE IF NOT EXISTS im_group_membership_history (
     PRIMARY KEY (group_id, user_id, membership_epoch),
     KEY idx_im_group_membership_history_user (user_id, group_id, membership_epoch),
 
-    CONSTRAINT fk_im_group_membership_history_group
-        FOREIGN KEY (group_id)
-        REFERENCES im_groups(group_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
-
-    CONSTRAINT fk_im_group_membership_history_user
-        FOREIGN KEY (user_id)
-        REFERENCES im_users(user_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
-
-    CONSTRAINT fk_im_group_membership_history_ended_by
-        FOREIGN KEY (ended_by_user_id)
-        REFERENCES im_users(user_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
-
     CONSTRAINT chk_im_group_membership_history_role
         CHECK (role_at_join IN (1, 2, 3)),
     CONSTRAINT chk_im_group_membership_history_end_reason
         CHECK (end_reason IS NULL OR end_reason IN (1, 2, 3)),
     CONSTRAINT chk_im_group_membership_history_epoch
-        CHECK (membership_epoch >= 1)
+        CHECK (membership_epoch >= 1),
+    KEY idx_logical_ended_by_user_id (ended_by_user_id)
 ) ENGINE=InnoDB
   DEFAULT CHARSET=utf8mb4
   COLLATE=utf8mb4_unicode_ci;
@@ -151,18 +111,6 @@ CREATE TABLE IF NOT EXISTS im_group_operation_dedup (
 
     PRIMARY KEY (actor_user_id, client_operation_id),
     KEY idx_im_group_operation_group (group_id, completed_at),
-
-    CONSTRAINT fk_im_group_operation_actor
-        FOREIGN KEY (actor_user_id)
-        REFERENCES im_users(user_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
-
-    CONSTRAINT fk_im_group_operation_group
-        FOREIGN KEY (group_id)
-        REFERENCES im_groups(group_id)
-        ON DELETE RESTRICT
-        ON UPDATE CASCADE,
 
     CONSTRAINT chk_im_group_operation_result_version
         CHECK (result_version >= 1),

@@ -23,15 +23,19 @@
 
 **TinyIMX 把实时聊天、群协作、授权文件与本地 AI 放进同一个原生桌面工作流。** 用户可以添加好友、进行私聊和群聊、恢复离线消息、查阅历史、共享文件，再按需使用 AI 助手理解当前会话。
 
-系统从网络层到业务服务、存储与桌面交互独立设计并落地：自研 Reactor 承载 TCP 长连接，双 Gateway 连接五个 gRPC 业务服务，MySQL / Redis / RocketMQ 串联可靠消息，Qt6/QML 提供真实客户端交互，Prometheus 与 OpenTelemetry 支持观测和问题定位。
+后端以 C++20 实现网络连接、业务调度与可靠消息链路：epoll / Reactor 管理 TCP 长连接，双 Gateway 连接五个 gRPC 业务域；MySQL 维护业务事实，可选原生私聊配置提供同步原子提交，RocketMQ / Redis 连接事件与投影。Qt 6 / QML 提供原生交互，OpenTelemetry 与 Prometheus 支持观测。
 
-**`main` 提供完整源码、协议、数据库结构、部署脚本、Qt6 工程、测试和性能复盘。** 克隆默认分支即可查看完整实现；本地业务数据库、私有配置、模型权重与编译产物由使用者自行创建。
+**仓库默认分支提供完整源码、协议、数据库结构、部署脚本、Qt 6 工程、测试和性能复盘。** 克隆默认分支即可查看完整实现；本地业务数据库、私有配置、模型权重与编译产物由使用者自行创建。
 
-| 1 万认证长连接 | ≤57.5 ms | 80.46% | 8 个 |
+<!-- verified-performance:start -->
+| 50,000 | 1,250 条/s | 100% | 0 |
 | :---: | :---: | :---: | :---: |
-| 单机指定混合负载实测 | 私聊持久化 ACK P99 上界 | ABBA 会话页 P99 降幅 | 权限受控的只读 MCP 工具 |
+| 真实认证在线连接 | 已验证业务消息速率 | 375,000 条完整成功 | 收尾待发布与待确认 |
 
-> 数据对应 8 vCPU / 约 16 GiB 虚拟机、指定后端版本与 60 秒负载窗口；连接数、请求率和功能验收范围分别说明，详见[性能与验证](#性能与验证)。
+> 8 vCPU / 16 GiB Ubuntu，128 B 私聊，持续 300 秒；原生同步 WAL、真实 MQ 投影与接收确认。另完成 1,000 条/s 工作点。两档 ACK 平均为 9.258 / 13.290 ms，P99 为 48.573 / 60.553 ms。完整条件与正文吞吐见[50K 实测报告](docs/performance/FINAL_CAPACITY_20261027.md)。
+<!-- verified-performance:end -->
+
+[**查看产品介绍**](docs/PRODUCT_OVERVIEW.md) · [**浏览产品展示页**](docs/product/index.html) · [**阅读完整迭代复盘**](docs/performance/ITERATION_HISTORY_20261004_20261027.md)
 
 ## 产品体验
 
@@ -73,7 +77,7 @@ Ollama 流式问答支持模型检测、停止生成，以及由用户选择是�
 | 账号与会话 | 密码登录、心跳保活、重新登录、识别其他位置登录 | 加盐 PBKDF2-HMAC-SHA256；Redis 在线路由与 SessionEpoch；同机同账号窗口锁 |
 | 好友关系 | 按用户 ID 申请、接受 / 拒绝、查看列表并发起私聊 | 私聊鉴权；好友受理事务；双向关系一致性 |
 | 私聊消息 | 实时收发、多行 / Unicode、失败重试、离线补投 | TIMX 帧协议；持久化 ACK；CID 幂等与 MID 去重；接收端确认 |
-| 会话与历史 | 会话列表、未读数、历史分页、私聊已读 / 未读 | MySQL 历史数据；Redis 未读投影；有界批量读取 |
+| 会话与历史 | 会话列表、未读数、历史分页、私聊已读 / 未读 | 权威历史数据；Redis 未读投影；有界批量读取 |
 | 群协作 | 建群、开放加入、邀请 / 移出、角色、禁言 / 解除、资料修改、转让 / 退群 / 解散 | 群组与成员分页；版本冲突检查；当前成员与原投递快照约束历史访问 |
 | 文件共享 | 私聊 / 群聊附件、分块上传、断点续传、取消 / 重试、下载 | 256 KiB 上传块；分块 / 整文件 SHA-256；HMAC 授权；终验后分享 |
 | 原生桌面 | 多账号、多窗口、会话切换、文件任务与消息交互 | Qt Quick / QML；异步 TCP / HTTP；按账号隔离传输任务；QSharedMemory |
@@ -105,7 +109,7 @@ flowchart TB
     Group[Group · 群与成员]
     File[File · 文件元数据与分块]
   end
-  MySQL[(MySQL · 业务事实与 Outbox)]
+  MySQL[(MySQL · 业务事实 / SQL Outbox)]
   Redis[(Redis · 在线路由与未读投影)]
   ZK[ZooKeeper · 服务发现]
   Relay[Outbox Relay]
@@ -120,7 +124,10 @@ flowchart TB
   Desktop -->|TIMX / TCP| Nginx
   Nginx --> GA & GB
   GA & GB -->|gRPC| Domain
+  Native[(可选原生私聊存储 · 同步 WAL)]
   Domain --> MySQL
+  Message --> Native
+  Native --> Relay
   GA & GB --> Redis
   Domain -. 注册与发现 .-> ZK
   MySQL --> Relay --> MQ --> Projector --> Redis
@@ -141,7 +148,7 @@ flowchart TB
 | 后端构建 | **C++20**、Linux、CMake、vcpkg；以根目录构建配置为准 |
 | 网络与并发 | epoll、EventLoop、Reactor、TCP、TIMX、有界执行器、同键 FIFO |
 | 服务协作 | gRPC / Protobuf、ZooKeeper 动态发现、双 Gateway 路由 |
-| 数据与事件 | MySQL、Redis、事务 Outbox、RocketMQ |
+| 数据与事件 | MySQL、可选原生私聊存储、Redis、持久事件 / Outbox、RocketMQ |
 | 桌面客户端 | **C++17 / Qt6 / QML**；Qt 6.8+，已有验证环境为 Qt 6.10.2 MinGW 64-bit |
 | 文件与身份 | SHA-256、HMAC、PBKDF2-HMAC-SHA256、服务端身份派生 |
 | AI 扩展 | Ollama、流式响应、MCP、OpenAI-compatible 后端 Provider |
@@ -213,12 +220,12 @@ sequenceDiagram
   participant A as 发送客户端
   participant G as Gateway
   participant M as MessageService
-  participant DB as MySQL
+  participant DB as 选定消息存储
   participant B as 接收客户端
   A->>G: Send(CID, recipient, content)
   G->>M: 鉴权后的消息请求
-  M->>DB: 事务写入消息和 Outbox
-  DB-->>M: COMMIT
+  M->>DB: 原子提交消息和待发布事件
+  DB-->>M: 同步提交完成
   M-->>G: MID / 持久化结果
   G-->>A: 持久化 ACK
   Note over G,DB: 消息及 Outbox 支撑异步投递与恢复
@@ -231,7 +238,7 @@ sequenceDiagram
 
 - **确认边界：** 服务器入库 ACK、接收端 ACK、已读是不同阶段。
 - **重试身份：** 发送方与 CID 唯一约束避免重复建消息，客户端按 MID 去重。
-- **事务与事件：** 消息与 Outbox 同事务写入，RocketMQ 驱动事件处理，Redis 承担可重建的未读投影。
+- **原子性与事件：** SQL 路径使用消息 / Outbox 同事务提交；可选原生路径同步提交消息、幂等、索引与待发布事件。RocketMQ 驱动后台处理，Redis 承担可重建投影。
 - **异常恢复：** 未确认消息可补投，ACK 丢失允许重试，重复投递按幂等规则处理。
 
 ### 会话、群与文件
@@ -244,46 +251,33 @@ sequenceDiagram
 
 ## 性能与验证
 
-### 万人连接指定混合负载
+### 从真实业务测量容量
 
-测试环境为 **8 vCPU / 约 16 GiB Ubuntu 虚拟机**。接受轮与 ABBA 是分别保存的实验，不能拼成一次测试。
+**8 vCPU / 16 GiB Ubuntu 虚拟机运行完整服务，Windows 原生负载端独立发压。** 采用 50,000 认证连接、128 B 私聊与 300 秒完整窗口；每条成功消息还核对正文、CID / MID、收件归属、接收确认、历史与未读索引、MQ 事件和首次投影。
 
-| 条件 / 指标 | 实测范围 |
-| --- | --- |
-| 长连接 | 10,000 条已认证 TCP 连接 |
-| 私聊 | 100 条/s，持续 60 秒 |
-| 会话页 | 每页完整 50 项，20 次/s，持续 60 秒 |
-| 交互 | 跨 Gateway 投递与低频业务操作链 |
-| 接受轮持久化 ACK | **P99 上界 ≤57.5 ms** |
-| 接受轮会话页 | **P99 ≤38.3 ms** |
-
-**1 万连接不等于 1 万请求/s**；上述结果对应指定连接数、请求组合与版本，不替代所有功能分别进行容量验收。
-
-### Redis N+1 可复现优化
-
-50 项会话原先逐项租借健康连接并 GET，产生 50 次租借、50 次 PING 与 50 次读取。新路径复用一次健康连接租借，以一次有界 Lua 批量返回原始值。
-
-| 指标 | 优化前 | 优化后 |
+<!-- capacity-summary:start -->
+| 50,000 认证在线用户 · 128 B · 300 秒 | 1,000 条/s | 1,250 条/s |
 | --- | ---: | ---: |
-| 单页连接租借 | 50 | **1** |
-| 单页网络命令 | 100 | **2，减少 98%** |
-| 10k ABBA 会话页 P99 | 原始 OFF / ON 对照 | **至少降低 80.46%** |
-| 10k ABBA 私聊 ACK P99 | 同上 | **至少降低 18.12%** |
+| 完整成功 | **300,000 / 300,000** | **375,000 / 375,000** |
+| 含最后收尾的实测业务 QPS | **999.978** | **1,249.946** |
+| 正文吞吐约值 | **128 KB/s · 1.024 Mbit/s** | **160 KB/s · 1.280 Mbit/s** |
+| 持久化 ACK 平均 / P99 | **9.258 / 48.573 ms** | **13.290 / 60.553 ms** |
+| 计划发送到投递 P99 | **49.596 ms** | **61.891 ms** |
+| 整台虚拟机平均忙核 | **5.606 / 8 核** | **5.719 / 8 核** |
+| 负 ACK / 超时 / 重复投递 | **0 / 0 / 0** | **0 / 0 / 0** |
+| 收尾待发布 / 待确认 | **0 / 0** | **0 / 0** |
+<!-- capacity-summary:end -->
 
-Lua 内部仍读取 50 个键，收益来自减少网络往返和连接租借。保留返回顺序、原始整数精度、missing / wrongtype 等语义，真实 Redis 一致性检查 **248 项通过**。
+业务 QPS 按完整消息计算，内部 ACK、心跳、RPC 与 MQ 操作不重复相加；正文吞吐不包含协议及中间件开销。两个 Gateway 均衡承载，本组每对私聊用户在同一 Gateway。上述为已完成的原生私聊配置工作点。默认 SQL 部署与该配置的职责、构建、迁移和开关分别说明，数据不跨配置套用。[最终容量与各负载条件](docs/performance/FINAL_CAPACITY_20261027.md)保留完整分母、每分钟延迟、资源和恢复结果。
 
-证据：[未读批量优化与 ABBA](docs/performance/CONVERSATION_UNREAD_BATCH_RESULT_20261006.md)、[性能评估](docs/performance/CURRENT_PERFORMANCE_ASSESSMENT_20261006.md)、[容量验收边界](docs/performance/CAPACITY_OPTIMIZATION_AND_ACCEPTANCE_20261007.md)。优化保留独立开关，基础部署不自动等于历史压测配置。
+### 优化有对照，结果有证据
 
-### 验证覆盖与当前状态
+- **减少会话列表往返：** 50 项读取复用一次健康连接和有界 Lua，网络命令 100 → 2；旧指定 10K 混合负载 ABBA 会话页 P99 保守下降 80.46%，精度、顺序和错误语义保持。
+- **提交快照直接回复：** 复用原子提交产生的精确未读结果，减少 ACK 前重复读取；四轮 120 万条，控制 / 候选各 60 万条的 ACK P99 为 26.4602 / 23.0262 ms。
+- **有界发布持续排空：** 通过发布进度、扫描范围和工作并行度治理后台成本，保留真实 MQ 与独立投影；最终工作点要求前台、后台和持久状态一起闭合。
+- **工程验证：** 当前配置经过 207 项业务检查与 23 项 MCP 检查；另保存幂等、权限、截止时间、取消 / 停机及受控进程恢复实验，各自注明配置与覆盖范围。
 
-| 验证类型 | 保存内容 |
-| --- | --- |
-| Qt 状态 / 协议 | CTest 状态契约与 TIMX 协议检查 |
-| 正常功能联调 | 好友、私聊 / 群聊、权限、历史、文件字节与模型生成 |
-| 异常与交叉链路 | 登录替换、重复请求、取消竞态、跨账号授权、下载校验恢复 |
-| 性能实验 | 负载合同、成功 / 失败、版本、分段诊断与恢复记录 |
-
-已保存的 20k baseline 在 135 私聊/s + 20 会话页/s 下，私聊 ACK P99 上界 **132.9 ms**、会话页 P99 **90.746805 ms**，私聊未通过原 100 ms 门槛。50k 全功能容量尚未验收；Qt6 联调后未重新运行全套容量压测。[暂停前最新状态](docs/performance/PRESSURE_PAUSED_FOR_QT6_20261007.md)保留完整结论。
+[完整迭代复盘](docs/performance/ITERATION_HISTORY_20261004_20261027.md)连接问题、具体改动、实验比较与采用决策；[全量问题索引](docs/performance/iteration-records/INDEX.md)和[实验目录](docs/performance/experiment-records/INDEX.md)保留技术过程。
 
 ## AI 与 MCP 工具
 

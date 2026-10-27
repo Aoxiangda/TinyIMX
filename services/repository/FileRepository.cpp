@@ -1,3 +1,4 @@
+#include "common/db/LogicalReferences.h"
 #include "services/repository/FileRepository.h"
 
 #include <charconv>
@@ -373,6 +374,11 @@ FileInsertResult FileRepository::InsertFileOnConnection(
         return result;
     }
 
+    if (!db::ReferencesExist(connection, {db::LogicalReference::User(owner_user_id)})) {
+        result.status = FileRepositoryStatus::kStorageError;
+        result.message = "logical reference missing or storage unavailable";
+        return result;
+    }
     const std::string sql =
         "INSERT INTO im_files (owner_user_id, file_name, content_type, total_size, "
         "checksum_algorithm, expected_checksum, storage_backend, storage_key, status, version) VALUES (" +
@@ -446,6 +452,11 @@ UploadSessionInsertResult FileRepository::InsertUploadSessionIdempotentOnConnect
     // ON DUPLICATE KEY blocks behind an uncommitted winner and then exposes the
     // existing upload_id via LAST_INSERT_ID. The caller can rollback its own
     // speculative file row and resolve the durable winner without an orphan.
+    if (!db::ReferencesExist(connection, {db::LogicalReference::File(file_id,owner_user_id),db::LogicalReference::User(owner_user_id)})) {
+        result.status = FileRepositoryStatus::kStorageError;
+        result.message = "logical reference missing or storage unavailable";
+        return result;
+    }
     const std::string sql =
         "INSERT INTO im_file_upload_sessions (file_id, owner_user_id, client_upload_id, "
         "request_fingerprint, total_size, chunk_size, status, version, expires_at) VALUES (" +
@@ -548,6 +559,11 @@ FileUploadChunkInsertResult FileRepository::InsertChunkIdempotentOnConnection(
         return result;
     }
 
+    if (!db::ReferencesExist(connection, {db::LogicalReference::Upload(upload_id,file_id),db::LogicalReference::File(file_id,owner_user_id),db::LogicalReference::User(owner_user_id)})) {
+        result.status = FileRepositoryStatus::kStorageError;
+        result.message = "logical reference missing or storage unavailable";
+        return result;
+    }
     const std::string sql =
         "INSERT INTO im_file_upload_chunks (upload_id, chunk_index, file_id, owner_user_id, "
         "byte_offset, chunk_size, checksum_algorithm, checksum, storage_part_key, status, version) VALUES (" +
